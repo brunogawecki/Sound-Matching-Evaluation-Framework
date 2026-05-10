@@ -1,0 +1,6 @@
+numpy
+scipy
+dawdreamer
+pandas
+tqdm
+# pedalboard # Optional, if we decide to test this engine later
