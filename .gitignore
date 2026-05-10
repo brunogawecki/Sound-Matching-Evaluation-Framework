@@ -2,3 +2,4 @@ paper_repos/
 .python-version
 venv/
 __pycache__/
+.env
