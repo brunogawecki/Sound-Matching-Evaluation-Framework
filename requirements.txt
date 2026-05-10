@@ -3,4 +3,5 @@ scipy
 dawdreamer
 pandas
 tqdm
+python-dotenv
 # pedalboard # Optional, if we decide to test this engine later
