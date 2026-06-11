@@ -1,5 +1,5 @@
 import abc
-from typing import Dict, Any, Union
+from typing import Dict, Any, Optional, Union
 import numpy as np
 
 class BaseSynthesizer(abc.ABC):
@@ -74,33 +74,42 @@ class BaseSynthesizer(abc.ABC):
         """
         pass
 
-    def randomize_parameters(self) -> Dict[str, Union[float, int]]:
+    def randomize_parameters(
+        self, rng: Optional[np.random.Generator] = None
+    ) -> Dict[str, Union[float, int]]:
         """
-        Generate a completely random, valid parameter configuration based on 
+        Generate a completely random, valid parameter configuration based on
         the bounds and categorical mappings.
-        
+
+        Args:
+            rng: Seedable random generator for reproducible sampling.
+                Defaults to a fresh unseeded generator.
+
         Returns:
             A dictionary of randomized parameters.
         """
+        if rng is None:
+            rng = np.random.default_rng()
+
         params = {}
         bounds = self.get_parameter_bounds()
         categories = self.get_categorical_mappings()
-        
+
         # Randomize continuous parameters
         for name, bound in bounds.items():
             # If it's a categorical parameter, we handle it separately
             if name in categories:
                 continue
-            params[name] = np.random.uniform(bound['min'], bound['max'])
-            
+            params[name] = float(rng.uniform(bound['min'], bound['max']))
+
         # Randomize categorical parameters
         for name, category_data in categories.items():
             options = category_data.get('options', [])
             if options:
-                params[name] = np.random.choice(options)
+                params[name] = float(rng.choice(options))
             else:
                 # Fallback if categories are defined purely by bounds
                 if name in bounds:
-                    params[name] = np.random.randint(bounds[name]['min'], bounds[name]['max'] + 1)
-                
+                    params[name] = int(rng.integers(bounds[name]['min'], bounds[name]['max'] + 1))
+
         return params

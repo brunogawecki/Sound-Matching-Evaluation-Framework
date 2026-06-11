@@ -17,6 +17,7 @@ SURGE_XT_PATH = os.getenv("SURGE_XT_PATH", "/Library/Audio/Plug-Ins/VST3/Surge X
 SAMPLE_RATE = int(os.getenv("DEFAULT_SAMPLE_RATE", 22050))
 BUFFER_SIZE = int(os.getenv("DEFAULT_BUFFER_SIZE", 128))
 DURATION_SEC = float(os.getenv("DEFAULT_DURATION_SEC", 4.0))
+NOTE_DURATION_SEC = float(os.getenv("DEFAULT_NOTE_DURATION_SEC", 3.0))
 
 # MIDI Defaults
 MIDI_NOTE = int(os.getenv("DEFAULT_MIDI_NOTE", 60))
