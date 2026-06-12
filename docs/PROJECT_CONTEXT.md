@@ -80,7 +80,7 @@ These are **not yet decided**. The user should resolve them before any further s
 
 **Why it matters**: The current code (in `synth/dexed_synth.py::get_categorical_mappings`) stores categoricals as evenly-spaced floats in [0,1] — e.g., a 6-option LFO waveform becomes `{0.0, 0.2, 0.4, 0.6, 0.8, 1.0}`. This is **correct for DawDreamer's input format** but **wrong as an ML training target**: regressing 0.4 vs 0.6 has no meaningful loss interpretation when the classes are unordered (sine vs square vs triangle).
 
-**Recommended default**: ML models predict categoricals via **one-hot vectors with cross-entropy loss** (the approach in [47, 5, 13]). The framework needs a `ParamSpace` abstraction that converts between two parameter dict formats:
+**Recommended default**: ML models predict categoricals via **one-hot vectors with cross-entropy loss** (the approach in [47, 5, 13]). The framework needs a `ParameterSpace` abstraction that converts between two parameter dict formats:
 - **Synth-side dict** — all values are floats in [0,1] (what DawDreamer wants)
 - **ML-side vector** — continuous params as floats, categoricals as one-hot blocks
 
@@ -133,7 +133,7 @@ sound_matching_evaluation_framework/
 ### What is incomplete or known to be wrong
 
 - **No Surge XT wrapper** yet (the path is in `config.py` but no `SurgeXTWrapper` class exists).
-- **No `ParamSpace` abstraction** — parameter metadata is locked inside the synth wrapper. Every ML model would currently have to reach into the synth to figure out which params are continuous vs categorical, which is wrong layering.
+- **No `ParameterSpace` abstraction** — parameter metadata is locked inside the synth wrapper. Every ML model would currently have to reach into the synth to figure out which params are continuous vs categorical, which is wrong layering.
 - **No dataset abstraction** — `dataset/audio/` exists but there is no `DatasetBuilder` or `SoundMatchingDataset` class.
 - **No model abstraction** (`BaseModel`) and no model implementations.
 - **No evaluator / metric panel**.
@@ -165,7 +165,7 @@ The framework has four layers. The **Synth** layer is mostly built; the other th
                           ▼
 ┌──────────────────────────────────────────────────────┐
 │  Layer 2 — Data      [TODO]                          │
-│  ParamSpace · DatasetBuilder · SoundMatchDataset     │
+│  ParameterSpace · DatasetBuilder · SoundMatchDataset     │
 └──────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -185,14 +185,14 @@ The Evaluator re-renders predicted parameters through the **same** `BaseSynthesi
 
 ### Layer 2 — Data (next to build)
 
-**`ParamSpace`** is the keystone abstraction. Everything depends on it. Build this first. Sketch:
+**`ParameterSpace`** is the keystone abstraction. Everything depends on it. Build this first. Sketch:
 
 ```python
 from dataclasses import dataclass
 from typing import Literal
 
 @dataclass
-class ParamSpec:
+class ParameterSpecification:
     name: str                                              # e.g. "op1_output_level"
     kind: Literal["continuous", "categorical", "binary"]
     bounds: tuple[float, float] | None = None              # for continuous
@@ -201,9 +201,9 @@ class ParamSpec:
     label: str = ""                                        # human-readable
     synth_index: int | None = None                         # plugin-specific index (e.g. Dexed param idx)
 
-class ParamSpace:
+class ParameterSpace:
     """Canonical, ordered parameter space for a chosen synth subset."""
-    def __init__(self, specs: list[ParamSpec]): ...
+    def __init__(self, parameter_specs: list[ParameterSpecification]): ...
 
     @property
     def dim_ml(self) -> int: ...           # one-hot expanded dim, ML-side
@@ -222,7 +222,7 @@ class ParamSpace:
     def sample_uniform(self, rng: np.random.Generator) -> dict[str, float]: ...
 ```
 
-`BaseSynthesizer` should then expose a `param_space: ParamSpace` property, and `dexed_subset.py` / `surge_subset.py` files define the actual specs (D1 made concrete).
+`BaseSynthesizer` should then expose a `parameter_space: ParameterSpace` property, and `dexed_subset.py` / `surge_subset.py` files define the actual parameter_specs (D1 made concrete).
 
 **`DatasetBuilder`** — parallelises synthetic dataset generation. With 100k samples, parallelism matters. DawDreamer is not thread-safe within a process but works with `ProcessPoolExecutor` — one engine per worker. Use a parameter hash as the WAV filename for deduplication and reproducibility.
 
@@ -247,7 +247,7 @@ class BaseModel(abc.ABC):
     def load(self, path: Path) -> None: ...
 ```
 
-Critical: `predict` returns a **synth-side dict**, not an ML vector. The model internally converts via `ParamSpace.ml_vector_to_synth_dict`. This means `predict` outputs are always directly usable by `synth.set_parameters` — no glue code at evaluation time.
+Critical: `predict` returns a **synth-side dict**, not an ML vector. The model internally converts via `ParameterSpace.ml_vector_to_synth_dict`. This means `predict` outputs are always directly usable by `synth.set_parameters` — no glue code at evaluation time.
 
 For the GA baseline, `fit` is a no-op and `predict` runs the GA loop. For deep models, `fit` is the training loop.
 
@@ -285,7 +285,7 @@ These are inherited from `GEMINI.md` and extended.
 In strict order. Don't skip ahead.
 
 1. **Resolve the open design decisions** (D1–D4). Document the choices in a new file `DECISIONS.md` (or extend this file). Without these locked, every layer downstream will need rework.
-2. **Build `ParamSpace` + `dexed_subset.py`**. Add a unit test that round-trips: `synth_dict → ml_vector → synth_dict` returns the original. Add a second test: `synth.set_parameters(synth_dict)` followed by `synth.get_parameters()` returns the same dict.
+2. **Build `ParameterSpace` + `dexed_subset.py`**. Add a unit test that round-trips: `synth_dict → ml_vector → synth_dict` returns the original. Add a second test: `synth.set_parameters(synth_dict)` followed by `synth.get_parameters()` returns the same dict.
 3. **Build `SurgeXTWrapper`** *next*, in parallel with picking its parameter subset. Doing the second synth implementation early stress-tests whether `BaseSynthesizer` actually generalises. Any contract leaks surface now, before any model code depends on them.
 4. **Build `DatasetBuilder`** with `ProcessPoolExecutor` parallelism. Verify it can produce, say, 10k Dexed samples without running out of memory or hitting DawDreamer crashes.
 5. **Build `SoundMatchingDataset`** as a thin PyTorch wrapper.
@@ -306,7 +306,7 @@ Walk through every file in the repo and report on:
 - The specific code-level observations listed in §4 (validate each one — confirm or refute)
 - Any code smells, type-hint gaps, missing error handling, or dawdreamer-specific footguns
 - Whether `verify_dexed.py` actually runs cleanly on the user's machine, and if there are any environment / dependency issues
-- Whether the existing categorical encoding (D2) needs to change *now* or can wait until `ParamSpace` is built
+- Whether the existing categorical encoding (D2) needs to change *now* or can wait until `ParameterSpace` is built
 
 Output: a structured review, file-by-file, with concrete actionable findings (not vague observations).
 
@@ -316,7 +316,7 @@ Based on the review and on §3 (open decisions) and §7 (recommended sequence), 
 
 - A prioritised task list for the next 4–6 weeks of development
 - For each task: scope, acceptance criteria, dependencies, and rough effort estimate (small / medium / large)
-- Concrete code skeletons for the next abstraction to build (`ParamSpace`), aligned with the user's existing code style
+- Concrete code skeletons for the next abstraction to build (`ParameterSpace`), aligned with the user's existing code style
 - A list of questions the user must answer to unblock further work (mapped to D1–D4 and anything new the review uncovers)
 
 The plan should be actionable enough that a future session can be opened with "continue from step N" and the work proceeds without re-discussion of context.
