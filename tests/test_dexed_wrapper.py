@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
-from synth.dexed_synth import DexedWrapper
+from synth.dexed import DexedWrapper
 
 PLUGIN_PATH = os.path.expanduser(config.DEXED_PATH)
 
@@ -78,12 +78,25 @@ def test_categorical_mappings_are_name_keyed_and_complete(synth):
         expected[f"OP{op} L KEY SCALE"] = 4
         expected[f"OP{op} R KEY SCALE"] = 4
         expected[f"OP{op} SWITCH"] = 2
+        expected[f"OP{op} F COARSE"] = 32  # D-KIND: perceptually discontinuous grid
     assert set(mappings.keys()) == set(expected.keys())
     for name, cardinality in expected.items():
         assert mappings[name]["cardinality"] == cardinality
         options = mappings[name]["options"]
         assert len(options) == cardinality
         assert options[0] == 0.0 and options[-1] == 1.0
+
+
+def test_bounds_defaults_come_from_the_init_patch(synth):
+    """The JUCE defaultValue field is 0.0 for everything; the freshly-loaded
+    plugin state is the real default and must be what bounds report."""
+    fresh = make_wrapper()
+    initial = fresh.get_parameters()
+    bounds = fresh.get_parameter_bounds()
+    defaults = fresh.get_parameter_defaults()
+    assert set(defaults.keys()) == set(fresh.parameter_names)
+    for name, bound in bounds.items():
+        assert bound["default"] == pytest.approx(initial[name]), name
 
 
 def test_bounds_and_categoricals_partition_the_universe(synth):
@@ -126,7 +139,7 @@ def test_randomize_only_touches_exposed_params_and_valid_values(synth):
         assert 0.0 <= value <= 1.0, name
         if name in categoricals:
             options = categoricals[name]["options"]
-            assert any(abs(value - opt) < 1e-9 for opt in options), name
+            assert any(abs(value - option) < 1e-9 for option in options), name
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +169,70 @@ def test_renders_match_across_fresh_engines(synth):
     other.set_parameters(params)
     b = other.render_audio(midi_note=60, velocity=100, duration_sec=2.0)
     assert np.array_equal(a, b)
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason="Dexed keeps hidden engine state that is not reset by parameter "
+    "re-application, prepareToPlay, state reload, or processor rebuild; the "
+    "same patch can render audibly differently depending on what was rendered "
+    "before it, and the outcome is context-dependent (some patches/sequences "
+    "match by luck). Investigated 2026-06-11; see D-REPRO in docs/DECISIONS.md.",
+)
+def test_render_unaffected_by_previous_render_content():
+    """The desirable (currently unachievable) contract: the same patch renders
+    bit-identically regardless of which patch was rendered before it."""
+    w = make_wrapper()
+    params_a = w.randomize_parameters(np.random.default_rng(11))
+    params_b = w.randomize_parameters(np.random.default_rng(12))
+    params_c = w.randomize_parameters(np.random.default_rng(13))
+
+    fresh = make_wrapper()
+    fresh.set_parameters(params_b)
+    reference = fresh.render_audio(60, 100, 4.0, note_duration_sec=3.0)
+
+    w.set_parameters(params_a)
+    w.render_audio(60, 100, 4.0, note_duration_sec=3.0)
+    w.set_parameters(params_b)
+    after_a = w.render_audio(60, 100, 4.0, note_duration_sec=3.0)
+
+    w.set_parameters(params_c)
+    w.render_audio(60, 100, 4.0, note_duration_sec=3.0)
+    w.set_parameters(params_b)
+    after_c = w.render_audio(60, 100, 4.0, note_duration_sec=3.0)
+
+    assert np.array_equal(reference, after_a)
+    assert np.array_equal(reference, after_c)
+
+
+def test_renders_reproduce_across_identical_fresh_processes():
+    """The achievable render contract (D-REPRO): the same synth-side dict
+    rendered at the same position of an identical fresh process is
+    bit-identical. Phase 2 dataset generation and evaluation re-rendering
+    rely on this."""
+    script = (
+        "import hashlib, numpy as np, config\n"
+        "from synth.dexed import DexedWrapper\n"
+        "w = DexedWrapper(config.DEXED_PATH, config.SAMPLE_RATE, config.BUFFER_SIZE)\n"
+        "p = w.parameter_space.sample_uniform(np.random.default_rng(7))\n"
+        "w.set_parameters(p)\n"
+        "a = w.render_audio(60, 100, 4.0, 3.0)\n"
+        "b = w.render_audio(60, 100, 4.0, 3.0)\n"
+        "print(hashlib.sha256(a.tobytes()).hexdigest(),"
+        " hashlib.sha256(b.tobytes()).hexdigest())\n"
+    )
+    import subprocess
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env = {**os.environ, "PYTHONPATH": root}
+    outs = [
+        subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, env=env, cwd=root, check=True,
+        ).stdout.strip().splitlines()[-1]
+        for _ in range(2)
+    ]
+    assert outs[0] == outs[1]
 
 
 def test_note_duration_releases_before_render_end(synth):
