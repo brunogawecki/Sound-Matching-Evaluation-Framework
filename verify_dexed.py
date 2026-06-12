@@ -2,7 +2,7 @@ import os
 import sys
 import numpy as np
 from scipy.io import wavfile
-from synth.dexed_synth import DexedWrapper
+from synth.dexed import DexedWrapper
 import config
 
 # A random patch can legitimately be near-silent (e.g. all carriers at low output),
