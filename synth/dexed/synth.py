@@ -1,7 +1,8 @@
 import dawdreamer as daw
 import numpy as np
 from typing import Dict, Any, List, Optional, Union
-from .base_synth import BaseSynthesizer
+from ..base_synth import BaseSynthesizer
+from ..parameter_space import ParameterSpace
 
 # VST-level parameters that are not DX7 synthesis parameters. They are locked at
 # plugin defaults and never exposed: randomizing 'Bypass' mutes the output and
@@ -26,6 +27,11 @@ for i in range(1, 7):
     _CATEGORICAL_CARDINALITIES[f"OP{i} L KEY SCALE"] = 4
     _CATEGORICAL_CARDINALITIES[f"OP{i} R KEY SCALE"] = 4
     _CATEGORICAL_CARDINALITIES[f"OP{i} SWITCH"] = 2
+    # F COARSE is ordered but perceptually discontinuous (one step can double the
+    # operator frequency), and Dexed quantizes it internally to 32 values while
+    # reading back the raw float -- grid points are the only honest representation
+    # (D-KIND in docs/DECISIONS.md).
+    _CATEGORICAL_CARDINALITIES[f"OP{i} F COARSE"] = 32
 
 
 class DexedWrapper(BaseSynthesizer):
@@ -69,6 +75,10 @@ class DexedWrapper(BaseSynthesizer):
             name: self.synth.get_parameter(idx)
             for name, idx in self._name_to_index.items()
         }
+        # The plugin's JUCE defaultValue field is 0.0 for every parameter in this
+        # build; the freshly-loaded init-patch state is the real default.
+        self._default_params: Dict[str, float] = dict(self._current_params)
+        self._parameter_space: Optional[ParameterSpace] = None
 
     @property
     def sample_rate(self) -> int:
@@ -78,6 +88,18 @@ class DexedWrapper(BaseSynthesizer):
     def parameter_names(self) -> List[str]:
         """Names of the exposed synthesis parameters, in plugin index order."""
         return list(self._param_names)
+
+    @property
+    def parameter_space(self) -> ParameterSpace:
+        """The provisional Dexed subset ParameterSpace (D1 deferred), built lazily."""
+        if self._parameter_space is None:
+            from .subset import build_parameter_space
+            self._parameter_space = build_parameter_space(self)
+        return self._parameter_space
+
+    def get_parameter_defaults(self) -> Dict[str, float]:
+        """Default (init-patch) normalized values of the exposed parameters."""
+        return dict(self._default_params)
 
     def set_parameters(self, params: Dict[str, Union[float, int]]) -> None:
         """
@@ -148,7 +170,7 @@ class DexedWrapper(BaseSynthesizer):
         DawDreamer normalizes all continuous VST parameters to [0.0, 1.0].
         """
         return {
-            name: {"min": 0.0, "max": 1.0, "default": 0.5}
+            name: {"min": 0.0, "max": 1.0, "default": self._default_params[name]}
             for name in self._param_names
             if name not in _CATEGORICAL_CARDINALITIES
         }
