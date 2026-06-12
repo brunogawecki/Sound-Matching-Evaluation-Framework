@@ -1,6 +1,9 @@
 import abc
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, TYPE_CHECKING
 import numpy as np
+
+if TYPE_CHECKING:
+    from .parameter_space import ParameterSpace
 
 class BaseSynthesizer(abc.ABC):
     """
@@ -14,6 +17,16 @@ class BaseSynthesizer(abc.ABC):
     def sample_rate(self) -> int:
         """The sample rate at which the audio is rendered."""
         pass
+
+    @property
+    def parameter_space(self) -> "ParameterSpace":
+        """
+        The canonical ParameterSpace over this synth's estimated parameter subset.
+        Subclasses wire this to their subset definition (e.g. synth/dexed_subset.py).
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not define a parameter subset / ParameterSpace."
+        )
 
     @abc.abstractmethod
     def set_parameters(self, params: Dict[str, Union[float, int]]) -> None:
