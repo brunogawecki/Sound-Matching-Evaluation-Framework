@@ -1,7 +1,14 @@
 import os
 import sys
+from pathlib import Path
+
 import numpy as np
 from scipy.io import wavfile
+
+# This script lives in scripts/; put the project root on the path so the
+# top-level packages (config, synth) import when run from anywhere.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from synth.dexed import DexedWrapper
 import config
 
