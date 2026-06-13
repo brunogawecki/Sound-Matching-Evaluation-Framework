@@ -58,7 +58,7 @@ When contributing to or expanding this framework, please adhere to the following
 ### Verification
 To test the audio rendering pipeline and ensure your local VST is correctly linked:
 ```bash
-python verify_dexed.py
+python scripts/verify_dexed.py
 ```
 This script initializes the Dexed wrapper, randomizes its parameters with a seeded RNG, renders
 `DURATION_SEC` of audio (note held for `NOTE_DURATION_SEC`, then a release tail) per the render

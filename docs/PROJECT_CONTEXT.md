@@ -113,10 +113,12 @@ The conversion from SysEx/`.fxp` to DawDreamer normalised floats is **non-trivia
 ```
 sound_matching_evaluation_framework/
 ├── config.py                  # Env-var-driven paths + audio defaults
-├── verify_dexed.py            # Smoke test: renders one random Dexed patch to WAV
 ├── requirements.txt           # numpy, scipy, dawdreamer, pandas, tqdm, python-dotenv
 ├── GEMINI.md                  # Original project notes (predecessor to this document)
 ├── .env                       # Local VST paths (not committed)
+├── scripts/
+│   ├── verify_dexed.py        # Smoke test: renders one random Dexed patch to WAV
+│   └── render_preset.py       # Render one voice of a DX7 .syx cartridge to WAV
 └── synth/
     ├── __init__.py
     ├── base_synth.py          # BaseSynthesizer abstract class
