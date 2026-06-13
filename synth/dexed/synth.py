@@ -154,15 +154,56 @@ class DexedWrapper(BaseSynthesizer):
         self.synth.add_midi_note(midi_note, velocity, 0.0, note_duration_sec)
 
         self.engine.render(duration_sec)
-        audio = self.engine.get_audio()
+        return self._engine_audio_to_mono()
 
-        # Convert stereo to mono by averaging channels.
+    @staticmethod
+    def _to_mono(audio: np.ndarray) -> np.ndarray:
+        """Average a DawDreamer (channels, samples) buffer down to 1D mono."""
         if audio.shape[0] >= 2:
-            audio_mono = (audio[0] + audio[1]) / 2.0
-        else:
-            audio_mono = audio[0]
+            return (audio[0] + audio[1]) / 2.0
+        return audio[0]
 
-        return audio_mono
+    def _engine_audio_to_mono(self) -> np.ndarray:
+        return self._to_mono(self.engine.get_audio())
+
+    def render_cartridge_voice(
+        self,
+        syx_path: str,
+        voice_index: int,
+        midi_note: int,
+        velocity: int,
+        duration_sec: float,
+        note_duration_sec: Optional[float] = None,
+    ) -> np.ndarray:
+        """
+        Render one voice of a DX7 32-voice .syx cartridge and return mono audio.
+
+        The voice is parsed out of the cartridge and applied as Dexed parameters
+        (Dexed ignores SysEx and MIDI Program Change in offline rendering, so the
+        cartridge cannot be loaded any other way). This sets the wrapper's
+        parameter state, so a following get_parameters() reflects the voice and a
+        plain render_audio() re-renders it.
+
+        Args:
+            syx_path: Path to a 4104-byte DX7 32-voice bulk dump (.syx).
+            voice_index: Which voice of the cartridge to play, in [0, 31].
+            midi_note: MIDI note number to play (e.g. 60 for Middle C).
+            velocity: MIDI velocity (0-127).
+            duration_sec: Total duration of the rendered audio in seconds.
+            note_duration_sec: Time from note-on to note-off. Defaults to
+                duration_sec (note held for the full render).
+
+        Raises:
+            ValueError: If the file is not a 32-voice bulk dump or voice_index
+                is outside [0, 31].
+        """
+        from .cartridge import voice_parameters
+
+        with open(syx_path, "rb") as syx_file:
+            cartridge_bytes = syx_file.read()
+
+        self.set_parameters(voice_parameters(cartridge_bytes, voice_index))
+        return self.render_audio(midi_note, velocity, duration_sec, note_duration_sec)
 
     def get_parameter_bounds(self) -> Dict[str, Dict[str, Union[float, int]]]:
         """
