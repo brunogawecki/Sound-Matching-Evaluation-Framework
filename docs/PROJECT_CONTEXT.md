@@ -118,11 +118,14 @@ sound_matching_evaluation_framework/
 ├── .env                       # Local VST paths (not committed)
 ├── scripts/
 │   ├── verify_dexed.py        # Smoke test: renders one random Dexed patch to WAV
-│   └── render_preset.py       # Render one voice of a DX7 .syx cartridge to WAV
+│   ├── render_preset.py       # Render one voice of a DX7 .syx cartridge to WAV
+│   └── benchmark_renderers.py  # DawDreamer-vs-Pedalboard render speed + audio agreement
 └── synth/
     ├── __init__.py
     ├── base_synth.py          # BaseSynthesizer abstract class
-    └── dexed_synth.py         # DexedWrapper (DawDreamer)
+    ├── parameter_space.py     # ParameterSpecification / ParameterSpace (Layer 2)
+    ├── renderers/             # Renderer ABC (base.py) + DawDreamerRenderer / PedalboardRenderer
+    └── dexed/                 # DexedWrapper, provisional subset, cartridge parsing
 ```
 
 ### What works
@@ -162,6 +165,7 @@ The framework has four layers. The **Synth** layer is mostly built; the other th
 ┌──────────────────────────────────────────────────────┐
 │  Layer 1 — Synth     [BUILT]                         │
 │  BaseSynthesizer · DexedWrapper · SurgeXTWrapper(td) │
+│  Renderer: DawDreamer (default) | Pedalboard    │
 └──────────────────────────────────────────────────────┘
                           │
                           ▼

@@ -112,6 +112,26 @@ BaseModel + trivial baseline → metric panel) on **Dexed only**, producing a fi
 table. The Surge XT wrapper comes after, re-using the proven recipe. Rationale: fastest
 end-to-end feedback; avoids a second subset decision while D1 is open.
 
+### D-RENDERER — Rendering library is pluggable; DawDreamer is the default
+
+The VST-hosting engine sits behind a `Renderer` interface (`synth/renderers/base.py`)
+beneath the synthesizer wrappers. `DexedWrapper(renderer=...)` selects it; the surface a
+renderer implements is tiny (enumerate parameters, get/set one parameter by index in raw [0,1],
+render one held MIDI note to a raw `(channels, samples)` buffer). All engine-agnostic logic
+(name↔index map, exclusions, categoricals, `ParameterSpace`, mono conversion) stays in the
+wrapper, so it works with any renderer unchanged.
+
+- **`DawDreamerRenderer` is the default** and the engine all `D-REPRO` characterization was done
+  on. **`PedalboardRenderer`** is a secondary option (pip-installable, no Faust/automation —
+  none of which this framework needs). **RenderMan is not supported** (Python 2.7 / Boost / no
+  Apple Silicon).
+- **Renderers must never be mixed within a single dataset/eval run.** The render-reproducibility
+  contract (`D-REPRO`) holds per engine, not across engines — a target generated with one engine
+  and re-rendered with another would inject an error floor. The active renderer name is recorded
+  in run metadata.
+- Engine choice was de-risked empirically by `scripts/benchmark_renderers.py`, which compares
+  total render time (primary) and cross-engine audio agreement (secondary) over seeded patches.
+
 ---
 
 ## OPEN
