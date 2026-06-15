@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Any, Dict, List
 
-from ..renderer import Renderer
+from .base import Renderer
 
 # MIDI status bytes (channel 0). Pedalboard accepts raw byte tuples, so no `mido` dependency
 # is required to drive a note.

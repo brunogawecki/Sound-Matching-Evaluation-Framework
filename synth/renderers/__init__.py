@@ -1,4 +1,4 @@
-from ..renderer import Renderer
+from .base import Renderer
 
 
 def make_renderer(name: str, plugin_path: str, sample_rate: int, buffer_size: int) -> Renderer:

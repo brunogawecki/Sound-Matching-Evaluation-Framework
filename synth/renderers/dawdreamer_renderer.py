@@ -2,7 +2,7 @@ import dawdreamer as daw
 import numpy as np
 from typing import Any, Dict, List
 
-from ..renderer import Renderer
+from .base import Renderer
 
 
 class DawDreamerRenderer(Renderer):
