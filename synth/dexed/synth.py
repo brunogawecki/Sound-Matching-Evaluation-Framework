@@ -1,8 +1,8 @@
-import dawdreamer as daw
 import numpy as np
 from typing import Dict, Any, List, Optional, Union
 from ..base_synth import BaseSynthesizer
 from ..parameter_space import ParameterSpace
+from ..renderers import make_renderer
 
 # VST-level parameters that are not DX7 synthesis parameters. They are locked at
 # plugin defaults and never exposed: randomizing 'Bypass' mutes the output and
@@ -42,20 +42,28 @@ class DexedWrapper(BaseSynthesizer):
     Parameters are addressed by their plugin-reported name (e.g. 'ALGORITHM',
     'OP1 OUTPUT LEVEL'); the name->index map is resolved from the live plugin at
     construction time. Only the 152 DX7 synthesis parameters are exposed.
+
+    The VST-hosting engine is pluggable via `renderer` ('dawdreamer' default, or 'pedalboard');
+    all logic here is engine-agnostic and delegates the engine-specific work to a Renderer.
+    Renderers must not be mixed within one dataset/eval run (D-REPRO, docs/DECISIONS.md).
     """
 
-    def __init__(self, plugin_path: str, sample_rate: int = 22050, buffer_size: int = 128):
+    def __init__(
+        self,
+        plugin_path: str,
+        sample_rate: int = 22050,
+        buffer_size: int = 128,
+        renderer: str = "dawdreamer",
+    ):
         self._sample_rate = sample_rate
         self.buffer_size = buffer_size
         self.plugin_path = plugin_path
 
-        self.engine = daw.RenderEngine(self._sample_rate, self.buffer_size)
-        self.synth = self.engine.make_plugin_processor("dexed", self.plugin_path)
-        self.engine.load_graph([(self.synth, [])])
+        self._renderer = make_renderer(renderer, plugin_path, sample_rate, buffer_size)
 
         # Resolve the exposed parameter universe by name from the live plugin.
         self._name_to_index: Dict[str, int] = {}
-        for desc in self.synth.get_parameters_description():
+        for desc in self._renderer.parameter_descriptions():
             name = desc["name"]
             if name in _EXCLUDED_PARAMS or name.startswith(_MIDI_CC_PREFIX):
                 continue
@@ -72,7 +80,7 @@ class DexedWrapper(BaseSynthesizer):
         # Last-applied parameter state, re-applied before every render so that
         # rendering is bit-reproducible (engine state leaks between renders otherwise).
         self._current_params: Dict[str, float] = {
-            name: self.synth.get_parameter(idx)
+            name: self._renderer.get_parameter(idx)
             for name, idx in self._name_to_index.items()
         }
         # The plugin's JUCE defaultValue field is 0.0 for every parameter in this
@@ -83,6 +91,11 @@ class DexedWrapper(BaseSynthesizer):
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    @property
+    def renderer_name(self) -> str:
+        """Identifier of the active renderer ('dawdreamer' / 'pedalboard')."""
+        return self._renderer.name
 
     @property
     def parameter_names(self) -> List[str]:
@@ -113,13 +126,13 @@ class DexedWrapper(BaseSynthesizer):
         if unknown:
             raise KeyError(f"Unknown or excluded parameter names: {sorted(unknown)}")
         for name, value in params.items():
-            self.synth.set_parameter(self._name_to_index[name], float(value))
+            self._renderer.set_parameter(self._name_to_index[name], float(value))
             self._current_params[name] = float(value)
 
     def get_parameters(self) -> Dict[str, Union[float, int]]:
         """Reads current normalized values of the exposed parameters from the engine."""
         return {
-            name: self.synth.get_parameter(idx)
+            name: self._renderer.get_parameter(idx)
             for name, idx in self._name_to_index.items()
         }
 
@@ -144,27 +157,21 @@ class DexedWrapper(BaseSynthesizer):
         # Re-apply the current parameter state: without this, engine state (LFO
         # phase etc.) leaks between renders and re-renders are not bit-identical.
         for name, value in self._current_params.items():
-            self.synth.set_parameter(self._name_to_index[name], value)
+            self._renderer.set_parameter(self._name_to_index[name], value)
 
         if note_duration_sec is None:
             note_duration_sec = duration_sec
         note_duration_sec = min(note_duration_sec, duration_sec)
 
-        self.synth.clear_midi()
-        self.synth.add_midi_note(midi_note, velocity, 0.0, note_duration_sec)
-
-        self.engine.render(duration_sec)
-        return self._engine_audio_to_mono()
+        audio = self._renderer.render_note(midi_note, velocity, note_duration_sec, duration_sec)
+        return self._to_mono(audio)
 
     @staticmethod
     def _to_mono(audio: np.ndarray) -> np.ndarray:
-        """Average a DawDreamer (channels, samples) buffer down to 1D mono."""
+        """Average a (channels, samples) buffer down to 1D mono."""
         if audio.shape[0] >= 2:
             return (audio[0] + audio[1]) / 2.0
         return audio[0]
-
-    def _engine_audio_to_mono(self) -> np.ndarray:
-        return self._to_mono(self.engine.get_audio())
 
     def render_cartridge_voice(
         self,
