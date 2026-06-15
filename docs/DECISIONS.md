@@ -132,6 +132,41 @@ wrapper, so it works with any renderer unchanged.
 - Engine choice was de-risked empirically by `scripts/benchmark_renderers.py`, which compares
   total render time (primary) and cross-engine audio agreement (secondary) over seeded patches.
 
+**Benchmark results (2026-06-15)** — append-only; the decision above is unchanged.
+
+- **Config.** `scripts/benchmark_renderers.py`, N=3000 patches sampled uniformly over the
+  provisional subset; **seed 0 canonical** (seeds 1–2 also run, for stability). Render settings from
+  `config.py`: 22050 Hz, 4.0 s render, 3.0 s note (note 60, velocity 100), buffer 128. Machine:
+  Apple M5 (Mac17,2), 10 cores, macOS (Darwin 25.5, arm64). Absolute speed is hardware-dependent;
+  the cross-engine *ratio* is the portable figure.
+- **Speed.** DawDreamer median **3.6 ms/render** (~262 renders/s); Pedalboard median
+  **18.1 ms/render** (~24 renders/s) → DawDreamer is **~5× faster per render**, stable across seeds
+  (median ratio 4.8–5.0×). The headline "total render time" ratio swung **6.4×–13.1×** across seeds
+  0–2 and is **not** stable: DawDreamer's total stayed ~11.7 s while Pedalboard's wall-clock total
+  varied (75–155 s) from an outlier tail — its *median* per-render held at 18.1 ms, so the swing is
+  scheduler/thermal noise, not patch content. Use the **~5× median per-render ratio** as the
+  portable speed result, not the total-time ratio.
+- **Near-silent patches.** ~**13%** of uniform-subset patches were near-silent (amplitude
+  < 1e-3) and excluded from the agreement table (seed 0: 399/3000 = 13.3%; seeds 1–2:
+  13.3–14.5%). Relevant to **D1** dataset generation: uniform sampling over the subset yields
+  substantial silence.
+- **Agreement (canonical seed 0; 2601 patches compared).**
+
+  | metric | mean | median | p90 | p95 |
+  |---|---|---|---|---|
+  | log-spectral distance (dB) | 1.24 | 0.0001 | 7.08 | 8.51 |
+  | spectral convergence | 0.158 | 0.0000 | 0.996 | 1.224 |
+  | normalized RMS difference | 0.217 | 0.0000 | 1.410 | 1.424 |
+
+  Percentiles were stable across seeds 0–2 (LSD p90 7.1–7.4 / p95 8.5–8.9; SC p90 1.0–1.1 /
+  p95 1.22–1.28; RMS p90 ~1.41 / p95 ~1.42); medians stayed ~0.
+- **Interpretation (HYPOTHESIS, not a finding).** Agreement looks **bimodal**: near-identical for
+  the median patch (LSD ~0.0001 dB) but with a divergent ~p90 tail whose magnitude is the **same
+  order as the D-REPRO within-engine worst case** (LSD ~9 dB, SC ~1.35). This suggests the
+  cross-host disagreement is mostly the **D-REPRO hidden-voice-state mechanism** showing up
+  *between* engines, not the two hosts rendering the patch differently. **Testable**: do the
+  high-divergence patches here coincide with the high-context-leakage patches from the D-REPRO study?
+
 ---
 
 ## OPEN

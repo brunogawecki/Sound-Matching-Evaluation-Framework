@@ -167,7 +167,7 @@ def report_agreement(
         values = np.asarray([row[metric] for row in rows])
         print(
             f"  {metric:<28} mean {values.mean():8.4f}  median {np.median(values):8.4f}  "
-            f"p90 {np.percentile(values, 90):8.4f}"
+            f"p90 {np.percentile(values, 90):8.4f}  p95 {np.percentile(values, 95):8.4f}"
         )
 
 
