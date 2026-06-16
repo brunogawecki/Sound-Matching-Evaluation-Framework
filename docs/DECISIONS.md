@@ -166,6 +166,22 @@ wrapper, so it works with any renderer unchanged.
   cross-host disagreement is mostly the **D-REPRO hidden-voice-state mechanism** showing up
   *between* engines, not the two hosts rendering the patch differently. **Testable**: do the
   high-divergence patches here coincide with the high-context-leakage patches from the D-REPRO study?
+- **Confirmatory test (2026-06-16)** — append-only; the decision above is unchanged. The testable
+  question was run (`scripts/measure_context_leakage.py`). For each non-silent seed-0 patch a
+  *within-engine* context-leakage score was measured in one DawDreamer process as the LSD between
+  the patch rendered after primer A vs after primer C (the A/C-primer method of the D-REPRO xfail
+  test `test_render_unaffected_by_previous_render_content`), then correlated against that same
+  patch's cross-engine LSD. Over the 2601 patches: **Spearman ρ = 0.62** (p ≈ 4e-276); the
+  within-DawDreamer leakage tail has the **same magnitude** as the cross-engine tail (leakage
+  p90 6.88 / p95 8.52 dB vs cross-engine p90 6.97 / p95 8.54 dB; both medians ~0); and the
+  **top-decile patches coincide 90.8%** of the time (9.1× over the 10% chance rate). The patches
+  that disagree most *between* engines are thus overwhelmingly the same patches that are most
+  context-dependent *within* one engine, at the same magnitude — **strong evidence the cross-engine
+  tail is the D-REPRO hidden-voice-state mechanism, not host-implementation difference.** Caveats:
+  the evidence is correlational (coincidence, not isolated causation); the correlation is carried by
+  the shared tail (both medians ~0, so the bulk is uninformative); and it bounds but does not
+  zero out a possible small genuine host difference. Per-patch data:
+  `figures/data/context_leakage_seed0.csv`.
 
 ---
 
