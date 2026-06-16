@@ -147,23 +147,42 @@ def agreement_metrics(audio_a: np.ndarray, audio_b: np.ndarray, sample_rate: int
     }
 
 
-def report_agreement(
+_AGREEMENT_METRICS = (
+    "log_spectral_distance_db",
+    "spectral_convergence",
+    "normalized_rms_difference",
+)
+
+
+def compute_agreement_rows(
     renders_a: List[np.ndarray], renders_b: List[np.ndarray], sample_rate: int
-) -> None:
+) -> Tuple[List[Dict[str, float]], int]:
+    """Per-patch agreement metrics for every non-silent patch.
+
+    Returns (rows, skipped). Each row carries the original ``patch_index`` so the
+    per-patch arrays stay traceable back to the seeded patch set; near-silent
+    patches (agreement on silence is meaningless) are counted in ``skipped`` and
+    excluded.
+    """
     rows: List[Dict[str, float]] = []
     skipped = 0
-    for audio_a, audio_b in zip(renders_a, renders_b):
+    for patch_index, (audio_a, audio_b) in enumerate(zip(renders_a, renders_b)):
         if max(np.max(np.abs(audio_a)), np.max(np.abs(audio_b))) < MIN_AMPLITUDE:
             skipped += 1
             continue
-        rows.append(agreement_metrics(audio_a, audio_b, sample_rate))
+        metrics = agreement_metrics(audio_a, audio_b, sample_rate)
+        metrics["patch_index"] = patch_index
+        rows.append(metrics)
+    return rows, skipped
 
+
+def report_agreement(rows: List[Dict[str, float]], skipped: int) -> None:
     if not rows:
         print("  (no non-silent patches to compare)")
         return
 
     print(f"  compared {len(rows)} patches ({skipped} near-silent skipped)")
-    for metric in ("log_spectral_distance_db", "spectral_convergence", "normalized_rms_difference"):
+    for metric in _AGREEMENT_METRICS:
         values = np.asarray([row[metric] for row in rows])
         print(
             f"  {metric:<28} mean {values.mean():8.4f}  median {np.median(values):8.4f}  "
@@ -171,10 +190,36 @@ def report_agreement(
         )
 
 
+def write_agreement_csv(rows: List[Dict[str, float]], path: str) -> None:
+    """Write the per-patch agreement rows to CSV (one row per non-silent patch).
+
+    Columns: ``patch_index`` + the three agreement metrics. This is the
+    regenerable data source for the cross-engine ECDF figure
+    (``figures/plot_host_agreement_ecdf.py``); it is computed with the same
+    functions that produce the printed summary, so the CSV cannot drift from the
+    benchmark numbers recorded in docs/DECISIONS.md.
+    """
+    import csv
+
+    fieldnames = ["patch_index", *_AGREEMENT_METRICS]
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row[key] for key in fieldnames})
+    print(f"  wrote {len(rows)} per-patch rows -> {path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--num-patches", type=int, default=200)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--dump-agreement-csv",
+        default=None,
+        help="If set, write the per-patch agreement metrics (non-silent patches) to this CSV path.",
+    )
     args = parser.parse_args()
 
     plugin_path = os.path.expanduser(config.DEXED_PATH)
@@ -218,7 +263,10 @@ def main() -> None:
     daw_renders = results["dawdreamer"][1]
     pedalboard_renders = results["pedalboard"][1]
     if daw_renders and pedalboard_renders:
-        report_agreement(daw_renders, pedalboard_renders, config.SAMPLE_RATE)
+        rows, skipped = compute_agreement_rows(daw_renders, pedalboard_renders, config.SAMPLE_RATE)
+        report_agreement(rows, skipped)
+        if args.dump_agreement_csv:
+            write_agreement_csv(rows, args.dump_agreement_csv)
     else:
         print("  (need both renderers available to compare)")
 
