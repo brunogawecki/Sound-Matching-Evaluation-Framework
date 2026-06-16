@@ -1,0 +1,71 @@
+# paper.mplstyle — authoritative matplotlib style for thesis figures.
+#
+# This file is the ENFORCEMENT of the style contract written in docs/figure-style.md.
+# The two must not drift: if you change a value here, update the prose there (and vice
+# versa). The thesis consumes only the PDFs produced under this style, so this repo owns
+# the look. Apply it via figures/style.py::apply_paper_style(), which also auto-upgrades
+# to text.usetex when a full LaTeX stack is present (see the note on text.usetex below).
+
+# --- Output: vector PDF, fonts embedded as real text ------------------------------------
+savefig.format:        pdf
+savefig.bbox:          tight
+savefig.pad_inches:    0.01
+savefig.transparent:   False
+pdf.fonttype:          42
+ps.fonttype:           42
+
+# --- Layout: constrained (tight) so nothing is clipped and panels share spacing ---------
+figure.constrained_layout.use: True
+figure.figsize:        5.9, 3.2
+
+# --- Fonts: serif matching Computer Modern; base ~9 pt ----------------------------------
+# text.usetex is left False here so the figure regenerates on any machine (no LaTeX
+# needed). figures/style.py switches it on automatically when latex+dvipng are found,
+# giving true Computer Modern; the cm mathtext fontset below is the visual fallback when
+# they are not, so the look is consistent either way.
+text.usetex:           False
+font.family:           serif
+font.serif:            Computer Modern Roman, CMU Serif, DejaVu Serif
+mathtext.fontset:      cm
+font.size:             9
+axes.titlesize:        9
+axes.labelsize:        9
+xtick.labelsize:       8
+ytick.labelsize:       8
+legend.fontsize:       8
+figure.titlesize:      9
+
+# --- No in-figure title: the LaTeX \caption owns the title ------------------------------
+# (Authoring scripts must not call fig.suptitle / ax.set_title for the figure title.)
+
+# --- Colour: Okabe-Ito colourblind-safe palette (yellow dropped for white-bg contrast) --
+axes.prop_cycle: cycler('color', ['0072B2', 'D55E00', '009E73', 'CC79A7', 'E69F00', '56B4E9', '000000'])
+
+# --- Lines: thin and consistent ---------------------------------------------------------
+lines.linewidth:       1.0
+lines.markersize:      4
+axes.linewidth:        0.6
+
+# --- Grid: light, behind the data -------------------------------------------------------
+axes.grid:             True
+axes.axisbelow:        True
+grid.color:            B0B0B0
+grid.linewidth:        0.4
+grid.linestyle:        -
+grid.alpha:            0.5
+
+# --- Ticks and spines: unobtrusive ------------------------------------------------------
+xtick.direction:       out
+ytick.direction:       out
+xtick.major.width:     0.6
+ytick.major.width:     0.6
+xtick.major.size:      3
+ytick.major.size:      3
+axes.spines.top:       False
+axes.spines.right:     False
+
+# --- Legend: frameless ------------------------------------------------------------------
+legend.frameon:        False
+legend.handlelength:   1.6
+legend.columnspacing:  1.0
+legend.labelspacing:   0.3
