@@ -15,8 +15,16 @@ the per-patch cross-engine divergence already saved by
 Both axes use the *same* log-spectral-distance definition (reused from benchmark_renderers),
 over the *same* seeded patches, so the comparison is apples-to-apples.
 
+The same probe runs on either renderer via ``--renderer`` (default ``dawdreamer``). Running it with
+``--renderer pedalboard`` answers whether Pedalboard exhibits the *same* within-engine leakage as
+DawDreamer (expected, since the hidden state lives in the shared Dexed plugin binary, not the host)
+or is a clean anchor. Patch indices are renderer-independent (patches are sampled from the
+engine-agnostic ``parameter_space``), so both runs align with the same ``--agreement-csv``.
+
 Run (after the agreement CSV exists):
     python scripts/measure_context_leakage.py \
+        --agreement-csv figures/data/host_agreement_seed0.csv --seed 0 --num-patches 3000
+    python scripts/measure_context_leakage.py --renderer pedalboard \
         --agreement-csv figures/data/host_agreement_seed0.csv --seed 0 --num-patches 3000
 """
 import argparse
@@ -57,12 +65,20 @@ def _lsd(audio_a: np.ndarray, audio_b: np.ndarray) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--renderer", choices=("dawdreamer", "pedalboard"), default="dawdreamer",
+                        help="Engine whose within-engine context leakage is measured (default dawdreamer).")
     parser.add_argument("--agreement-csv", default="figures/data/host_agreement_seed0.csv")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num-patches", type=int, default=3000)
-    parser.add_argument("--out-csv", default="figures/data/context_leakage_seed0.csv",
-                        help="Per-patch cross-engine vs context-leakage LSD (regenerable).")
+    parser.add_argument("--out-csv", default=None,
+                        help="Per-patch cross-engine vs context-leakage LSD (regenerable). Defaults to "
+                             "figures/data/context_leakage[_<renderer>]_seed<seed>.csv.")
     args = parser.parse_args()
+
+    if args.out_csv is None:
+        # dawdreamer keeps the original unsuffixed name; other renderers get their own file.
+        renderer_suffix = "" if args.renderer == "dawdreamer" else f"_{args.renderer}"
+        args.out_csv = f"figures/data/context_leakage{renderer_suffix}_seed{args.seed}.csv"
 
     agreement = pd.read_csv(args.agreement_csv).set_index("patch_index")
     cross_engine_lsd = agreement["log_spectral_distance_db"]
@@ -70,15 +86,20 @@ def main() -> None:
     plugin_path = os.path.expanduser(config.DEXED_PATH)
     with bench.suppressed_stderr():
         wrapper = DexedWrapper(plugin_path, sample_rate=config.SAMPLE_RATE,
-                               buffer_size=config.BUFFER_SIZE)
+                               buffer_size=config.BUFFER_SIZE, renderer=args.renderer)
 
     # Same seeded patch set the agreement CSV was built from, so patch_index aligns.
     patches = bench.build_patches(wrapper, args.num_patches, args.seed)
     primer_a = wrapper.parameter_space.sample_uniform(np.random.default_rng(_PRIMER_SEED_A))
     primer_c = wrapper.parameter_space.sample_uniform(np.random.default_rng(_PRIMER_SEED_C))
 
+    # The canonical run uses the same --num-patches the agreement CSV was built from, so every
+    # CSV index is available. A smaller --num-patches (e.g. a smoke test) only probes the indices
+    # actually built.
     records = []
     for patch_index in cross_engine_lsd.index:  # non-silent patches only
+        if patch_index >= len(patches):
+            continue
         patch = patches[patch_index]
         _render(wrapper, primer_a)
         audio_after_a = _render(wrapper, patch)
@@ -105,7 +126,8 @@ def main() -> None:
     overlap = len(top_cross & top_leak) / k
     chance = k / n
 
-    print(f"\nContext-leakage vs cross-engine divergence (seed {args.seed}, n={n} non-silent patches)")
+    print(f"\nContext-leakage vs cross-engine divergence "
+          f"({args.renderer}, seed {args.seed}, n={n} non-silent patches)")
     print(f"  wrote per-patch CSV -> {args.out_csv}")
     print(f"  context-leakage LSD (dB):  median {np.median(leak):.4f}  p90 {np.percentile(leak,90):.4f}  p95 {np.percentile(leak,95):.4f}")
     print(f"  Spearman rho = {rho:.3f}  (p = {p_value:.2e})")
