@@ -4,4 +4,5 @@ dawdreamer
 pandas
 tqdm
 python-dotenv
-# pedalboard # Optional, if we decide to test this engine later
+# pedalboard  # Optional secondary renderer (DexedWrapper(renderer="pedalboard")); only needed for scripts/benchmark_renderers.py
+# matplotlib  # Optional, for the figure pipeline (figures/); only needed to regenerate thesis figures

@@ -11,6 +11,7 @@ import contextlib
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 from scipy.io import wavfile
@@ -78,6 +79,26 @@ def resolve_voice(token: str, names: list) -> int:
     raise ValueError(f"{token!r} is ambiguous; matches: {listed}.")
 
 
+def resolve_output_path(out: Optional[str], voice_index: int, names: list,
+                        renderer: str, tag_renderer: bool) -> str:
+    """Build the WAV path for one renderer's render.
+
+    With an explicit ``out``, that path is used verbatim for a single renderer;
+    when more than one renderer is selected (``tag_renderer``), the renderer name
+    is inserted before the suffix so the files don't overwrite each other
+    (``laurie.wav`` -> ``laurie_dawdreamer.wav``). Without ``out``, an auto name
+    under ``config.AUDIO_OUT_DIR`` always carries the renderer name.
+    """
+    if out is not None:
+        path = Path(out)
+        if tag_renderer:
+            path = path.with_name(f"{path.stem}_{renderer}{path.suffix}")
+        return str(path)
+
+    name = names[voice_index].strip().replace(" ", "_").replace("/", "-")
+    return str(config.AUDIO_OUT_DIR / f"preset_{voice_index:02d}_{name}_{renderer}.wav")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("voice", nargs="?", help="Voice to render: index (0-31) or (partial) name.")
@@ -88,6 +109,8 @@ def main() -> None:
     parser.add_argument("--duration", type=float, default=config.DURATION_SEC, help="Total seconds.")
     parser.add_argument("--note-duration", type=float, default=config.NOTE_DURATION_SEC, help="Note-on to note-off seconds.")
     parser.add_argument("--sample-rate", type=int, default=DEFAULT_SAMPLE_RATE, help="Render sample rate.")
+    parser.add_argument("--renderer", choices=["dawdreamer", "pedalboard", "both"], default="both",
+                        help="Which render engine(s) to use (default both, for an A/B comparison).")
     parser.add_argument("--out", default=None, help="Output WAV path (default dataset/audio/preset.wav).")
     args = parser.parse_args()
 
@@ -123,27 +146,35 @@ def main() -> None:
         print(f"Dexed plugin not found at {plugin_path}. Update DEXED_PATH in .env.")
         sys.exit(1)
 
-    with suppressed_stderr():
-        synth = DexedWrapper(plugin_path, sample_rate=args.sample_rate, buffer_size=config.BUFFER_SIZE)
-    audio = synth.render_cartridge_voice(
-        syx_path,
-        voice_index=voice_index,
-        midi_note=args.note,
-        velocity=args.velocity,
-        duration_sec=args.duration,
-        note_duration_sec=args.note_duration,
-    )
+    renderers = ["dawdreamer", "pedalboard"] if args.renderer == "both" else [args.renderer]
 
-    if args.out is not None:
-        output_path = args.out
-    else:
-        name = names[voice_index].strip().replace(" ", "_").replace("/", "-")
-        output_path = str(config.AUDIO_OUT_DIR / f"preset_{voice_index:02d}_{name}.wav")
+    for renderer in renderers:
+        # Each renderer gets its own wrapper; engines are never mixed within a
+        # render (D-REPRO). The Dexed plugin re-loads per wrapper, so the JUCE
+        # 'invalid URI' notice is suppressed each time.
+        with suppressed_stderr():
+            synth = DexedWrapper(
+                plugin_path,
+                sample_rate=args.sample_rate,
+                buffer_size=config.BUFFER_SIZE,
+                renderer=renderer,
+            )
+        audio = synth.render_cartridge_voice(
+            syx_path,
+            voice_index=voice_index,
+            midi_note=args.note,
+            velocity=args.velocity,
+            duration_sec=args.duration,
+            note_duration_sec=args.note_duration,
+        )
 
-    # Raw float32 so the level matches the DAW for a fair comparison.
-    wavfile.write(output_path, args.sample_rate, audio.astype(np.float32))
-    print(f"voice {voice_index} '{names[voice_index].strip()}' "
-          f"RMS={np.sqrt(np.mean(audio ** 2)):.4f}  ->  {output_path}")
+        output_path = resolve_output_path(args.out, voice_index, names, renderer,
+                                          tag_renderer=len(renderers) > 1)
+
+        # Raw float32 so the level matches the DAW for a fair comparison.
+        wavfile.write(output_path, args.sample_rate, audio.astype(np.float32))
+        print(f"[{renderer}] voice {voice_index} '{names[voice_index].strip()}' "
+              f"RMS={np.sqrt(np.mean(audio ** 2)):.4f}  ->  {output_path}")
 
 
 if __name__ == "__main__":
