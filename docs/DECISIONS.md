@@ -338,18 +338,54 @@ disabled** (`LFO PM DEPTH` = `LFO AM DEPTH` = 0). Same render settings as the ot
   Per-voice data (1056 rows: `patch_label`, `leak_baseline_db`, `leak_sh_square_db`, `leak_lfo_off_db`):
   `figures/data/context_leakage_arms_cartridges.csv`.
 
+### D1 — Final Dexed parameter subset (LOCKED 2026-06-19)
+
+The models estimate **103 of the 152 exposed parameters**; the rest stay at init-patch defaults.
+
+**Rule**: take the preset-gen-vae / Le Vaillant learnable voice (the full DX7 voice — all six
+operators on, all 32 algorithms, master tune and the per-op OP switches fixed) and drop the
+parameters that are **non-identifiable under D3** (a single fixed note, C4, at fixed velocity 100).
+
+**Estimated (103)** = 19 globals + 14 per operator × 6:
+
+- Globals: `PITCH EG RATE 1-4`, `PITCH EG LEVEL 1-4`, `ALGORITHM`, `FEEDBACK`, `OSC KEY SYNC`,
+  `LFO SPEED`, `LFO DELAY`, `LFO PM DEPTH`, `LFO AM DEPTH`, `LFO KEY SYNC`, `LFO WAVE`,
+  `P MODE SENS.`, `TRANSPOSE`.
+- Per operator: `EG RATE 1-4`, `EG LEVEL 1-4`, `OSC DETUNE`, `A MOD SENS.`, `OUTPUT LEVEL`,
+  `MODE`, `F COARSE`, `F FINE`.
+
+**Dropped (42)** = per operator: `BREAK POINT`, `L SCALE DEPTH`, `R SCALE DEPTH`, `L KEY SCALE`,
+`R KEY SCALE`, `RATE SCALING` (keyboard scaling, only revealed across notes) and `KEY VELOCITY`
+(only revealed across velocities). At the fixed C4 / velocity-100 render their effect is a constant
+offset confounded with `OUTPUT LEVEL` (level scaling, velocity) or `EG RATE` (rate scaling), so
+estimating them would reward guessing and pollute the parameter-side (diagnostic) metrics while
+contributing nothing to the perceptual (primary) metric.
+
+**Also fixed at defaults**: the 6 `OP{1..6} SWITCH` (all on, never learnable — matches
+preset-gen-vae) and `MASTER TUNE ADJ` (matches preset-gen-vae). Tally: 103 estimated + 42 dropped
++ 6 switches + 1 master tune = 152.
+
+**Categorical (per D-KIND), 16 of 103**: `ALGORITHM` (32), `OSC KEY SYNC` (2), `LFO KEY SYNC` (2),
+`LFO WAVE` (6), per-op `MODE` (2 ×6) and per-op `F COARSE` (32 ×6); the other 87 are continuous.
+Low-cardinality ordered grids (`FEEDBACK`, `P MODE SENS.`, `A MOD SENS.`, `OSC DETUNE`) stay
+continuous per D-KIND's "ordered + perceptually progressive" arm.
+
+**Why**: the kept set is a documented subset of the strongest comparable prior Dexed work
+(preset-gen-vae), differing only by a principled, render-contract-driven cut, so the benchmark sits
+on the same problem family with an explicit rather than arbitrary deviation. The LFO is left intact
+(per the Decomposed S&H/LFO leak attribution above, disabling it would cut 55% of real presets); the
+render leak is handled by the fresh-process render discipline, not by the subset. The choice of a
+~100-param set over a smaller core also keeps the cut defensible without sacrificing comparability;
+it was made over a ~35-param alternative (which would have made all six model families, including
+evolutionary search, more directly competitive) — revisit if dimensionality proves to handicap a
+family unfairly. The subset lives in `synth/dexed/subset.py`; `build_parameter_space()` validates
+all 103 names against the live wrapper.
+
+**Unblocks**: real training-dataset generation (GitHub issues #4/#5).
+
 ---
 
 ## OPEN
-
-### D1 — Final Dexed parameter subset (deferred by user, 2026-06-11)
-
-Which of the 152 exposed parameters the models estimate; the rest are locked at defaults.
-**Blocks**: generation of the real training dataset (Phase 2 output).
-**Does not block**: ParameterSpace, DatasetBuilder, model/metric code (all subset-agnostic;
-development uses a provisional subset in `synth/dexed_subset.py`, clearly marked).
-**Recommendation on file**: ~35 params — `ALGORITHM`, `FEEDBACK`, key LFO params, and
-per-operator `OUTPUT LEVEL` + `F COARSE` + reduced envelope (attack + release rates).
 
 ### D4 — Human preset source for the test set (deferred by user, 2026-06-11)
 

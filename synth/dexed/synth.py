@@ -104,7 +104,7 @@ class DexedWrapper(BaseSynthesizer):
 
     @property
     def parameter_space(self) -> ParameterSpace:
-        """The provisional Dexed subset ParameterSpace (D1 deferred), built lazily."""
+        """The D1 Dexed subset ParameterSpace (LOCKED, see docs/DECISIONS.md), built lazily."""
         if self._parameter_space is None:
             from .subset import build_parameter_space
             self._parameter_space = build_parameter_space(self)

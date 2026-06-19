@@ -129,7 +129,7 @@ def test_spec_validation():
 
 
 # ---------------------------------------------------------------------------
-# Integration with the live plugin (provisional Dexed subset)
+# Integration with the live plugin (D1 Dexed subset)
 # ---------------------------------------------------------------------------
 
 PLUGIN_PATH = os.path.expanduser(config.DEXED_PATH)
@@ -153,9 +153,11 @@ def synth():
 @needs_plugin
 def test_dexed_parameter_space_dimensions(synth):
     space = synth.parameter_space
-    assert space.synth_dimension == 29
-    # ALGORITHM 32 + LFO WAVE 6 + 6x F COARSE 32 + 21 continuous
-    assert space.ml_dimension == 251
+    assert space.synth_dimension == 103
+    # 16 categorical one-hot blocks + 87 continuous:
+    # ALGORITHM 32 + OSC KEY SYNC 2 + LFO KEY SYNC 2 + LFO WAVE 6
+    # + 6x (MODE 2 + F COARSE 32) + 87 continuous = 333
+    assert space.ml_dimension == 333
     assert synth.parameter_space is space  # cached
 
 
