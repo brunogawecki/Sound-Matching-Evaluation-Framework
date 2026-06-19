@@ -16,7 +16,7 @@ only — implementation decisions live in `DECISIONS.md`, architecture in `PROJE
 | **Kind** | Whether a parameter is *continuous* (perceptually smooth scale, regressed as a float) or *categorical* (unordered classes or perceptually discontinuous grid, predicted as a class). |
 | **One-hot block** | The contiguous span of an ML-side vector representing one categorical parameter: one slot per option, exactly one set to 1. |
 | **Loss slices** | The partition of the ML-side vector into per-parameter spans, each tagged with its kind, used to route losses and parameter-side metrics. |
-| **Provisional subset** | The development-only parameter subset used to build and test the pipeline while the final subset decision (D1) is deferred. Never used to generate the real training dataset. |
+| **D1 subset** | The final 103-parameter set the models estimate, locked by D1 (see `docs/DECISIONS.md`): preset-gen-vae's full DX7 voice minus the keyboard-scaling and velocity params that are non-identifiable under the fixed C4 / velocity-100 render. Defined in `synth/dexed/subset.py`. |
 | **Subset** | The chosen set of parameters that models estimate. All non-subset parameters are *locked* at defaults. All benchmarked models target the same subset. |
 | **Locked parameter** | A parameter held at its default value and never estimated, randomized, or exposed in the dataset. |
 | **Excluded parameter** | A VST-level parameter (e.g. `Bypass`, `Program`, MIDI CC passthroughs) that the wrapper never exposes at all. Stronger than locked. |
