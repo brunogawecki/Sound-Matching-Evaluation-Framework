@@ -21,6 +21,20 @@ Design decisions and terminology live in `docs/`, not in code comments:
 *   `docs/CONTEXT.md`: the canonical glossary (synth-side dict, ML-side vector, ParameterSpace,
     render context, etc.).
 
+## Work tracking — GitHub Issues vs `DECISIONS.md`
+Build work is tracked as **GitHub Issues** on Project board
+`https://github.com/users/brunogawecki/projects/2` (auto-add workflow surfaces every open issue).
+The split is one-way and must be kept clean:
+*   **`docs/DECISIONS.md` owns the *why*** — rationale, alternatives, locked/open status. Never copy
+    this into an issue.
+*   **Issues own the *do*** — concrete, PR-sized work; close via `fixes #N` commits. An issue that
+    depends on an open decision **points** at it (e.g. "blocked by D1 — see `docs/DECISIONS.md`")
+    rather than duplicating its content.
+*   **Deciding an open decision is not a GitHub task** — it resolves in `docs/DECISIONS.md`; only the
+    *work it unblocks* becomes issues.
+*   Labels: `build` / `bug` (type), `layer-2-data` / `layer-3-models` / `layer-4-eval` (area).
+    Milestones = Phases (`Phase 2`, `Phase 3`).
+
 ## Architecture & Code Structure
 The framework is built with modularity and clear abstractions in mind.
 
