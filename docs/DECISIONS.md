@@ -97,13 +97,54 @@ Empirical basis (deep investigation, Phase 1 session):
 
 **Consequences (to honor in Phase 2/3)**:
 
-- Dataset generation must render each sample in a deterministic context
-  (fresh worker process with a fixed code path, or a fixed single-process sequence
-  re-runnable from the same seed).
-- The Evaluator must re-render predictions in the *same kind* of fresh context used
-  for target generation, otherwise a perfect parameter prediction would not reproduce
-  the target audio (error floor up to SC ≈ 1.35 on sensitive patches — would dominate
-  the benchmark).
+- **In-process engine teardown is not enough — only a fresh OS process isolates the state.**
+  Freeing the engine and rebuilding it in the *same* process reuses dirty heap memory and
+  re-diverges. The 2026-06-17 reload-per-render benchmark (under D-RENDERER) demonstrated this
+  interventionally: in-process reload-per-render does not collapse the divergent tail — it
+  produces a *third, equally-divergent* realization rather than converging on
+  context-independence. Genuine isolation requires a **fresh OS process** (clean heap). A fresh
+  process is deterministic: the same patch rendered at the same sequence position of two
+  independent fresh processes is bit-identical (the cross-process hash check in this study).
+- Dataset generation must therefore render in **fresh worker processes** — each a clean OS
+  process, e.g. `multiprocessing` with the **spawn** start method, never **fork** (fork copies
+  the parent's already-dirty heap and defeats the isolation). Each worker renders its assigned
+  patches deterministically; a fixed single-process sequence re-runnable from the same seed is
+  the reproducible fallback.
+- The Evaluator must re-render predictions in the **same kind of fresh process** used for
+  target generation, at the same sequence position, otherwise a perfect parameter prediction
+  would not reproduce the target audio (error floor up to SC ≈ 1.35 / LSD ≈ 9 dB on sensitive
+  patches — would dominate the benchmark). Simplest honest contract: generate each target at
+  position 0 of a fresh process and re-render each prediction the same way, so target and
+  re-render share an identical clean context. `scripts/benchmark_renderers.py --subprocess`
+  quantifies the collapse (a fresh-process arm whose two independent realizations agree to ~0
+  where the in-process arms keep a full tail).
+
+**Policy — accept and document, do not engine-fix (2026-06-17, user decision)**:
+
+The hidden voice state is treated as a **characterized limitation of the Dexed engine, reported
+in the thesis as a threat to validity — not fixed at the engine level** (no Dexed C++ fork, no
+attempt to zero-initialize the per-voice memory). Rationale:
+
+- It **does not bias the between-framework comparison** — the core thesis result — as long as
+  evaluation is rendered consistently: the leak adds an *equal* noise floor to every model, so
+  model *ranking* is unaffected. The only real hazard is an inconsistent generation-vs-evaluation
+  render context, which the render discipline in **Consequences** above neutralizes (deterministic
+  generation; fresh-process re-render at evaluation).
+- The leak is concentrated in **LFO / sample-&-hold / noise** voices (see the cartridge entry
+  under D-RENDERER). **D1** may additionally choose to lock those parameters in the final subset,
+  which both shrinks the leak's footprint and is a defensible scope decision — the same move
+  preset-gen-vae made with its `prevent_SH_LFO` constraint.
+
+The thesis should therefore (a) describe the phenomenon and its mechanism, (b) state the render
+discipline used to keep it from biasing results, and (c) cite the characterization data
+(`figures/data/context_leakage_seed0.csv`, the D-RENDERER benchmark entries).
+
+**Follow-up (resolved 2026-06-17)**: leakage was initially measured *within DawDreamer only*.
+`scripts/measure_context_leakage.py --renderer pedalboard` confirmed **Pedalboard leaks at the same
+magnitude** (within-engine p90 7.08 / p95 8.51 dB vs DawDreamer 6.88 / 8.52; ρ = 0.62, 89% top-decile
+overlap with the cross-engine tail) — so the hidden state is in the **shared Dexed plugin binary, not
+the host**, and switching renderers does not avoid it. See the D-RENDERER "Pedalboard leakage test"
+entry.
 
 ### D-ORDER — Dexed-only vertical slice first
 
@@ -182,6 +223,80 @@ wrapper, so it works with any renderer unchanged.
   the shared tail (both medians ~0, so the bulk is uninformative); and it bounds but does not
   zero out a possible small genuine host difference. Per-patch data:
   `figures/data/context_leakage_seed0.csv`.
+
+**Reload-per-render test (2026-06-17)** — append-only; the decision above is unchanged. The
+*interventional* counterpart to the (correlational) confirmatory test above. `scripts/benchmark_renderers.py`
+was rewritten into a **3-arm** benchmark: **(1) dawdreamer-reuse** (one persistent instance, the
+default), **(2) dawdreamer-reload** (a fresh `DexedWrapper` — engine rebuilt + plugin reloaded — per
+render, in-process; faithful to preset-gen-vae's reload-per-render, `paper_repos/preset-gen-vae/data/dexeddataset.py:243`),
+and **(3) pedalboard**. Same patch set as the 2026-06-15 benchmark (N=3000, seed 0 canonical;
+22050 Hz, 4.0 s / 3.0 s note; Apple M5). Two questions: how costly is reload-per-render, and does it
+neutralize the hidden voice state (the mitigation the paper used but never characterized)?
+
+- **Speed.** Median per-render: reuse **3.4 ms**, reload **30.8 ms** (decomposed: **27.0 ms** plugin
+  reload + 3.8 ms render — the render component matches reuse, so the cost is purely the reload),
+  pedalboard 18.2 ms. **Reload-per-render is ~9× slower than reuse** (and the reload arm is the slowest
+  of the three). Total wall-clock to render all 3000: reuse 10.3 s, reload 93.6 s, pedalboard 124.6 s.
+- **Sanity.** The **reuse↔pedalboard** table reproduced the recorded 2026-06-15 numbers (LSD p90 7.14 /
+  p95 8.58 vs recorded 7.08 / 8.51; 2601 patches, 399 near-silent skipped), confirming the rewrite did
+  not change the measurement.
+- **Agreement — the interventional result.** All three pairwise tails are the **same magnitude**
+  (medians ~0; LSD p90 / p95): reuse↔pedalboard **7.14 / 8.58**, reload↔pedalboard **7.02 / 8.48**,
+  reuse↔reload **7.07 / 8.60**. Reload↔pedalboard is statistically indistinguishable from
+  reuse↔pedalboard (~1.5% smaller, within seed noise) — **in-process reload does NOT collapse the
+  cross-engine tail.** And reuse↔reload carries a full tail of the same size, so reload is not a no-op
+  either: it produces a *third, equally-divergent* realization of the sensitive patches rather than
+  converging on context-independence. This is exactly what D-REPRO predicted — freeing an engine and
+  rebuilding it **in-process reuses dirty heap memory and diverges** — and it shows the paper's
+  reload-per-render mitigation (which targeted gross hanging notes, never the subtle state) does **not**
+  escape the hidden voice state on DawDreamer. Genuine isolation would require a **fresh OS process**
+  per render (what preset-gen-vae's `multiprocessing.Pool` incidentally provided), consistent with the
+  D-REPRO consequence that dataset generation render in fresh worker processes. Per-patch data (9
+  metric columns, all three pairs): `figures/data/host_agreement_3way_seed0.csv`.
+
+**Human-preset cartridge benchmark (2026-06-17)** — append-only; the decision above is unchanged.
+The reload-per-render test above used seeded random patches; this run used **all 1056 voices from
+the 33 real DX7 cartridges** in the standard Dexed install directory (`Dexed_01.syx` + 32
+SynprezFM banks), via `scripts/benchmark_renderers.py --cartridges`. Same 3-arm setup, same render
+settings (22050 Hz, 4.0 s / 3.0 s note; Apple M5).
+
+- **Near-silence: 0/1056.** No near-silent patches — real human presets are all audible, in
+  contrast to **13% silence** for uniform random subset sampling (see 2026-06-15 entry above).
+  This is relevant to **D1**: the random-subset silence rate will inflate apparent dataset size.
+- **Speed.** Consistent with the seeded runs: reuse **4.2 ms** / reload **30.8 ms** (26.5 ms
+  reload + 4.5 ms render) / pedalboard **18.6 ms**; reload **7.4× slower** than reuse, reuse
+  **4.5× faster** than pedalboard. Total wall-clock: reuse 4.4 s, reload 32.6 s, pedalboard 19.8 s.
+- **Agreement.** Same bimodal structure, all three tails the same magnitude (LSD p90 / p95):
+  reuse↔pedalboard **8.86 / 10.59**, reload↔pedalboard **8.93 / 11.10**, reuse↔reload **8.87 /
+  11.07**. In-process reload does not collapse the cross-engine tail on the real-preset population
+  either — conclusion generalizes from random patches to musically realistic ones.
+- **Most-divergent presets.** The top divergers are overwhelmingly **LFO / sample-&-hold / noise**
+  voices — exactly the patch class predicted by the hidden per-voice LFO/S&H state mechanism:
+  `SynprezFM_21:02 CIGALES` (69.68 dB), `SynprezFM_13:21 CROSSING` (32.63),
+  `SynprezFM_04:03 S-H ZIBBLE` (23.92), `SynprezFM_18:17 COMPUTER 1` (23.53),
+  `SynprezFM_02:02 SCHLBELL` (22.92). Most musical pads/basses are bit-identical (median ≈ 0).
+- Per-patch data (1056 rows, `patch_label` column): `figures/data/host_agreement_3way_cartridges.csv`.
+
+**Pedalboard leakage test (2026-06-17)** — append-only; the decision above is unchanged. Resolves the
+D-REPRO open follow-up: *does Pedalboard exhibit the same within-engine context leakage as DawDreamer,
+or is it a clean anchor?* All prior leakage evidence (the 2026-06-16 confirmatory test) was measured
+*within DawDreamer only*. `scripts/measure_context_leakage.py --renderer pedalboard` reruns the exact
+A/C-primer probe — render each patch after primer A vs after primer C in one **persistent Pedalboard**
+instance, LSD between the two — over the same seed-0 / N=3000 patches and primers, then correlates
+against the same cross-engine LSD column (`figures/data/host_agreement_seed0.csv`).
+
+- **Pedalboard leaks at the same magnitude as DawDreamer.** Within-Pedalboard context-leakage LSD
+  (n=2601 non-silent): median **0.0000**, **p90 7.08 / p95 8.51 dB** — statistically the same as the
+  DawDreamer baseline (median 0.0000, p90 6.88 / p95 8.52; `figures/data/context_leakage_seed0.csv`).
+- **And it predicts the cross-engine tail just as strongly.** Spearman **ρ = 0.620** (p ≈ 6e-276)
+  between within-Pedalboard leakage and the DawDreamer↔Pedalboard cross-engine LSD; **top-decile
+  overlap 89.2%** (8.9× over chance) — matching the DawDreamer numbers (ρ = 0.62, 90.8%).
+- **Conclusion.** The hidden voice state lives in the **shared Dexed plugin binary, not the host**:
+  both engines exhibit the same within-engine context leakage, of the same magnitude, and in both the
+  leakage tail coincides with the cross-engine divergence tail. This rules out "Pedalboard is the clean
+  anchor and the tail is a DawDreamer-only quirk" — neither host escapes the state in-process, exactly
+  as D-REPRO predicts (only a fresh OS process isolates it). Per-patch data:
+  `figures/data/context_leakage_pedalboard_seed0.csv`.
 
 ---
 
