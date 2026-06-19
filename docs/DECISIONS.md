@@ -298,6 +298,46 @@ against the same cross-engine LSD column (`figures/data/host_agreement_seed0.csv
   as D-REPRO predicts (only a fresh OS process isolates it). Per-patch data:
   `figures/data/context_leakage_pedalboard_seed0.csv`.
 
+**Decomposed S&H/LFO leak attribution (2026-06-19)** — append-only; the decision/policy above is
+unchanged. *Interventional* test of how much of the leak is sample-&-hold (the only mechanism
+preset-gen-vae's `prevent_SH_LFO` mitigation targets) vs. general LFO vs. deeper non-LFO state, and
+therefore whether that mitigation would remove the leak. `scripts/measure_context_leakage.py --cartridges`
+runs the A/C-primer within-engine leak probe over all **1056 cartridge voices** under three arms, each a
+parameter constraint applied to every rendered patch (primers + probe): **(1) baseline** (none),
+**(2) S&H→square** (preset-gen-vae's `prevent_SH_LFO`: `LFO WAVE` sample&hold → square), **(3) LFO
+disabled** (`LFO PM DEPTH` = `LFO AM DEPTH` = 0). Same render settings as the other cartridge runs
+(22050 Hz, 4.0 s / 3.0 s note; Apple M5; ~68 s total).
+
+- **The leak is entirely LFO-mediated.** Arm 3 (LFO disabled) drives the leak to **exactly 0.0 dB for
+  all 1056 voices** (max 0.0000, not just the percentiles) — with no LFO modulation applied, rendering
+  is perfectly context-independent. So there is **no non-LFO residual**: the hidden state is the LFO
+  subsystem's running memory (free-running phase + the S&H held value), surfaced through non-zero LFO
+  depth — not a generic uninitialized per-voice memory. This *refines* the earlier D-REPRO hypothesis
+  ("stale/uninitialized per-voice memory"; consistent with the prior finding that KEY SYNC alone did
+  not fix it — zeroing the applied depth does).
+- **S&H is a small share; `prevent_SH_LFO` does NOT remove the leak.** Only **32/1056** voices use S&H,
+  and Arm 2 (S&H→square) moves the population tail by ~2.5%: p90 8.56→8.40, **p95 10.50→10.24 dB**
+  (median 0 throughout). It materially changes **23 voices** — for pure-S&H voices it removes the leak
+  entirely (`S-H ZIBBLE` 20.71→0, `Randomize3` 14.90→0, `CRICKETS`/`RandomNots`→0), for mixed voices it
+  roughly halves it (`COMPUTER 1` 24.83→12.70, `S&H BUBBLE` 13.37→6.30) — but it leaves the dominant
+  **non-S&H LFO** tail untouched: the biggest divergers are *not* S&H and survive Arm 2, collapsing only
+  under Arm 3 (`CIGALES` 53.25→53.25→0, `TECH PULSE` 24.37→24.37→0, `HORN MOD` 22.18→22.18→0,
+  `SAW EM UP` 17.61→17.61→0).
+- **Baseline sanity.** Within-engine baseline leak (p90 8.56 / p95 10.50) matches the cartridge
+  *cross-engine* tail recorded above (reuse↔pedalboard p90 8.86 / p95 10.59), consistent with the
+  cross-engine tail being this same in-engine mechanism.
+- **Consequence for D1 / policy.** Constraining the subset to exclude S&H buys almost nothing
+  (~2.5% of the tail); the only parameter-space constraint that removes the leak is disabling the LFO
+  outright, which **584/1056 (55%) of real presets use** — too large a scope cut. This **strengthens the
+  accept-and-document + fresh-process render discipline policy**: the leak cannot be cheaply constrained
+  away, and `prevent_SH_LFO` (which targeted gross S&H artifacts, not the subtle phase state) is not a
+  fix for it. (Supersedes the speculative "D1 may lock those parameters to shrink the leak" aside in the
+  policy section above — locking *S&H specifically* is near-useless; only full LFO removal works, and is
+  not worth it.) LFO WAVE option values were resolved by the plugin's displayed parameter text
+  (S&H = 1.0, SQUARE = 0.6 on this VST3 build; preset-gen-vae's "0.8" was a different build's order).
+  Per-voice data (1056 rows: `patch_label`, `leak_baseline_db`, `leak_sh_square_db`, `leak_lfo_off_db`):
+  `figures/data/context_leakage_arms_cartridges.csv`.
+
 ---
 
 ## OPEN
