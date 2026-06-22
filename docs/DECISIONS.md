@@ -383,6 +383,65 @@ all 103 names against the live wrapper.
 
 **Unblocks**: real training-dataset generation (GitHub issues #4/#5).
 
+### D-SILENCE — Dataset silence gate: integrated LUFS (LOCKED 2026-06-22)
+
+The `DatasetBuilder` flags/redraws a render as near-silent by **integrated loudness** (ITU-R
+BS.1770, via `pyloudnorm`) below a floor, **not** by peak amplitude.
+
+**Why**: peak is a single sample — a patch with a brief attack click but no sustained body clears a
+peak gate while being perceptually silent — and the prior `1e-3` peak floor (≈ −60 dBFS) was far too
+permissive. Integrated LUFS reflects *perceived* loudness over the note (its gating discards the
+silent release tail), which aligns with the perceptual-similarity primary metric axis. This follows
+ben-hayes/synth-permutations (LUFS reject-and-redraw); Sound2Synth used a stricter peak gate
+(`>0.01`, ≈ −40 dBFS); preset-gen-vae needs no audio gate (real human presets are audible).
+
+**Threshold**: default **−34 LUFS**, the **5th percentile of the 1051 built-in Dexed presets'**
+loudness at the D3 render contract (human p5 −34.1, p10 −30.8, median −24.0). Rationale: the floor
+should reject not just silent patches but *quiet* ones, so synthetic patches are at least as loud as
+the quietest ~5% of real presets. (An earlier −45 was the valley of the *uniform-random* loudness
+histogram, but that admits patches quieter than any human preset — the source of the "barely
+audible" complaint.) Recalibrate per synth / render contract. The metadata records `loudness_lufs`
+per sound alongside `rms` so the gate can be re-evaluated post hoc.
+
+Note: the ~13% / amplitude<1e-3 figures in the D-RENDERER study above are historical *measurements*
+from that experiment, not this gate.
+
+### D-AUDIBLE — Synthetic sampler is constrained to be audible (LOCKED 2026-06-22)
+
+`SyntheticSampler` no longer draws **purely** uniformly: optional **per-parameter range overrides**
+(`sampling_ranges`) narrow chosen continuous parameters to an audible sub-range **at sampling time**.
+The override map is owned by the synth (`BaseSynthesizer.audible_sampling_ranges`, default empty) and
+applied via `ParameterSpace.sample_constrained` — the constrained params are drawn directly from the
+sub-range, never sampled-then-overwritten. For Dexed the map is `synth.dexed.AUDIBLE_SAMPLING_RANGES`.
+Because the map is declarative it is recorded in `run_summary.json` (reproducibility) and applied
+consistently everywhere synthetic material is generated, including `HybridSource` blend draws.
+
+**Why**: uniform draws over the subset are ~30 dB quieter than human presets (uniform median −55.5
+LUFS vs human −24.0); a patch is audible only if a *carrier* operator is loud with an open envelope,
+which uniform sampling rarely produces. Pure rejection-sampling to a human-like floor (D-SILENCE)
+would reject **94%** of draws (~15 renders/sample, exceeding the redraw cap) — so the source must be
+fixed, not just its output filtered. This mirrors diffmoog (guarantee an active oscillator) and
+pcmbs/synth-proxy (RMS-range redraw).
+
+**How (Dexed)**: **OP1 is a carrier in all 32 algorithms** (verified against the live plugin), so
+constraining OP1 alone makes any patch audible. The constrained parameters and ranges are
+**calibrated to the built-in presets**, which keep OP1 `OUTPUT LEVEL` and `EG LEVEL 1` (attack peak)
+near max (p5 0.85 / 0.72) and the attack rate reasonably fast (p5 0.33), while `EG LEVEL 3` (sustain)
+varies freely (median 0.32). So the map draws OP1 `OUTPUT LEVEL`/`EG LEVEL 1` from [0.9, 1.0] and
+`EG RATE 1` from [0.3, 1.0], and **leaves sustain/decay, frequency, the other five operators and the
+algorithm random**. Because it only pins parameters humans already pin, the synthetic/human (train/test)
+distribution shift is minimal and confined to OP1's diagnostic param metrics; the primary perceptual
+metric is unaffected. With the constraint, median loudness rises to ~−36 and the −34 floor rejects
+~60% (~2.5 renders/sample) instead of 94%.
+
+**Limitation / future**: the constraint always forces *OP1* specifically, so its degeneracy lands on
+OP1 rather than being spread across each algorithm's actual carriers (which would need a sourced DX7
+algorithm→carrier table). The other operators stay uniform, so the corpus is still ~10 dB quieter
+than human overall; biasing all operator output levels toward the human distribution is a possible
+later step. Both are revisitable without changing the interface (`audible_sampling_ranges` is
+declarative per-synth; range overrides currently cover continuous params, and the design extends to
+categorical option-restriction if a future synth needs it).
+
 ---
 
 ## OPEN

@@ -1,5 +1,5 @@
 import abc
-from typing import Dict, Any, Optional, Union, TYPE_CHECKING
+from typing import Dict, Any, Optional, Tuple, Union, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
@@ -27,6 +27,21 @@ class BaseSynthesizer(abc.ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not define a parameter subset / ParameterSpace."
         )
+
+    @property
+    def audible_sampling_ranges(self) -> Dict[str, Tuple[float, float]]:
+        """
+        Per-parameter sampling-range overrides that keep synthetic draws audible.
+
+        Maps continuous parameter names to a ``(low, high)`` sub-range from which
+        a :class:`~dataset.sources.SyntheticSampler` should draw instead of the
+        full bounds (consumed by
+        :meth:`~synth.parameter_space.ParameterSpace.sample_constrained`).
+        Default is empty (no constraint); synths whose uniform draws are mostly
+        silent override this to pin a carrier loud (see Dexed's
+        ``AUDIBLE_SAMPLING_RANGES`` and docs/DECISIONS.md D-AUDIBLE).
+        """
+        return {}
 
     @abc.abstractmethod
     def set_parameters(self, params: Dict[str, Union[float, int]]) -> None:

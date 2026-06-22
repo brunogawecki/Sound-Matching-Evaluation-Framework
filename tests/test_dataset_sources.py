@@ -76,6 +76,38 @@ def test_synthetic_resample_redraws_the_same_slot_differently():
     assert sampler.resample(original, attempt=1).params == redrawn.params
 
 
+# A toy audibility constraint: draw CONT A from a high sub-range at sampling time.
+_RANGES = {"CONT A": (0.9, 1.0)}
+
+
+def test_synthetic_sampler_applies_sampling_ranges_leaving_other_params_free():
+    space = make_space()
+    presets = list(
+        SyntheticSampler(space, count=30, seed=0, sampling_ranges=_RANGES).iter_presets()
+    )
+    assert all(p.params["CONT A"] >= 0.9 for p in presets)          # constrained
+    assert any(p.params["CONT C"] < 0.7 for p in presets)           # untouched, still varies
+    # Without the override, CONT A spans the full range (so the override is doing the work).
+    free = list(SyntheticSampler(space, count=30, seed=0).iter_presets())
+    assert any(p.params["CONT A"] < 0.9 for p in free)
+
+
+def test_synthetic_sampling_ranges_are_deterministic_and_applied_on_resample():
+    space = make_space()
+    first = list(SyntheticSampler(space, count=4, seed=5, sampling_ranges=_RANGES).iter_presets())
+    second = list(SyntheticSampler(space, count=4, seed=5, sampling_ranges=_RANGES).iter_presets())
+    assert [p.params for p in first] == [p.params for p in second]
+    sampler = SyntheticSampler(space, count=4, seed=5, sampling_ranges=_RANGES)
+    redrawn = sampler.resample(first[0], attempt=1)
+    assert redrawn.params["CONT A"] >= 0.9
+
+
+def test_synthetic_sampler_describe_records_sampling_ranges():
+    space = make_space()
+    description = SyntheticSampler(space, count=2, seed=0, sampling_ranges=_RANGES).describe()
+    assert description["sampling_ranges"] == _RANGES
+
+
 # -- HumanPresetSource ------------------------------------------------------------
 
 def test_preset_source_projects_onto_subset_and_tags_provenance():
@@ -133,6 +165,17 @@ def test_hybrid_blend_human_picks_cannot_resample_but_synthetic_can():
             assert result is None
         else:
             assert result is not None and result.method == METHOD_SYNTHETIC
+
+
+def test_hybrid_blend_applies_sampling_ranges_to_synthetic_draws():
+    space = make_space()
+    source = HybridSource(
+        HybridSource.BLEND, [human_preset()], space, count=200, seed=11,
+        synthetic_ratio=1.0, sampling_ranges=_RANGES,
+    )
+    synthetic = [p for p in source.iter_presets() if p.method == METHOD_SYNTHETIC]
+    assert synthetic  # ratio 1.0 -> all synthetic
+    assert all(p.params["CONT A"] >= 0.9 for p in synthetic)
 
 
 # -- HybridSource: augment ---------------------------------------------------

@@ -112,6 +112,55 @@ def test_sample_uniform_is_deterministic_and_valid():
     assert 0.2 <= a["CONT C"] <= 0.8
 
 
+def test_sample_constrained_narrows_only_overridden_continuous_params():
+    space = make_space()
+    overrides = {"CONT A": (0.9, 1.0)}
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        params = space.sample_constrained(rng, overrides)
+        assert 0.9 <= params["CONT A"] <= 1.0          # narrowed
+        assert 0.2 <= params["CONT C"] <= 0.8          # still full bounds
+        assert params["CAT B"] in (0.0, 0.5, 1.0)      # categorical untouched
+        assert params["CAT D"] in (0.0, 1.0)
+
+
+def test_sample_constrained_with_empty_overrides_matches_sample_uniform():
+    space = make_space()
+    constrained = space.sample_constrained(np.random.default_rng(7), {})
+    uniform = space.sample_uniform(np.random.default_rng(7))
+    assert constrained == uniform
+
+
+def test_sample_constrained_is_deterministic_given_the_same_rng():
+    space = make_space()
+    overrides = {"CONT A": (0.9, 1.0), "CONT C": (0.3, 0.4)}
+    a = space.sample_constrained(np.random.default_rng(123), overrides)
+    b = space.sample_constrained(np.random.default_rng(123), overrides)
+    assert a == b
+
+
+def test_sample_constrained_rejects_unknown_parameter():
+    space = make_space()
+    with pytest.raises(KeyError):
+        space.sample_constrained(np.random.default_rng(0), {"NOT A PARAM": (0.9, 1.0)})
+
+
+def test_sample_constrained_rejects_categorical_override():
+    space = make_space()
+    with pytest.raises(ValueError):
+        space.sample_constrained(np.random.default_rng(0), {"CAT B": (0.0, 1.0)})
+
+
+def test_sample_constrained_rejects_range_outside_bounds():
+    space = make_space()
+    with pytest.raises(ValueError):
+        # CONT C bounds are (0.2, 0.8); 0.9 is out of range
+        space.sample_constrained(np.random.default_rng(0), {"CONT C": (0.5, 0.9)})
+    with pytest.raises(ValueError):
+        # inverted / empty range
+        space.sample_constrained(np.random.default_rng(0), {"CONT A": (0.6, 0.4)})
+
+
 def test_spec_validation():
     with pytest.raises(ValueError):
         ParameterSpecification(name="X", kind="categorical")  # no options

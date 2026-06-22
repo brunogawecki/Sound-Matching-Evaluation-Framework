@@ -15,7 +15,7 @@ and fresh-process-per-render (test) executors.
 Output (per run, under ``output_root/<run_name>/``)::
 
     run_summary.json  # render settings, renderer, seeds, subset, defaults, source
-    metadata.csv      # one row per sound: id, path, <subset columns>, provenance, rms
+    metadata.csv      # one row per sound: id, path, <subset columns>, provenance, rms, loudness_lufs
     audio/<id>.wav    # mono float32, one per row
 
 The corpus is a deterministic function of the source's seed: re-running with the
@@ -32,6 +32,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import pyloudnorm
 from scipy.io import wavfile
 
 import config
@@ -97,6 +98,7 @@ _TRAILING_COLUMNS = [
     "voice_name",
     "parent_id",
     "rms",
+    "loudness_lufs",
     "near_silent",
 ]
 
@@ -110,8 +112,11 @@ class DatasetBuilder:
         render_settings: the render contract; defaults to :meth:`RenderSettings.from_config`.
         executor: rendering strategy; defaults to an in-process
             :class:`SequentialExecutor` over ``synth``.
-        near_silence_threshold: peak-amplitude floor below which a render counts
-            as near-silent.
+        min_loudness_lufs: integrated-loudness floor (ITU-R BS.1770, via
+            :mod:`pyloudnorm`) below which a render counts as near-silent. The
+            default is the 5th percentile of the built-in Dexed presets' loudness
+            (so synthetic patches must be at least as loud as the quietest ~5% of
+            real presets); recalibrate for a different synth or render contract.
         max_redraw_attempts: how many times to ask the source for a louder
             replacement before giving up and storing the near-silent preset.
     """
@@ -121,14 +126,15 @@ class DatasetBuilder:
         synth: BaseSynthesizer,
         render_settings: Optional[RenderSettings] = None,
         executor: Optional[RenderExecutor] = None,
-        near_silence_threshold: float = 1e-3,
+        min_loudness_lufs: float = -34.0,
         max_redraw_attempts: int = 10,
     ):
         self._synth = synth
         self._settings = render_settings or RenderSettings.from_config()
         self._executor = executor or SequentialExecutor(synth, self._settings)
-        self._near_silence_threshold = float(near_silence_threshold)
+        self._min_loudness_lufs = float(min_loudness_lufs)
         self._max_redraw_attempts = int(max_redraw_attempts)
+        self._loudness_meter = pyloudnorm.Meter(int(synth.sample_rate))
 
         self._defaults = synth.get_parameter_defaults()
         self._parameter_space = synth.parameter_space
@@ -183,15 +189,26 @@ class DatasetBuilder:
                 return current, audio
             current, attempt = replacement, attempt + 1
 
+    def _integrated_loudness(self, audio: np.ndarray) -> float:
+        """Integrated loudness in LUFS (ITU-R BS.1770); ``-inf`` for silence.
+
+        The meter gates out the silent release tail, so the value reflects the
+        note rather than the buffer length. ``pyloudnorm`` accepts a 1-D mono
+        signal directly.
+        """
+        if audio.size == 0 or not np.any(audio):
+            return float("-inf")
+        return float(self._loudness_meter.integrated_loudness(audio))
+
     def _is_near_silent(self, audio: np.ndarray) -> bool:
-        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-        return peak < self._near_silence_threshold
+        return self._integrated_loudness(audio) < self._min_loudness_lufs
 
     # -- metadata ------------------------------------------------------------
     def _build_metadata_row(
         self, sample_id: str, relative_path: str, preset: PresetRecord, audio: np.ndarray
     ) -> Dict[str, object]:
         rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+        loudness_lufs = self._integrated_loudness(audio)
         row: Dict[str, object] = {
             "sample_id": sample_id,
             "audio_path": relative_path,
@@ -202,7 +219,8 @@ class DatasetBuilder:
             "voice_name": preset.voice_name,
             "parent_id": preset.parent_id,
             "rms": rms,
-            "near_silent": self._is_near_silent(audio),
+            "loudness_lufs": loudness_lufs,
+            "near_silent": loudness_lufs < self._min_loudness_lufs,
         }
         row.update({name: preset.params[name] for name in self._subset_names})
         return row
@@ -224,7 +242,7 @@ class DatasetBuilder:
             "renderer": getattr(self._synth, "renderer_name", None),
             "subset_names": list(self._subset_names),
             "default_params": {name: float(value) for name, value in self._defaults.items()},
-            "near_silence_threshold": self._near_silence_threshold,
+            "min_loudness_lufs": self._min_loudness_lufs,
             "max_redraw_attempts": self._max_redraw_attempts,
             "source": source.describe(),
             "git_revision": _git_revision(),

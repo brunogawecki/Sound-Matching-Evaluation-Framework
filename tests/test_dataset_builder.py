@@ -17,8 +17,11 @@ from dataset.sources import METHOD_SYNTHETIC, PresetRecord, PresetSource, Synthe
 
 
 # ---------------------------------------------------------------------------
-# A fake synth: deterministic, fast, no VST. The rendered signal is a constant
-# whose amplitude is the value of "AMP", so a preset's loudness is controllable.
+# A fake synth: deterministic, fast, no VST. The rendered signal is a sine whose
+# amplitude is the value of "AMP", so a preset's loudness is controllable (AMP=0
+# is digital silence). A plain DC constant would read as silent under LUFS
+# (K-weighting removes DC), so a real tone is used; the render is long enough and
+# the sample rate high enough that one pyloudnorm loudness block (400 ms) fits.
 # ---------------------------------------------------------------------------
 
 def make_space() -> ParameterSpace:
@@ -31,7 +34,7 @@ def make_space() -> ParameterSpace:
 class FakeSynth:
     renderer_name = "fake"
 
-    def __init__(self, space: ParameterSpace, sample_rate: int = 100):
+    def __init__(self, space: ParameterSpace, sample_rate: int = 8000):
         self._space = space
         self._sample_rate = sample_rate
         self._state: Dict[str, float] = {s.name: s.default for s in space.parameter_specs}
@@ -55,11 +58,12 @@ class FakeSynth:
 
     def render_audio(self, midi_note, velocity, duration_sec, note_duration_sec=None) -> np.ndarray:
         samples = int(duration_sec * self._sample_rate)
-        return np.full(samples, float(self._state["AMP"]), dtype=np.float64)
+        time = np.arange(samples) / self._sample_rate
+        return float(self._state["AMP"]) * np.sin(2.0 * np.pi * 220.0 * time)
 
 
 def small_settings() -> RenderSettings:
-    return RenderSettings(midi_note=60, velocity=100, duration_sec=0.1, note_duration_sec=0.1)
+    return RenderSettings(midi_note=60, velocity=100, duration_sec=0.5, note_duration_sec=0.5)
 
 
 class ScriptedSource(PresetSource):
@@ -107,7 +111,7 @@ def test_build_writes_one_wav_per_row_all_mono(tmp_path):
 def test_metadata_has_subset_columns_and_provenance(tmp_path):
     build(tmp_path, SyntheticSampler(make_space(), count=3, seed=1))
     frame = pd.read_csv(tmp_path / "run" / "metadata.csv")
-    for column in ["sample_id", "audio_path", "AMP", "CAT", "method", "partition", "rms", "near_silent"]:
+    for column in ["sample_id", "audio_path", "AMP", "CAT", "method", "partition", "rms", "loudness_lufs", "near_silent"]:
         assert column in frame.columns
     assert (frame["method"] == METHOD_SYNTHETIC).all()
     assert frame["sample_id"].tolist() == ["sample_000000", "sample_000001", "sample_000002"]
@@ -115,10 +119,10 @@ def test_metadata_has_subset_columns_and_provenance(tmp_path):
 
 def test_run_summary_records_settings_seed_subset_and_source(tmp_path):
     run_summary = build(tmp_path, SyntheticSampler(make_space(), count=2, seed=5))
-    assert run_summary["sample_rate"] == 100
+    assert run_summary["sample_rate"] == 8000
     assert run_summary["renderer"] == "fake"
     assert run_summary["subset_names"] == ["AMP", "CAT"]
-    assert run_summary["render_settings"]["duration_sec"] == 0.1
+    assert run_summary["render_settings"]["duration_sec"] == 0.5
     assert run_summary["source"]["method"] == METHOD_SYNTHETIC
     assert run_summary["source"]["seed"] == 5
     assert set(run_summary["default_params"]) == {"AMP", "CAT"}
@@ -200,7 +204,9 @@ def test_builds_synthetic_corpus_end_to_end_with_dexed(tmp_path):
     from synth.dexed import DexedWrapper
 
     synth = DexedWrapper(PLUGIN_PATH, sample_rate=config.SAMPLE_RATE, buffer_size=config.BUFFER_SIZE)
-    source = SyntheticSampler(synth.parameter_space, count=8, seed=0)
+    source = SyntheticSampler(
+        synth.parameter_space, count=8, seed=0, sampling_ranges=synth.audible_sampling_ranges
+    )
     run_summary = DatasetBuilder(synth).build(source, run_name="synthetic", output_root=tmp_path)
 
     run_dir = tmp_path / "synthetic"

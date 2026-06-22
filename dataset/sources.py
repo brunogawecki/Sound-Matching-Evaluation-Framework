@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass, field, replace
-from typing import Dict, Iterator, List, Optional, TYPE_CHECKING
+from typing import Dict, Iterator, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 
@@ -88,11 +88,23 @@ def _rng(seed: int, *tags: int) -> np.random.Generator:
 
 
 class SyntheticSampler(PresetSource):
-    """Uniform random presets over the parameter space (the "synthetic" method).
+    """Random presets over the parameter space (the "synthetic" method).
 
-    "Synthetic" means uniform over the *audible* region: the builder redraws a
-    near-silent preset via :meth:`resample` until it is audible or the retry cap
-    is hit.
+    "Synthetic" means random over the *audible* region in two complementary
+    ways: optional ``sampling_ranges`` draw chosen continuous parameters from a
+    narrow sub-range *at sampling time* (e.g. pinning a Dexed carrier loud), and
+    the builder still redraws any residual near-silent preset via
+    :meth:`resample` until it is audible or the retry cap is hit. With no
+    ``sampling_ranges`` the draws are purely uniform.
+
+    Args:
+        sampling_ranges: optional ``{name: (low, high)}`` map of per-parameter
+            range overrides passed to
+            :meth:`~synth.parameter_space.ParameterSpace.sample_constrained`, so
+            those continuous params are drawn directly from the sub-range rather
+            than their full bounds (no post-hoc overwrite). The map is
+            synth-specific (e.g. a synth's ``audible_sampling_ranges``); an empty
+            or omitted map is identical to uniform sampling.
     """
 
     def __init__(
@@ -101,14 +113,17 @@ class SyntheticSampler(PresetSource):
         count: int,
         seed: int,
         partition: str = "train",
+        sampling_ranges: Optional[Dict[str, Tuple[float, float]]] = None,
     ):
         self._parameter_space = parameter_space
         self._count = int(count)
         self._seed = int(seed)
         self._partition = partition
+        self._sampling_ranges = dict(sampling_ranges or {})
 
     def _sample(self, slot: int, attempt: int) -> Dict[str, float]:
-        return self._parameter_space.sample_uniform(_rng(self._seed, slot, attempt))
+        rng = _rng(self._seed, slot, attempt)
+        return self._parameter_space.sample_constrained(rng, self._sampling_ranges)
 
     def iter_presets(self) -> Iterator[PresetRecord]:
         for slot in range(self._count):
@@ -128,6 +143,7 @@ class SyntheticSampler(PresetSource):
             "count": self._count,
             "seed": self._seed,
             "partition": self._partition,
+            "sampling_ranges": dict(self._sampling_ranges),
         }
 
 
@@ -216,6 +232,7 @@ class HybridSource(PresetSource):
         jitter: float = 0.05,
         flip_categoricals: bool = False,
         partition: str = "train",
+        sampling_ranges: Optional[Dict[str, Tuple[float, float]]] = None,
     ):
         if mode not in (self.BLEND, self.AUGMENT):
             raise ValueError(
@@ -233,6 +250,7 @@ class HybridSource(PresetSource):
         self._jitter = float(jitter)
         self._flip_categoricals = bool(flip_categoricals)
         self._partition = partition
+        self._sampling_ranges = dict(sampling_ranges or {})
 
         specs = parameter_space.parameter_specs
         self._continuous_names = [spec.name for spec in specs if spec.kind == "continuous"]
@@ -243,7 +261,9 @@ class HybridSource(PresetSource):
     def _blend_slot(self, slot: int, attempt: int) -> PresetRecord:
         if _rng(self._seed, slot, 0).random() < self._synthetic_ratio:
             return PresetRecord(
-                params=self._parameter_space.sample_uniform(_rng(self._seed, slot, 1, attempt)),
+                params=self._parameter_space.sample_constrained(
+                    _rng(self._seed, slot, 1, attempt), self._sampling_ranges
+                ),
                 method=METHOD_SYNTHETIC,
                 partition=self._partition,
                 slot=slot,
@@ -315,6 +335,7 @@ class HybridSource(PresetSource):
         }
         if self._mode == self.BLEND:
             summary["synthetic_ratio"] = self._synthetic_ratio
+            summary["sampling_ranges"] = dict(self._sampling_ranges)
         else:
             summary["num_perturbed_params"] = self._num_perturbed_params
             summary["jitter"] = self._jitter
