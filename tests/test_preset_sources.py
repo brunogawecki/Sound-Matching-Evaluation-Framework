@@ -8,14 +8,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from synth.parameter_space import ParameterSpecification, ParameterSpace
 from dataset.dexed_preset_loader import LoadedPreset
-from dataset.sources import (
+from dataset.preset_sources import (
     METHOD_AUGMENT,
     METHOD_HUMAN,
     METHOD_SYNTHETIC,
-    HybridSource,
+    HybridPresetSource,
     PresetRecord,
     HumanPresetSource,
-    SyntheticSampler,
+    SyntheticPresetSource,
 )
 
 
@@ -43,11 +43,11 @@ def human_preset(name: str = "VOICE", source: str = "bank.syx", voice_index: int
     )
 
 
-# -- SyntheticSampler --------------------------------------------------------
+# -- SyntheticPresetSource --------------------------------------------------------
 
 def test_synthetic_sampler_yields_exactly_count_subset_presets():
     space = make_space()
-    presets = list(SyntheticSampler(space, count=7, seed=0).iter_presets())
+    presets = list(SyntheticPresetSource(space, count=7, seed=0).iter_presets())
     assert len(presets) == 7
     for preset in presets:
         assert set(preset.params) == set(space.names)
@@ -57,17 +57,17 @@ def test_synthetic_sampler_yields_exactly_count_subset_presets():
 
 def test_synthetic_sampler_is_deterministic_in_seed_and_order_independent():
     space = make_space()
-    first = list(SyntheticSampler(space, count=5, seed=42).iter_presets())
-    second = list(SyntheticSampler(space, count=5, seed=42).iter_presets())
+    first = list(SyntheticPresetSource(space, count=5, seed=42).iter_presets())
+    second = list(SyntheticPresetSource(space, count=5, seed=42).iter_presets())
     assert [p.params for p in first] == [p.params for p in second]
     # Slot 3 is the same preset regardless of how many presets precede it.
-    longer = list(SyntheticSampler(space, count=10, seed=42).iter_presets())
+    longer = list(SyntheticPresetSource(space, count=10, seed=42).iter_presets())
     assert longer[3].params == first[3].params
 
 
 def test_synthetic_resample_redraws_the_same_slot_differently():
     space = make_space()
-    sampler = SyntheticSampler(space, count=3, seed=1)
+    sampler = SyntheticPresetSource(space, count=3, seed=1)
     original = list(sampler.iter_presets())[0]
     redrawn = sampler.resample(original, attempt=1)
     assert redrawn.slot == original.slot
@@ -83,28 +83,28 @@ _RANGES = {"CONT A": (0.9, 1.0)}
 def test_synthetic_sampler_applies_sampling_ranges_leaving_other_params_free():
     space = make_space()
     presets = list(
-        SyntheticSampler(space, count=30, seed=0, sampling_ranges=_RANGES).iter_presets()
+        SyntheticPresetSource(space, count=30, seed=0, sampling_ranges=_RANGES).iter_presets()
     )
     assert all(p.params["CONT A"] >= 0.9 for p in presets)          # constrained
     assert any(p.params["CONT C"] < 0.7 for p in presets)           # untouched, still varies
     # Without the override, CONT A spans the full range (so the override is doing the work).
-    free = list(SyntheticSampler(space, count=30, seed=0).iter_presets())
+    free = list(SyntheticPresetSource(space, count=30, seed=0).iter_presets())
     assert any(p.params["CONT A"] < 0.9 for p in free)
 
 
 def test_synthetic_sampling_ranges_are_deterministic_and_applied_on_resample():
     space = make_space()
-    first = list(SyntheticSampler(space, count=4, seed=5, sampling_ranges=_RANGES).iter_presets())
-    second = list(SyntheticSampler(space, count=4, seed=5, sampling_ranges=_RANGES).iter_presets())
+    first = list(SyntheticPresetSource(space, count=4, seed=5, sampling_ranges=_RANGES).iter_presets())
+    second = list(SyntheticPresetSource(space, count=4, seed=5, sampling_ranges=_RANGES).iter_presets())
     assert [p.params for p in first] == [p.params for p in second]
-    sampler = SyntheticSampler(space, count=4, seed=5, sampling_ranges=_RANGES)
+    sampler = SyntheticPresetSource(space, count=4, seed=5, sampling_ranges=_RANGES)
     redrawn = sampler.resample(first[0], attempt=1)
     assert redrawn.params["CONT A"] >= 0.9
 
 
 def test_synthetic_sampler_describe_records_sampling_ranges():
     space = make_space()
-    description = SyntheticSampler(space, count=2, seed=0, sampling_ranges=_RANGES).describe()
+    description = SyntheticPresetSource(space, count=2, seed=0, sampling_ranges=_RANGES).describe()
     assert description["sampling_ranges"] == _RANGES
 
 
@@ -142,13 +142,13 @@ def test_preset_source_cannot_resample():
     assert source.resample(preset, attempt=1) is None
 
 
-# -- HybridSource: blend -----------------------------------------------------
+# -- HybridPresetSource: blend -----------------------------------------------------
 
 def test_hybrid_blend_respects_synthetic_ratio_approximately():
     space = make_space()
     humans = [human_preset(voice_index=i) for i in range(4)]
-    source = HybridSource(
-        HybridSource.BLEND, humans, space, count=400, seed=7, synthetic_ratio=0.75
+    source = HybridPresetSource(
+        HybridPresetSource.BLEND, humans, space, count=400, seed=7, synthetic_ratio=0.75
     )
     presets = list(source.iter_presets())
     synthetic_fraction = np.mean([p.method == METHOD_SYNTHETIC for p in presets])
@@ -158,7 +158,7 @@ def test_hybrid_blend_respects_synthetic_ratio_approximately():
 
 def test_hybrid_blend_human_picks_cannot_resample_but_synthetic_can():
     space = make_space()
-    source = HybridSource(HybridSource.BLEND, [human_preset()], space, count=20, seed=3, synthetic_ratio=0.5)
+    source = HybridPresetSource(HybridPresetSource.BLEND, [human_preset()], space, count=20, seed=3, synthetic_ratio=0.5)
     for preset in source.iter_presets():
         result = source.resample(preset, attempt=1)
         if preset.method == METHOD_HUMAN:
@@ -169,8 +169,8 @@ def test_hybrid_blend_human_picks_cannot_resample_but_synthetic_can():
 
 def test_hybrid_blend_applies_sampling_ranges_to_synthetic_draws():
     space = make_space()
-    source = HybridSource(
-        HybridSource.BLEND, [human_preset()], space, count=200, seed=11,
+    source = HybridPresetSource(
+        HybridPresetSource.BLEND, [human_preset()], space, count=200, seed=11,
         synthetic_ratio=1.0, sampling_ranges=_RANGES,
     )
     synthetic = [p for p in source.iter_presets() if p.method == METHOD_SYNTHETIC]
@@ -178,13 +178,13 @@ def test_hybrid_blend_applies_sampling_ranges_to_synthetic_draws():
     assert all(p.params["CONT A"] >= 0.9 for p in synthetic)
 
 
-# -- HybridSource: augment ---------------------------------------------------
+# -- HybridPresetSource: augment ---------------------------------------------------
 
 def test_hybrid_augment_perturbs_only_k_params_and_records_parent():
     space = make_space()
     parent = human_preset(source="cool.syx", voice_index=5)
-    source = HybridSource(
-        HybridSource.AUGMENT, [parent], space, count=10, seed=9,
+    source = HybridPresetSource(
+        HybridPresetSource.AUGMENT, [parent], space, count=10, seed=9,
         num_perturbed_params=1, jitter=0.05,
     )
     for preset in source.iter_presets():
@@ -205,8 +205,8 @@ def test_hybrid_augment_keeps_continuous_perturbations_in_bounds():
         params={"CONT A": 1.0, "CAT B": 0.0, "CONT C": 0.8, "CAT D": 0.0},
         method=METHOD_HUMAN, partition="train", source_file="b.syx", voice_index=0, voice_name="X",
     )
-    source = HybridSource(
-        HybridSource.AUGMENT, [parent], space, count=30, seed=2,
+    source = HybridPresetSource(
+        HybridPresetSource.AUGMENT, [parent], space, count=30, seed=2,
         num_perturbed_params=2, jitter=0.5,
     )
     for preset in source.iter_presets():
@@ -217,8 +217,8 @@ def test_hybrid_augment_keeps_continuous_perturbations_in_bounds():
 def test_hybrid_augment_can_flip_categoricals_when_enabled():
     space = make_space()
     parent = human_preset()
-    source = HybridSource(
-        HybridSource.AUGMENT, [parent], space, count=60, seed=11,
+    source = HybridPresetSource(
+        HybridPresetSource.AUGMENT, [parent], space, count=60, seed=11,
         num_perturbed_params=4, jitter=0.01, flip_categoricals=True,
     )
     flipped_a_categorical = False
@@ -234,6 +234,6 @@ def test_hybrid_augment_can_flip_categoricals_when_enabled():
 def test_hybrid_rejects_unknown_mode_and_empty_humans():
     space = make_space()
     with pytest.raises(ValueError):
-        HybridSource("interpolate", [human_preset()], space, count=1, seed=0)
+        HybridPresetSource("interpolate", [human_preset()], space, count=1, seed=0)
     with pytest.raises(ValueError):
-        HybridSource(HybridSource.BLEND, [], space, count=1, seed=0)
+        HybridPresetSource(HybridPresetSource.BLEND, [], space, count=1, seed=0)

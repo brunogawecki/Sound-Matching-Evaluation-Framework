@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from synth.parameter_space import ParameterSpecification, ParameterSpace
 from dataset.builder import DatasetBuilder, RenderSettings
-from dataset.sources import METHOD_SYNTHETIC, PresetRecord, PresetSource, SyntheticSampler
+from dataset.preset_sources import METHOD_SYNTHETIC, PresetRecord, PresetSource, SyntheticPresetSource
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ def build(tmp_path, source, run_name="run", **kwargs) -> dict:
 # -- corpus shape ------------------------------------------------------------
 
 def test_build_writes_one_wav_per_row_all_mono(tmp_path):
-    run_summary = build(tmp_path, SyntheticSampler(make_space(), count=6, seed=0))
+    run_summary = build(tmp_path, SyntheticPresetSource(make_space(), count=6, seed=0))
     run_dir = tmp_path / "run"
     frame = pd.read_csv(run_dir / "metadata.csv")
     wavs = sorted((run_dir / "audio").glob("*.wav"))
@@ -109,7 +109,7 @@ def test_build_writes_one_wav_per_row_all_mono(tmp_path):
 
 
 def test_metadata_has_subset_columns_and_provenance(tmp_path):
-    build(tmp_path, SyntheticSampler(make_space(), count=3, seed=1))
+    build(tmp_path, SyntheticPresetSource(make_space(), count=3, seed=1))
     frame = pd.read_csv(tmp_path / "run" / "metadata.csv")
     for column in ["sample_id", "audio_path", "AMP", "CAT", "method", "partition", "rms", "loudness_lufs", "near_silent"]:
         assert column in frame.columns
@@ -118,7 +118,7 @@ def test_metadata_has_subset_columns_and_provenance(tmp_path):
 
 
 def test_run_summary_records_settings_seed_subset_and_source(tmp_path):
-    run_summary = build(tmp_path, SyntheticSampler(make_space(), count=2, seed=5))
+    run_summary = build(tmp_path, SyntheticPresetSource(make_space(), count=2, seed=5))
     assert run_summary["sample_rate"] == 8000
     assert run_summary["renderer"] == "fake"
     assert run_summary["subset_names"] == ["AMP", "CAT"]
@@ -134,8 +134,8 @@ def test_run_summary_records_settings_seed_subset_and_source(tmp_path):
 # -- determinism -------------------------------------------------------------
 
 def test_same_seed_reproduces_identical_metadata_and_wavs(tmp_path):
-    build(tmp_path, SyntheticSampler(make_space(), count=5, seed=99), run_name="a")
-    build(tmp_path, SyntheticSampler(make_space(), count=5, seed=99), run_name="b")
+    build(tmp_path, SyntheticPresetSource(make_space(), count=5, seed=99), run_name="a")
+    build(tmp_path, SyntheticPresetSource(make_space(), count=5, seed=99), run_name="b")
     a_csv = (tmp_path / "a" / "metadata.csv").read_bytes()
     b_csv = (tmp_path / "b" / "metadata.csv").read_bytes()
     assert a_csv == b_csv
@@ -204,7 +204,7 @@ def test_builds_synthetic_corpus_end_to_end_with_dexed(tmp_path):
     from synth.dexed import DexedWrapper
 
     synth = DexedWrapper(PLUGIN_PATH, sample_rate=config.SAMPLE_RATE, buffer_size=config.BUFFER_SIZE)
-    source = SyntheticSampler(
+    source = SyntheticPresetSource(
         synth.parameter_space, count=8, seed=0, sampling_ranges=synth.audible_sampling_ranges
     )
     run_summary = DatasetBuilder(synth).build(source, run_name="synthetic", output_root=tmp_path)
@@ -225,7 +225,7 @@ def test_builds_synthetic_corpus_end_to_end_with_dexed(tmp_path):
 def test_builds_human_corpus_end_to_end_with_dexed(tmp_path):
     from synth.dexed import DexedWrapper
     from dataset.dexed_preset_loader import DexedPresetLoader
-    from dataset.sources import HumanPresetSource
+    from dataset.preset_sources import HumanPresetSource
 
     synth = DexedWrapper(PLUGIN_PATH, sample_rate=config.SAMPLE_RATE, buffer_size=config.BUFFER_SIZE)
     split = DexedPresetLoader(synth.parameter_space, test_fraction=0.5).load([CARTRIDGE_PATH])

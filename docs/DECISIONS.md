@@ -406,15 +406,15 @@ per sound alongside `rms` so the gate can be re-evaluated post hoc.
 Note: the ~13% / amplitude<1e-3 figures in the D-RENDERER study above are historical *measurements*
 from that experiment, not this gate.
 
-### D-AUDIBLE — Synthetic sampler is constrained to be audible (LOCKED 2026-06-22)
+### D-AUDIBLE — Synthetic preset source is constrained to be audible (LOCKED 2026-06-22)
 
-`SyntheticSampler` no longer draws **purely** uniformly: optional **per-parameter range overrides**
+`SyntheticPresetSource` no longer draws **purely** uniformly: optional **per-parameter range overrides**
 (`sampling_ranges`) narrow chosen continuous parameters to an audible sub-range **at sampling time**.
 The override map is owned by the synth (`BaseSynthesizer.audible_sampling_ranges`, default empty) and
 applied via `ParameterSpace.sample_constrained` — the constrained params are drawn directly from the
 sub-range, never sampled-then-overwritten. For Dexed the map is `synth.dexed.AUDIBLE_SAMPLING_RANGES`.
 Because the map is declarative it is recorded in `run_summary.json` (reproducibility) and applied
-consistently everywhere synthetic material is generated, including `HybridSource` blend draws.
+consistently everywhere synthetic material is generated, including `HybridPresetSource` blend draws.
 
 **Why**: uniform draws over the subset are ~30 dB quieter than human presets (uniform median −55.5
 LUFS vs human −24.0); a patch is audible only if a *carrier* operator is loud with an open envelope,

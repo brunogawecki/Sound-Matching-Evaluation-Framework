@@ -8,9 +8,9 @@ the only place that decides *which* presets exist.
 Three construction strategies live here, all producing the same `PresetRecord`
 stream so the builder never learns how a preset was made:
 
-* :class:`SyntheticSampler` -- uniform random draws over the parameter space.
+* :class:`SyntheticPresetSource` -- uniform random draws over the parameter space.
 * :class:`HumanPresetSource` -- human-made presets, projected onto the subset.
-* :class:`HybridSource` -- combines the two, either by *blending* a synthetic
+* :class:`HybridPresetSource` -- combines the two, either by *blending* a synthetic
   stream with human-train presets, or by *augmenting* (perturbing) human-train
   presets into new presets. A future distribution-sampling mode is left as a
   registration slot.
@@ -87,7 +87,7 @@ def _rng(seed: int, *tags: int) -> np.random.Generator:
     return np.random.default_rng(_seed_sequence(seed, *tags))
 
 
-class SyntheticSampler(PresetSource):
+class SyntheticPresetSource(PresetSource):
     """Random presets over the parameter space (the "synthetic" method).
 
     "Synthetic" means random over the *audible* region in two complementary
@@ -186,7 +186,7 @@ class HumanPresetSource(PresetSource):
             )
 
     def preset_records(self) -> List[PresetRecord]:
-        """Materialize the projected human presets (used to seed a HybridSource)."""
+        """Materialize the projected human presets (used to seed a HybridPresetSource)."""
         return list(self.iter_presets())
 
     def describe(self) -> Dict[str, object]:
@@ -197,7 +197,7 @@ class HumanPresetSource(PresetSource):
         }
 
 
-class HybridSource(PresetSource):
+class HybridPresetSource(PresetSource):
     """Combine human-train presets with synthetic material (the "hybrid" method).
 
     Two construction modes:
@@ -239,7 +239,7 @@ class HybridSource(PresetSource):
                 f"Unknown hybrid mode '{mode}'; expected '{self.BLEND}' or '{self.AUGMENT}'."
             )
         if not human_presets:
-            raise ValueError("HybridSource requires at least one human (train) preset.")
+            raise ValueError("HybridPresetSource requires at least one human (train) preset.")
         self._mode = mode
         self._human_presets = list(human_presets)
         self._parameter_space = parameter_space

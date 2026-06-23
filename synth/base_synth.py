@@ -34,7 +34,7 @@ class BaseSynthesizer(abc.ABC):
         Per-parameter sampling-range overrides that keep synthetic draws audible.
 
         Maps continuous parameter names to a ``(low, high)`` sub-range from which
-        a :class:`~dataset.sources.SyntheticSampler` should draw instead of the
+        a :class:`~dataset.preset_sources.SyntheticPresetSource` should draw instead of the
         full bounds (consumed by
         :meth:`~synth.parameter_space.ParameterSpace.sample_constrained`).
         Default is empty (no constraint); synths whose uniform draws are mostly

@@ -1,6 +1,6 @@
 """DatasetBuilder: render a PresetSource into an audio corpus (synth-agnostic, Layer 2).
 
-The builder is the bridge between a :class:`dataset.sources.PresetSource` (which
+The builder is the bridge between a :class:`dataset.preset_sources.PresetSource` (which
 decides *which* presets exist) and a synthesizer wrapper (which renders them).
 For each preset it builds the full parameter dict ``defaults <- subset`` (the
 subset overrides the synth's defaults; every non-subset parameter stays locked),
@@ -37,7 +37,7 @@ from scipy.io import wavfile
 
 import config
 from synth.base_synth import BaseSynthesizer
-from .sources import PresetRecord, PresetSource
+from .preset_sources import PresetRecord, PresetSource
 
 
 @dataclass(frozen=True)

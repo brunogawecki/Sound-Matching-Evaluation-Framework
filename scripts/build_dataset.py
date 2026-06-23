@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from synth.dexed import DexedWrapper
-from dataset.sources import SyntheticSampler
+from dataset.preset_sources import SyntheticPresetSource
 from dataset.builder import DatasetBuilder
 import config
 
@@ -48,7 +48,7 @@ def build_dataset(count: int, seed: int, run_name: str) -> None:
     )
     print(f"Initialized Dexed at {synth.sample_rate}Hz; subset = {len(synth.parameter_space.names)} params")
 
-    source = SyntheticSampler(
+    source = SyntheticPresetSource(
         synth.parameter_space, count=count, seed=seed, sampling_ranges=synth.audible_sampling_ranges
     )
     summary = DatasetBuilder(synth).build(source, run_name=run_name)

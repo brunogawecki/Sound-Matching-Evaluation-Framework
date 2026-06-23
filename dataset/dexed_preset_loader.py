@@ -3,7 +3,7 @@
 This is the synth-specific half of the human-preset pipeline. It hides the
 cartridge-vs-single-file difference behind a flat stream of one-preset-per-item,
 deduplicates near-twins, and splits voices into train / test partitions. The
-synth-agnostic :class:`dataset.sources.PresetSource` then projects each preset
+synth-agnostic :class:`dataset.preset_sources.PresetSource` then projects each preset
 onto the estimated subset.
 
 Three responsibilities (all synth-specific, all here):
