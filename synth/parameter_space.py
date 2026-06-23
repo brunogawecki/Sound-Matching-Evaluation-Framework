@@ -142,16 +142,53 @@ class ParameterSpace:
                 params[parameter_spec.name] = float(np.clip(block[0], parameter_spec.bounds[0], parameter_spec.bounds[1]))
         return params
 
-    def sample_uniform(self, rng: np.random.Generator) -> Dict[str, float]:
-        """
-        Sample a random synth-side dict: continuous params uniform over their
-        bounds, categorical params uniform over their grid options.
-        Deterministic for a given seeded generator.
-        """
+    def _draw(
+        self, rng: np.random.Generator, sampling_ranges: Dict[str, Tuple[float, float]]
+    ) -> Dict[str, float]:
+        """Draw one synth-side dict; continuous params use the overridden range if any."""
         params: Dict[str, float] = {}
         for parameter_spec in self._parameter_specs:
             if parameter_spec.kind == "categorical":
                 params[parameter_spec.name] = float(rng.choice(parameter_spec.options))
             else:
-                params[parameter_spec.name] = float(rng.uniform(parameter_spec.bounds[0], parameter_spec.bounds[1]))
+                min_val, max_val = sampling_ranges.get(parameter_spec.name, parameter_spec.bounds)
+                params[parameter_spec.name] = float(rng.uniform(min_val, max_val))
         return params
+
+    def sample_uniform(self, rng: np.random.Generator) -> Dict[str, float]:
+        """
+        Sample a random synth-side dict: continuous params uniform over their
+        full bounds, categorical params uniform over their grid options.
+        Deterministic for a given seeded generator.
+        """
+        return self._draw(rng, {})
+
+    def sample_constrained(
+        self, rng: np.random.Generator, sampling_ranges: Dict[str, Tuple[float, float]]
+    ) -> Dict[str, float]:
+        """
+        Like :meth:`sample_uniform`, but continuous parameters named in
+        ``sampling_ranges`` are drawn uniformly over the given ``(min, max)``
+        sub-range instead of their full bounds. Everything else is unchanged; an
+        empty map is identical to ``sample_uniform``.
+
+        Raises:
+            KeyError: an entry names a parameter not in this space.
+            ValueError: an entry names a categorical parameter, or its range
+                is not ``bounds[0] <= min < max <= bounds[1]``.
+        """
+        spec_by_name = {spec.name: spec for spec in self._parameter_specs}
+        for parameter_name, (min_val, max_val) in sampling_ranges.items():
+            if parameter_name not in spec_by_name:
+                raise KeyError(f"Sampling range names unknown parameter '{parameter_name}'.")
+            spec = spec_by_name[parameter_name]
+            if spec.kind != "continuous":
+                raise ValueError(
+                    f"Sampling range on categorical parameter '{parameter_name}' is not allowed."
+                )
+            if not (spec.bounds[0] <= min_val < max_val <= spec.bounds[1]):
+                raise ValueError(
+                    f"Sampling range ({min_val}, {max_val}) for '{parameter_name}' must satisfy "
+                    f"{spec.bounds[0]} <= min < max <= {spec.bounds[1]}."
+                )
+        return self._draw(rng, sampling_ranges)

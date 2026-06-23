@@ -1,5 +1,5 @@
 import abc
-from typing import Dict, Any, Optional, Union, TYPE_CHECKING
+from typing import Dict, Any, Optional, Tuple, Union, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
@@ -28,6 +28,17 @@ class BaseSynthesizer(abc.ABC):
             f"{type(self).__name__} does not define a parameter subset / ParameterSpace."
         )
 
+    @property
+    def audible_sampling_ranges(self) -> Dict[str, Tuple[float, float]]:
+        """
+        Per-parameter ``(low, high)`` sub-ranges that keep synthetic draws audible.
+
+        Consumed by ParameterSpace.sample_constrained. Default is empty (no
+        constraint); synths whose uniform draws are mostly silent override this
+        to pin a carrier loud (see docs/DECISIONS.md D-AUDIBLE).
+        """
+        return {}
+
     @abc.abstractmethod
     def set_parameters(self, params: Dict[str, Union[float, int]]) -> None:
         """
@@ -51,15 +62,34 @@ class BaseSynthesizer(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def render_audio(self, midi_note: int, velocity: int, duration_sec: float) -> np.ndarray:
+    def get_parameter_defaults(self) -> Dict[str, float]:
+        """
+        Get the default (init-patch) normalized value of every exposed parameter.
+
+        Returns:
+            A dictionary mapping parameter names to their default values. The
+            DatasetBuilder locks non-subset parameters to these defaults.
+        """
+        pass
+
+    @abc.abstractmethod
+    def render_audio(
+        self,
+        midi_note: int,
+        velocity: int,
+        duration_sec: float,
+        note_duration_sec: Optional[float] = None,
+    ) -> np.ndarray:
         """
         Render mono audio using the current parameter state.
-        
+
         Args:
             midi_note: The MIDI note number to play (e.g., 60 for Middle C).
             velocity: The MIDI velocity (0-127).
-            duration_sec: Duration of the rendered audio in seconds.
-            
+            duration_sec: Total duration of the rendered audio in seconds.
+            note_duration_sec: Time from note-on to note-off; defaults to
+                duration_sec (note held for the full render).
+
         Returns:
             A 1D numpy array containing the rendered mono audio waveform (shape: [samples,]).
         """

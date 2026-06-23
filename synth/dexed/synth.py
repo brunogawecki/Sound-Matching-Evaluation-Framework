@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Tuple, Union
 from ..base_synth import BaseSynthesizer
 from ..parameter_space import ParameterSpace
 from ..renderers import make_renderer
@@ -32,6 +32,16 @@ for i in range(1, 7):
     # reading back the raw float -- grid points are the only honest representation
     # (D-KIND in docs/DECISIONS.md).
     _CATEGORICAL_CARDINALITIES[f"OP{i} F COARSE"] = 32
+
+
+# Sampling-range overrides that keep synthetic draws audible. OP1 is a carrier in
+# all 32 DX7 algorithms, so pinning it loud with a fast attack makes any patch
+# audible; the rest stays random. Calibrated to the built-ins; see D-AUDIBLE.
+_AUDIBLE_SAMPLING_RANGES: Dict[str, Tuple[float, float]] = {
+    "OP1 OUTPUT LEVEL": (0.9, 1.0),
+    "OP1 EG LEVEL 1": (0.9, 1.0),   # attack peak
+    "OP1 EG RATE 1": (0.3, 1.0),    # attack not glacial
+}
 
 
 class DexedWrapper(BaseSynthesizer):
@@ -101,6 +111,11 @@ class DexedWrapper(BaseSynthesizer):
     def parameter_names(self) -> List[str]:
         """Names of the exposed synthesis parameters, in plugin index order."""
         return list(self._param_names)
+
+    @property
+    def audible_sampling_ranges(self) -> Dict[str, Tuple[float, float]]:
+        """Range overrides that keep synthetic Dexed draws audible (see D-AUDIBLE)."""
+        return _AUDIBLE_SAMPLING_RANGES
 
     @property
     def parameter_space(self) -> ParameterSpace:
