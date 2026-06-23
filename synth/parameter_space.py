@@ -167,14 +167,10 @@ class ParameterSpace:
         self, rng: np.random.Generator, sampling_ranges: Dict[str, Tuple[float, float]]
     ) -> Dict[str, float]:
         """
-        Like :meth:`sample_uniform`, but the continuous parameters named in
+        Like :meth:`sample_uniform`, but continuous parameters named in
         ``sampling_ranges`` are drawn uniformly over the given ``(min, max)``
-        sub-range instead of their full bounds. Categorical parameters and all
-        non-overridden continuous parameters are sampled exactly as in
-        :meth:`sample_uniform`. An empty map is identical to ``sample_uniform``.
-
-        The draw is still *uniform within* each (possibly narrowed) range;
-        "constrained" refers to the range, not the distribution.
+        sub-range instead of their full bounds. Everything else is unchanged; an
+        empty map is identical to ``sample_uniform``.
 
         Raises:
             KeyError: an entry names a parameter not in this space.

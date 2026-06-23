@@ -1,14 +1,8 @@
 """Build a small synthetic dataset through the real Dexed VST.
 
-A convenience runner around :class:`dataset.builder.DatasetBuilder` for smoke-
-testing the pipeline by hand: it renders a uniform-random synthetic corpus and
-writes ``run_summary.json`` + ``metadata.csv`` + ``audio/*.wav`` under a per-run
-subdirectory of ``config.DATASET_DIR``.
-
-This is the in-process :class:`SequentialExecutor` path (Issue #4): correct and
-deterministic within one OS process. Bit-identical reproducibility across runs
-requires a fresh OS process per run (the Dexed context leak; see D-REPRO and
-Issue #5).
+A hand runner around :class:`dataset.builder.DatasetBuilder` for smoke-testing
+the pipeline: renders a synthetic corpus and writes run_summary.json +
+metadata.csv + audio/*.wav under a per-run subdirectory of config.DATASET_DIR.
 
 Usage::
 

@@ -34,14 +34,9 @@ for i in range(1, 7):
     _CATEGORICAL_CARDINALITIES[f"OP{i} F COARSE"] = 32
 
 
-# Per-parameter sampling-range overrides that keep synthetic draws audible (the
-# `audible_sampling_ranges` contract). Uniform draws are ~30 dB quieter than human
-# presets; a patch is audible only if a carrier operator is loud with an open
-# envelope. OP1 is a carrier in all 32 DX7 algorithms (verified against the live
-# plugin), so constraining OP1 alone makes any patch audible. The ranges are
-# calibrated to the built-in presets (OP1 OUTPUT LEVEL / EG LEVEL 1 near max,
-# attack rate reasonably fast); sustain, the other operators and the algorithm
-# stay random. Rationale and alternatives: docs/DECISIONS.md D-AUDIBLE.
+# Sampling-range overrides that keep synthetic draws audible. OP1 is a carrier in
+# all 32 DX7 algorithms, so pinning it loud with a fast attack makes any patch
+# audible; the rest stays random. Calibrated to the built-ins; see D-AUDIBLE.
 _AUDIBLE_SAMPLING_RANGES: Dict[str, Tuple[float, float]] = {
     "OP1 OUTPUT LEVEL": (0.9, 1.0),
     "OP1 EG LEVEL 1": (0.9, 1.0),   # attack peak

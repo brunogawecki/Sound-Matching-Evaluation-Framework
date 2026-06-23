@@ -1,34 +1,18 @@
-"""DatasetBuilder: render a PresetSource into an audio corpus (synth-agnostic, Layer 2).
+"""Render a PresetSource into a WAV + metadata corpus (Layer 2, synth-agnostic).
 
-The builder is the bridge between a :class:`dataset.preset_sources.PresetSource` (which
-decides *which* presets exist) and a synthesizer wrapper (which renders them).
-For each preset it builds the full parameter dict ``defaults <- subset`` (the
-subset overrides the synth's defaults; every non-subset parameter stays locked),
-renders one sound under the fixed render contract, and writes a WAV plus a row
-of metadata.
-
-Rendering goes through a pluggable :class:`RenderExecutor` so the isolation
-strategy can change without touching the builder: Issue #4 ships the in-process
-:class:`SequentialExecutor`; Issue #5 swaps in ``spawn`` worker pools (training)
-and fresh-process-per-render (test) executors.
-
-Output (per run, under ``output_root/<run_name>/``)::
-
-    run_summary.json  # render settings, renderer, seeds, subset, defaults, source
-    metadata.csv      # one row per sound: id, path, <subset columns>, provenance, rms, loudness_lufs
-    audio/<id>.wav    # mono float32, one per row
-
-The corpus is a deterministic function of the source's seed: re-running with the
-same seed reproduces identical metadata and bit-identical WAVs.
+For each preset, merges the subset over the synth defaults, renders one sound
+under the fixed render contract, and writes a WAV plus a metadata row. Per run,
+writes run_summary.json, metadata.csv, and audio/<id>.wav under
+output_root/<run_name>/. The corpus is a deterministic function of the source's
+seed (identical metadata and bit-identical WAVs on re-run).
 """
 from __future__ import annotations
 
-import abc
 import json
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -58,36 +42,6 @@ class RenderSettings:
         )
 
 
-class RenderExecutor(abc.ABC):
-    """Strategy for turning a full parameter dict into rendered mono audio."""
-
-    @abc.abstractmethod
-    def render(self, full_params: Dict[str, float]) -> np.ndarray:
-        """Render one preset and return 1-D mono audio."""
-
-
-class SequentialExecutor(RenderExecutor):
-    """In-process, single-process executor: one persistent wrapper, rendered in order.
-
-    Correct and deterministic, so the builder is fully testable on its own. The
-    training corpus accepts Dexed's reproducible context leak as input noise;
-    the clean-room isolation for the test set is Issue #5's job.
-    """
-
-    def __init__(self, synth: BaseSynthesizer, render_settings: RenderSettings):
-        self._synth = synth
-        self._settings = render_settings
-
-    def render(self, full_params: Dict[str, float]) -> np.ndarray:
-        self._synth.set_parameters(full_params)
-        return self._synth.render_audio(
-            self._settings.midi_note,
-            self._settings.velocity,
-            self._settings.duration_sec,
-            self._settings.note_duration_sec,
-        )
-
-
 # Columns written to metadata.csv, in order, around the subset parameter columns.
 _LEADING_COLUMNS = ["sample_id", "audio_path"]
 _TRAILING_COLUMNS = [
@@ -107,31 +61,23 @@ class DatasetBuilder:
     """Render a PresetSource into a WAV + metadata corpus.
 
     Args:
-        synth: the wrapper supplying defaults, the subset, sample rate and
-            renderer name (also the render engine for :class:`SequentialExecutor`).
-        render_settings: the render contract; defaults to :meth:`RenderSettings.from_config`.
-        executor: rendering strategy; defaults to an in-process
-            :class:`SequentialExecutor` over ``synth``.
-        min_loudness_lufs: integrated-loudness floor (ITU-R BS.1770, via
-            :mod:`pyloudnorm`) below which a render counts as near-silent. The
-            default is the 5th percentile of the built-in Dexed presets' loudness
-            (so synthetic patches must be at least as loud as the quietest ~5% of
-            real presets); recalibrate for a different synth or render contract.
-        max_redraw_attempts: how many times to ask the source for a louder
-            replacement before giving up and storing the near-silent preset.
+        synth: wrapper supplying defaults, subset, sample rate and renderer.
+        render_settings: the render contract; defaults to RenderSettings.from_config().
+        min_loudness_lufs: integrated-loudness floor (LUFS) below which a render
+            counts as near-silent and triggers a redraw. Default is calibrated to
+            the built-in Dexed presets; recalibrate per synth (see D-AUDIBLE).
+        max_redraw_attempts: redraw attempts before storing a near-silent preset.
     """
 
     def __init__(
         self,
         synth: BaseSynthesizer,
         render_settings: Optional[RenderSettings] = None,
-        executor: Optional[RenderExecutor] = None,
         min_loudness_lufs: float = -34.0,
         max_redraw_attempts: int = 10,
     ):
         self._synth = synth
         self._settings = render_settings or RenderSettings.from_config()
-        self._executor = executor or SequentialExecutor(synth, self._settings)
         self._min_loudness_lufs = float(min_loudness_lufs)
         self._max_redraw_attempts = int(max_redraw_attempts)
         self._loudness_meter = pyloudnorm.Meter(int(synth.sample_rate))
@@ -157,10 +103,10 @@ class DatasetBuilder:
         rows: List[Dict[str, object]] = []
         for index, preset in enumerate(source.iter_presets()):
             sample_id = f"sample_{index:06d}"
-            kept_preset, audio = self._render_with_redraw(source, preset)
+            kept_preset, audio, loudness = self._render_with_redraw(source, preset)
             relative_path = f"audio/{sample_id}.wav"
             wavfile.write(str(run_dir / relative_path), self._synth.sample_rate, audio.astype(np.float32))
-            rows.append(self._build_metadata_row(sample_id, relative_path, kept_preset, audio))
+            rows.append(self._build_metadata_row(sample_id, relative_path, kept_preset, audio, loudness))
 
         df_metadata = pd.DataFrame(rows, columns=_LEADING_COLUMNS + self._subset_names + _TRAILING_COLUMNS)
         df_metadata.to_csv(run_dir / "metadata.csv", index=False)
@@ -177,38 +123,44 @@ class DatasetBuilder:
             raise KeyError(f"Preset carries non-subset parameters: {sorted(extra)}")
         return {**self._defaults, **preset.params}
 
-    def _render_with_redraw(self, source: PresetSource, preset: PresetRecord):
+    def _render(self, full_params: Dict[str, float]) -> np.ndarray:
+        """Set the parameters and render one preset under the render contract."""
+        self._synth.set_parameters(full_params)
+        return self._synth.render_audio(
+            self._settings.midi_note,
+            self._settings.velocity,
+            self._settings.duration_sec,
+            self._settings.note_duration_sec,
+        )
+
+    def _render_with_redraw(
+        self, source: PresetSource, preset: PresetRecord
+    ) -> Tuple[PresetRecord, np.ndarray, float]:
+        """Render ``preset``, redrawing near-silent results until audible or capped."""
         attempt = 0
         current = preset
         while True:
-            audio = self._executor.render(self._full_params(current))
-            if not self._is_near_silent(audio) or attempt >= self._max_redraw_attempts:
-                return current, audio
+            audio = self._render(self._full_params(current))
+            loudness = self._integrated_loudness(audio)
+            if loudness >= self._min_loudness_lufs or attempt >= self._max_redraw_attempts:
+                return current, audio, loudness
             replacement = source.resample(current, attempt + 1)
             if replacement is None:
-                return current, audio
+                return current, audio, loudness
             current, attempt = replacement, attempt + 1
 
     def _integrated_loudness(self, audio: np.ndarray) -> float:
-        """Integrated loudness in LUFS (ITU-R BS.1770); ``-inf`` for silence.
-
-        The meter gates out the silent release tail, so the value reflects the
-        note rather than the buffer length. ``pyloudnorm`` accepts a 1-D mono
-        signal directly.
-        """
+        """Integrated loudness in LUFS (-inf for silence); gates out the release tail."""
         if audio.size == 0 or not np.any(audio):
             return float("-inf")
         return float(self._loudness_meter.integrated_loudness(audio))
 
-    def _is_near_silent(self, audio: np.ndarray) -> bool:
-        return self._integrated_loudness(audio) < self._min_loudness_lufs
-
     # -- metadata ------------------------------------------------------------
     def _build_metadata_row(
-        self, sample_id: str, relative_path: str, preset: PresetRecord, audio: np.ndarray
+        self, sample_id: str, relative_path: str, preset: PresetRecord,
+        audio: np.ndarray, loudness_lufs: float,
     ) -> Dict[str, object]:
         rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
-        loudness_lufs = self._integrated_loudness(audio)
         row: Dict[str, object] = {
             "sample_id": sample_id,
             "audio_path": relative_path,

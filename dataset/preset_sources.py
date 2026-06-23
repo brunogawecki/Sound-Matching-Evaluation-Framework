@@ -1,25 +1,14 @@
-"""Preset sources: where the dataset's presets come from (synth-agnostic, Layer 2).
+"""Preset sources: where a dataset's presets come from (Layer 2, synth-agnostic).
 
-A :class:`PresetSource` yields :class:`PresetRecord` items -- each a synth-side
-subset dict (parameter names -> normalized floats over the chosen subset) plus
-provenance. The :class:`DatasetBuilder` renders these into audio; the source is
-the only place that decides *which* presets exist.
+A PresetSource yields PresetRecords (a synth-side subset dict plus provenance)
+for the builder to render; it is the only place that decides *which* presets
+exist. Three strategies produce the same record stream: SyntheticPresetSource
+(random draws), HumanPresetSource (real presets projected onto the subset), and
+HybridPresetSource (blend or augment the two).
 
-Three construction strategies live here, all producing the same `PresetRecord`
-stream so the builder never learns how a preset was made:
-
-* :class:`SyntheticPresetSource` -- uniform random draws over the parameter space.
-* :class:`HumanPresetSource` -- human-made presets, projected onto the subset.
-* :class:`HybridPresetSource` -- combines the two, either by *blending* a synthetic
-  stream with human-train presets, or by *augmenting* (perturbing) human-train
-  presets into new presets. A future distribution-sampling mode is left as a
-  registration slot.
-
-Determinism: every source derives its randomness from a master ``seed`` via
-per-slot ``SeedSequence`` streams, so a preset at output position ``slot`` is a
-pure function of ``(seed, slot, attempt)`` -- independent of iteration order,
-which keeps the corpus reproducible and safe to render out of order (Issue #5's
-parallel workers).
+Draws are deterministic in a master ``seed`` via per-slot ``SeedSequence``
+streams: a preset at ``slot`` is a pure function of ``(seed, slot, attempt)``,
+so output is order-independent and safe to render out of order.
 """
 from __future__ import annotations
 
@@ -79,32 +68,17 @@ class PresetSource(abc.ABC):
         """A JSON-serializable description of this source for the run summary."""
 
 
-def _seed_sequence(seed: int, *tags: int) -> np.random.SeedSequence:
-    return np.random.SeedSequence([int(seed), *(int(tag) for tag in tags)])
-
-
 def _rng(seed: int, *tags: int) -> np.random.Generator:
-    return np.random.default_rng(_seed_sequence(seed, *tags))
+    return np.random.default_rng(np.random.SeedSequence([int(seed), *(int(tag) for tag in tags)]))
 
 
 class SyntheticPresetSource(PresetSource):
     """Random presets over the parameter space (the "synthetic" method).
 
-    "Synthetic" means random over the *audible* region in two complementary
-    ways: optional ``sampling_ranges`` draw chosen continuous parameters from a
-    narrow sub-range *at sampling time* (e.g. pinning a Dexed carrier loud), and
-    the builder still redraws any residual near-silent preset via
-    :meth:`resample` until it is audible or the retry cap is hit. With no
-    ``sampling_ranges`` the draws are purely uniform.
-
-    Args:
-        sampling_ranges: optional ``{name: (low, high)}`` map of per-parameter
-            range overrides passed to
-            :meth:`~synth.parameter_space.ParameterSpace.sample_constrained`, so
-            those continuous params are drawn directly from the sub-range rather
-            than their full bounds (no post-hoc overwrite). The map is
-            synth-specific (e.g. a synth's ``audible_sampling_ranges``); an empty
-            or omitted map is identical to uniform sampling.
+    ``sampling_ranges`` optionally draws named continuous params from a narrow
+    sub-range at sampling time (e.g. pinning a carrier loud, via the synth's
+    ``audible_sampling_ranges``); empty/omitted is plain uniform sampling. The
+    builder still redraws any residual near-silent preset via :meth:`resample`.
     """
 
     def __init__(
@@ -150,12 +124,10 @@ class SyntheticPresetSource(PresetSource):
 class HumanPresetSource(PresetSource):
     """Human-made presets projected onto the estimated subset (the "human" method).
 
-    The presets are pre-loaded, deduplicated and split by a synth-specific
-    loader (e.g. :class:`dataset.dexed_preset_loader.DexedPresetLoader`); this
-    source only projects each preset's full parameter dict onto the subset and
-    tags the partition. Projection keeps exactly the subset keys -- the dropped
-    parameters fall back to the synth defaults at render time (a near-lossless
-    operation at the fixed render contract; see docs/DECISIONS.md D1).
+    Presets are pre-loaded, deduplicated and split by a synth-specific loader
+    (e.g. :class:`dataset.dexed_preset_loader.DexedPresetLoader`); this source
+    projects each onto the subset and tags the partition. Dropped parameters fall
+    back to the synth defaults at render time (near-lossless; see DECISIONS.md D1).
     """
 
     def __init__(
@@ -185,10 +157,6 @@ class HumanPresetSource(PresetSource):
                 voice_name=preset.voice_name,
             )
 
-    def preset_records(self) -> List[PresetRecord]:
-        """Materialize the projected human presets (used to seed a HybridPresetSource)."""
-        return list(self.iter_presets())
-
     def describe(self) -> Dict[str, object]:
         return {
             "method": METHOD_HUMAN,
@@ -202,18 +170,14 @@ class HybridPresetSource(PresetSource):
 
     Two construction modes:
 
-    * ``"blend"`` -- each output slot is, with probability ``synthetic_ratio``,
-      a fresh synthetic draw; otherwise a randomly chosen human-train preset.
-    * ``"augment"`` -- each output slot perturbs a randomly chosen human-train
-      preset: ``num_perturbed_params`` parameters are jittered (continuous) or
-      flipped (categorical, only if ``flip_categoricals``), yielding a new,
-      unseen preset tagged with its parent's provenance.
+    * ``"blend"`` -- each slot is, with probability ``synthetic_ratio``, a fresh
+      synthetic draw; otherwise a randomly chosen human-train preset.
+    * ``"augment"`` -- each slot perturbs a randomly chosen human-train preset:
+      ``num_perturbed_params`` parameters are jittered (continuous) or flipped
+      (categorical, only if ``flip_categoricals``), tagged with its parent.
 
-    A future ``"distribution"`` mode (fit then sample the human preset
-    distribution) is intentionally left unimplemented; see :meth:`_build_slot`.
-
-    Hybrid material derives only from the human **train** partition, so it never
-    leaks the held-out human test set into training.
+    Material derives only from the human **train** partition, so it never leaks
+    the held-out human test set into training.
     """
 
     BLEND = "blend"

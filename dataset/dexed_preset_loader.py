@@ -1,22 +1,10 @@
 """Dexed preset loader: turn ``.syx`` cartridges into a train/test preset split.
 
-This is the synth-specific half of the human-preset pipeline. It hides the
-cartridge-vs-single-file difference behind a flat stream of one-preset-per-item,
-deduplicates near-twins, and splits voices into train / test partitions. The
-synth-agnostic :class:`dataset.preset_sources.PresetSource` then projects each preset
-onto the estimated subset.
-
-Three responsibilities (all synth-specific, all here):
-
-* **Loading voices** -- a DX7 ``.syx`` is a 32-voice bulk dump; each of its
-  voices becomes one :class:`LoadedPreset` (via ``synth/dexed/cartridge.py``).
-* **Deduplication** -- a load-bearing pass: the train/test split is honest only
-  if no near-duplicate voice straddles it. Duplicates are compared on the
-  *subset projection* (one-hot ML vector), so two presets that differ only in
-  dropped parameters -- and would therefore render identically under the fixed
-  render contract -- collapse to one.
-* **Voice-level split** -- a seeded random 80/20 split over surviving voices
-  (not whole cartridges), so train and test are provably disjoint.
+The synth-specific half of the human-preset pipeline. It loads each DX7 voice
+(a ``.syx`` is a 32-voice bulk dump) as a :class:`LoadedPreset`, deduplicates
+near-twins on their subset projection (so presets that render identically
+collapse to one), and makes a seeded voice-level train/test split so the two
+partitions are provably disjoint.
 """
 from __future__ import annotations
 
@@ -50,14 +38,13 @@ class DexedPresetLoader:
     """Load, deduplicate and split DX7 ``.syx`` cartridges into human presets.
 
     Args:
-        parameter_space: the estimated subset; used to project presets for
+        parameter_space: the estimated subset; presets are projected onto it for
             deduplication (so dedup sees what actually gets rendered).
         test_fraction: share of surviving voices held out for the test set.
         split_seed: seed for the voice-level train/test shuffle.
-        dedup_threshold: two presets are duplicates if every component of their
-            projected ML vectors differs by at most this much (max-norm). The
-            default catches exact twins and float noise; raise it to cluster
-            perceptually-close presets (a tuning knob -- see docs/DECISIONS.md).
+        dedup_threshold: max-norm distance between projected ML vectors below
+            which two presets are duplicates. Default catches exact twins and
+            float noise; raise to cluster close presets (see docs/DECISIONS.md).
     """
 
     def __init__(
