@@ -42,7 +42,6 @@ The agreement metrics (log-spectral distance, spectral convergence, RMS differen
 preview of the future Layer-4 metric panel and are computed locally with scipy only.
 """
 import argparse
-import contextlib
 import multiprocessing as mp
 import os
 import sys
@@ -56,8 +55,13 @@ from scipy.signal import stft
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
-from synth.dexed import DexedWrapper
+from synth.dexed import DexedWrapper, suppressed_stderr
 from synth.dexed.cartridge import NUM_VOICES, validate_cartridge, voice_names, voice_parameters
+from dataset.render_backends import (
+    RenderSettings,
+    _make_wrapper,
+    render_patch_in_fresh_process,
+)
 
 # A patch can be near-silent (a random subset draw, or an intrinsically quiet preset);
 # agreement metrics on silence are meaningless, so such patches are excluded from the
@@ -70,22 +74,6 @@ _EPSILON = 1e-10
 DEFAULT_CARTRIDGES_DIR = os.path.expanduser(
     "~/Library/Application Support/DigitalSuburban/Dexed/Cartridges"
 )
-
-
-@contextlib.contextmanager
-def suppressed_stderr():
-    """Silence the benign JUCE 'invalid URI' notice the VST3 host writes to the
-    OS stderr file descriptor while Dexed loads. Only fd 2 is redirected, so real
-    Python exceptions and tracebacks are unaffected."""
-    saved_fd = os.dup(2)
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
-    try:
-        os.dup2(devnull_fd, 2)
-        yield
-    finally:
-        os.dup2(saved_fd, 2)
-        os.close(devnull_fd)
-        os.close(saved_fd)
 
 
 def build_patches(reference: DexedWrapper, num_patches: int, seed: int) -> List[Dict[str, float]]:
@@ -127,16 +115,6 @@ def build_cartridge_patches(cartridges_dir: str) -> Tuple[List[Dict[str, float]]
         f"under {cartridges_dir}" + (f" ({skipped} file(s) skipped)" if skipped else "")
     )
     return patches, labels
-
-
-def _make_wrapper(renderer: str) -> DexedWrapper:
-    """Construct a renderer-backed wrapper (caller is responsible for stderr suppression)."""
-    return DexedWrapper(
-        plugin_path=os.path.expanduser(config.DEXED_PATH),
-        sample_rate=config.SAMPLE_RATE,
-        buffer_size=config.BUFFER_SIZE,
-        renderer=renderer,
-    )
 
 
 def _render(wrapper: DexedWrapper) -> np.ndarray:
@@ -213,20 +191,6 @@ def time_reload_arm(
     return renders, reload_seconds, render_seconds, total_seconds
 
 
-def _render_patch_in_fresh_process(patch: Dict[str, float]) -> np.ndarray:
-    """Render one patch at position 0 of a brand-new DawDreamer wrapper.
-
-    Top-level (picklable) so it can run inside a spawned worker. Each call constructs its own
-    wrapper and renders a single patch, so when the worker process itself is fresh (spawn +
-    maxtasksperchild=1) the render happens on a clean OS heap -- the only context in which
-    Dexed's hidden per-voice state is reset (D-REPRO). Returns mono float32 audio.
-    """
-    with suppressed_stderr():
-        wrapper = _make_wrapper("dawdreamer")
-    wrapper.set_parameters(patch)
-    return np.asarray(_render(wrapper), dtype=np.float32)
-
-
 def time_subprocess_arm(
     patches: List[Dict[str, float]],
 ) -> Tuple[List[np.ndarray], List[float]]:
@@ -243,11 +207,13 @@ def time_subprocess_arm(
     Returns (renders, per_render_seconds).
     """
     context = mp.get_context("spawn")
+    settings = RenderSettings.from_config()
+    payloads = [(patch, settings, "dawdreamer") for patch in patches]
     renders: List[np.ndarray] = []
     per_render_seconds: List[float] = []
     last = time.perf_counter()
     with context.Pool(processes=1, maxtasksperchild=1) as pool:
-        for audio in pool.imap(_render_patch_in_fresh_process, patches):
+        for audio in pool.imap(render_patch_in_fresh_process, payloads):
             now = time.perf_counter()
             per_render_seconds.append(now - last)
             last = now

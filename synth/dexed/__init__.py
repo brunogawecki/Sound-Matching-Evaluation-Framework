@@ -1,3 +1,3 @@
-from .synth import DexedWrapper
+from .synth import DexedWrapper, suppressed_stderr
 
-__all__ = ["DexedWrapper"]
+__all__ = ["DexedWrapper", "suppressed_stderr"]

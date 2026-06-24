@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -21,25 +21,8 @@ from scipy.io import wavfile
 
 import config
 from synth.base_synth import BaseSynthesizer
+from .render_backends import InProcessRenderBackend, RenderSettings
 from .preset_sources import PresetRecord, PresetSource
-
-
-@dataclass(frozen=True)
-class RenderSettings:
-    """The fixed render contract (note, velocity, durations) for a corpus."""
-    midi_note: int
-    velocity: int
-    duration_sec: float
-    note_duration_sec: float
-
-    @classmethod
-    def from_config(cls) -> "RenderSettings":
-        return cls(
-            midi_note=config.MIDI_NOTE,
-            velocity=config.VELOCITY,
-            duration_sec=config.DURATION_SEC,
-            note_duration_sec=config.NOTE_DURATION_SEC,
-        )
 
 
 # Columns written to metadata.csv, in order, around the subset parameter columns.
@@ -67,6 +50,9 @@ class DatasetBuilder:
             counts as near-silent and triggers a redraw. Default is calibrated to
             the built-in Dexed presets; recalibrate per synth (see D-AUDIBLE).
         max_redraw_attempts: redraw attempts before storing a near-silent preset.
+        render_backend: where renders run. Defaults to an in-process backend reusing
+            ``synth`` (fast; the training path). Pass a FreshProcessRenderBackend to
+            render each preset in a clean spawned process for test/eval corpora (D-REPRO).
     """
 
     def __init__(
@@ -75,9 +61,11 @@ class DatasetBuilder:
         render_settings: Optional[RenderSettings] = None,
         min_loudness_lufs: float = -34.0,
         max_redraw_attempts: int = 10,
+        render_backend=None,
     ):
         self._synth = synth
         self._settings = render_settings or RenderSettings.from_config()
+        self._backend = render_backend or InProcessRenderBackend(synth, self._settings)
         self._min_loudness_lufs = float(min_loudness_lufs)
         self._max_redraw_attempts = int(max_redraw_attempts)
         self._loudness_meter = pyloudnorm.Meter(int(synth.sample_rate))
@@ -101,12 +89,15 @@ class DatasetBuilder:
         audio_dir.mkdir(parents=True, exist_ok=True)
 
         rows: List[Dict[str, object]] = []
-        for index, preset in enumerate(source.iter_presets()):
-            sample_id = f"sample_{index:06d}"
-            kept_preset, audio, loudness = self._render_with_redraw(source, preset)
-            relative_path = f"audio/{sample_id}.wav"
-            wavfile.write(str(run_dir / relative_path), self._synth.sample_rate, audio.astype(np.float32))
-            rows.append(self._build_metadata_row(sample_id, relative_path, kept_preset, audio, loudness))
+        try:
+            for index, preset in enumerate(source.iter_presets()):
+                sample_id = f"sample_{index:06d}"
+                kept_preset, audio, loudness = self._render_with_redraw(source, preset)
+                relative_path = f"audio/{sample_id}.wav"
+                wavfile.write(str(run_dir / relative_path), self._synth.sample_rate, audio.astype(np.float32))
+                rows.append(self._build_metadata_row(sample_id, relative_path, kept_preset, audio, loudness))
+        finally:
+            self._backend.close()
 
         df_metadata = pd.DataFrame(rows, columns=_LEADING_COLUMNS + self._subset_names + _TRAILING_COLUMNS)
         df_metadata.to_csv(run_dir / "metadata.csv", index=False)
@@ -123,16 +114,6 @@ class DatasetBuilder:
             raise KeyError(f"Preset carries non-subset parameters: {sorted(extra)}")
         return {**self._defaults, **preset.params}
 
-    def _render(self, full_params: Dict[str, float]) -> np.ndarray:
-        """Set the parameters and render one preset under the render contract."""
-        self._synth.set_parameters(full_params)
-        return self._synth.render_audio(
-            self._settings.midi_note,
-            self._settings.velocity,
-            self._settings.duration_sec,
-            self._settings.note_duration_sec,
-        )
-
     def _render_with_redraw(
         self, source: PresetSource, preset: PresetRecord
     ) -> Tuple[PresetRecord, np.ndarray, float]:
@@ -140,7 +121,7 @@ class DatasetBuilder:
         attempt = 0
         current = preset
         while True:
-            audio = self._render(self._full_params(current))
+            audio = self._backend.render(self._full_params(current))
             loudness = self._integrated_loudness(audio)
             if loudness >= self._min_loudness_lufs or attempt >= self._max_redraw_attempts:
                 return current, audio, loudness
@@ -190,6 +171,7 @@ class DatasetBuilder:
             "near_silent_count": near_silent_count,
             "method_counts": method_counts,
             "render_settings": asdict(self._settings),
+            "render_process": getattr(self._backend, "process_mode", "in-process"),
             "sample_rate": self._synth.sample_rate,
             "renderer": getattr(self._synth, "renderer_name", None),
             "subset_names": list(self._subset_names),
