@@ -94,6 +94,11 @@ These are **not yet decided**. The user should resolve them before any further s
 
 ### D4. Human preset source for the test set
 
+> **Status (2026-06-24): importer built, source still deferred.** The DX7 SysEx cartridge
+> importer exists (`synth.dexed.cartridge` + `dataset.dexed_preset_loader`), so any `.syx` can
+> be rendered today — but *which* presets become the test set is deferred until the full ML
+> pipeline is finished. See D4 in `DECISIONS.md`; the planning notes below are historical.
+
 **Question**: Where do the human-curated test presets come from, and how are they imported into DawDreamer's normalised-float parameter format?
 
 **Why it matters**: The hybrid dataset strategy depends on this. Synthetic-only evaluation does not test generalisation to musically realistic sounds.

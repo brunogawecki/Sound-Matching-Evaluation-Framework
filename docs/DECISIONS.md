@@ -446,12 +446,27 @@ categorical option-restriction if a future synth needs it).
 
 ## OPEN
 
-### D4 — Human preset source for the test set (deferred by user, 2026-06-11)
+### D4 — Human preset source for the test set (deferred by user; importer built 2026-06-24)
 
-Where the human-curated Dexed test presets come from and when the importer is built.
-**Blocks**: evaluation on musically realistic presets (the distribution-shift story).
-**Recommendation on file**: DX7 SysEx cartridge collections (~30k patches, documented
-128-byte packed format); build the SysEx→param-dict importer after Layers 2–4 exist.
+**What** specific presets form the held-out human test set is **deferred until the full ML pipeline
+is finished** — an evaluation-design choice the user will make once the pipeline can be run
+end-to-end, not a tooling gap.
+
+**Importer is built (no longer a blocker).** The DX7 SysEx cartridge path is implemented, so any
+`.syx` source can be turned into a corpus today: `synth.dexed.cartridge` validates and unpacks the
+documented 32-voice bulk-dump format (4104 bytes: 6-byte header, 32 × 128-byte packed voices,
+checksum, `0xF7`), mapping each voice onto Dexed's plugin-reported parameter names normalized to
+[0, 1] exactly as Dexed normalizes them (raw / field-max; categoricals as index / (cardinality − 1)).
+`dataset.dexed_preset_loader.DexedPresetLoader` projects each voice onto the estimated subset,
+deduplicates near-twins on that projection, and makes a seeded, provably disjoint voice-level
+train/test split. Surfaced via the `human` / `hybrid` subcommands of `scripts/build_dataset.py`;
+test/eval corpora render with `--fresh-process` so generation and evaluation share an identical clean
+render context (D-REPRO). (Offline-rendering constraint: DawDreamer ignores SysEx and MIDI Program
+Change offline, so a voice is applied as parameters, not loaded as a patch — the importer does this.)
+
+**Still open**: which cartridge collection(s) — or other source — actually become the benchmark test
+set, and the final train/test composition. The built importer currently covers DX7 `.syx`; a
+non-SysEx source (e.g. Surge `.fxp`) would need its own importer.
 
 ### D-METRIC-SR — Sample rate vs. deep-embedding metrics (decide at Phase 3)
 
