@@ -19,21 +19,24 @@ corpus.
     --seed      master seed for the random sampler           [default: 0]
     --run-name  output subdirectory name                     [default: synthetic_smoke]
 
-``human`` -- real DX7 presets read from ``.syx`` cartridges::
+``human`` -- real DX7 presets read from ``.syx`` cartridges. Renders **both** the
+train and test partitions of one split in a single run, so they are disjoint by
+construction (no seed to re-match across separate runs)::
 
-    python scripts/build_dataset.py human --cartridges presets/ --partition test
+    python scripts/build_dataset.py human --cartridges presets/
 
     --cartridges       where the .syx files are: a folder (recurses for *.syx),
                        a glob like "presets/*.syx", or explicit file paths;
                        accepts several at once               [REQUIRED]
-    --partition        which half of the split to render, "train" or "test"
-                                                             [default: train]
+    --partition        render only this half, "train" or "test"
+                                                             [default: both]
     --test-fraction    share of presets held out as the test set
                                                              [default: 0.20]
     --split-seed       seed for the train/test shuffle       [default: 0]
     --dedup-threshold  distance below which two presets count as duplicates
                        and collapse to one                   [default: 0.001]
-    --run-name         output subdirectory name              [default: human_<partition>]
+    --run-name         output subdirectory name; rendering both partitions gives
+                       each a _train/_test suffix            [default: human_<partition>]
 
 ``hybrid`` -- human train presets combined with synthetic material::
 
@@ -57,16 +60,19 @@ corpus.
     --dedup-threshold  duplicate-collapse distance           [default: 0.001]
     --run-name         output subdirectory name              [default: hybrid_<mode>]
 
-All three subcommands also accept ``--fresh-process``: render each preset in its
-own clean spawned process (slow, leak-free). Use it for **test / evaluation**
-corpora, where the generation and evaluation render contexts must agree (D-REPRO);
-leave it off for training data, which renders fast in-process.
+Render backend (D-REPRO): test/eval corpora must render in clean spawned processes
+(slow, leak-free) so the generation and evaluation render contexts agree; training
+data renders fast in-process. ``human`` applies this automatically -- its test
+partition always renders fresh, its train partition in-process. All three
+subcommands also accept ``--fresh-process`` to force fresh rendering for every
+partition they build (on ``synthetic`` / ``hybrid`` it is the only way to opt in).
 """
 import argparse
 import glob
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 # This script lives in scripts/; put the project root on the path so the
 # top-level packages (config, synth, dataset) import when run from anywhere.
@@ -158,22 +164,37 @@ def build_synthetic(args: argparse.Namespace) -> None:
     _build(synth, source, args.run_name, fresh_process=args.fresh_process)
 
 
+def _human_run_name(custom: Optional[str], partition: str, render_both: bool) -> str:
+    """Output folder for one human partition. Default ``human_<partition>``; a custom
+    name is suffixed per partition only when both are rendered, so they never collide."""
+    if custom is None:
+        return f"human_{partition}"
+    return f"{custom}_{partition}" if render_both else custom
+
+
 def build_human(args: argparse.Namespace) -> None:
     synth = _make_synth()
     cartridges = _resolve_cartridges(args.cartridges)
+    # One split feeds both partitions, so train and test are disjoint by construction
+    # (no seed to re-match across separate runs).
     split = DexedPresetLoader(
         synth.parameter_space,
         test_fraction=args.test_fraction,
         split_seed=args.split_seed,
         dedup_threshold=args.dedup_threshold,
     ).load(cartridges)
-    presets = split.test if args.partition == "test" else split.train
-    print(
-        f"--- Building '{args.run_name}': {len(presets)} human presets "
-        f"({args.partition}; {len(split.train)} train / {len(split.test)} test after dedup) ---"
-    )
-    source = HumanPresetSource(presets, synth.parameter_space, partition=args.partition)
-    _build(synth, source, args.run_name, fresh_process=args.fresh_process)
+    partitions = [args.partition] if args.partition else ["train", "test"]
+    render_both = len(partitions) == 2
+    print(f"--- Human split: {len(split.train)} train / {len(split.test)} test after dedup ---")
+    for partition in partitions:
+        presets = split.test if partition == "test" else split.train
+        # The test set renders in fresh processes (D-REPRO, generation/eval contexts must
+        # agree); train renders fast in-process. --fresh-process forces fresh on either.
+        fresh_process = args.fresh_process or partition == "test"
+        run_name = _human_run_name(args.run_name, partition, render_both)
+        print(f"--- Building '{run_name}': {len(presets)} {partition} presets ---")
+        source = HumanPresetSource(presets, synth.parameter_space, partition=partition)
+        _build(synth, source, run_name, fresh_process=fresh_process)
 
 
 def build_hybrid(args: argparse.Namespace) -> None:
@@ -210,8 +231,9 @@ def _add_fresh_process_flag(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--fresh-process",
         action="store_true",
-        help="render each preset in its own clean spawned process (slow, leak-free); "
-        "use for test/eval corpora, leave off for training data (D-REPRO)",
+        help="force every rendered partition into its own clean spawned process "
+        "(slow, leak-free; D-REPRO). human renders its test partition this way "
+        "regardless; pass this to force it for train too",
     )
 
 
@@ -228,7 +250,8 @@ def main() -> None:
 
     human = subparsers.add_parser("human", help="real .syx presets projected onto the subset")
     human.add_argument("--cartridges", nargs="+", required=True, help=".syx paths or globs")
-    human.add_argument("--partition", choices=["train", "test"], default="train")
+    human.add_argument("--partition", choices=["train", "test"], default=None,
+                       help="render only this partition; default renders both")
     human.add_argument("--test-fraction", type=float, default=0.20, help="share held out for test")
     human.add_argument("--split-seed", type=int, default=0, help="seed for the train/test split")
     human.add_argument("--dedup-threshold", type=float, default=1e-3, help="duplicate distance")
@@ -253,8 +276,7 @@ def main() -> None:
     hybrid.set_defaults(func=build_hybrid)
 
     args = parser.parse_args()
-    if args.command == "human" and args.run_name is None:
-        args.run_name = f"human_{args.partition}"
+    # human resolves its own per-partition run names (it may render both at once).
     if args.command == "hybrid" and args.run_name is None:
         args.run_name = f"hybrid_{args.mode}"
     args.func(args)
