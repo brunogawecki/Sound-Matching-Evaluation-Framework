@@ -1,8 +1,27 @@
+import contextlib
+import os
+
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple, Union
 from ..base_synth import BaseSynthesizer
 from ..parameter_space import ParameterSpace
 from ..renderers import make_renderer
+
+
+@contextlib.contextmanager
+def suppressed_stderr():
+    """Silence the benign JUCE 'invalid URI' notice the VST3 host writes to the OS stderr
+    file descriptor while Dexed loads. Only fd 2 is redirected, so real Python exceptions
+    and tracebacks are unaffected."""
+    saved_fd = os.dup(2)
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull_fd, 2)
+        yield
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(devnull_fd)
+        os.close(saved_fd)
 
 # VST-level parameters that are not DX7 synthesis parameters. They are locked at
 # plugin defaults and never exposed: randomizing 'Bypass' mutes the output and

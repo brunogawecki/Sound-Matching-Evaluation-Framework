@@ -56,6 +56,11 @@ corpus.
     --split-seed       seed for the train/test shuffle       [default: 0]
     --dedup-threshold  duplicate-collapse distance           [default: 0.001]
     --run-name         output subdirectory name              [default: hybrid_<mode>]
+
+All three subcommands also accept ``--fresh-process``: render each preset in its
+own clean spawned process (slow, leak-free). Use it for **test / evaluation**
+corpora, where the generation and evaluation render contexts must agree (D-REPRO);
+leave it off for training data, which renders fast in-process.
 """
 import argparse
 import glob
@@ -69,6 +74,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from synth.dexed import DexedWrapper
 from dataset.builder import DatasetBuilder
+from dataset.render_backends import FreshProcessRenderBackend, RenderSettings
 from dataset.preset_sources import (
     HumanPresetSource,
     HybridPresetSource,
@@ -125,8 +131,18 @@ def _report(summary: dict, run_dir: Path) -> None:
     print(f"  {run_dir / 'audio'}/*.wav")
 
 
-def _build(synth: DexedWrapper, source, run_name: str) -> None:
-    summary = DatasetBuilder(synth).build(source, run_name=run_name)
+def _build(synth: DexedWrapper, source, run_name: str, fresh_process: bool = False) -> None:
+    # Fresh-process rendering (one clean spawned worker per preset) is for test/eval
+    # corpora, where the generation and evaluation render contexts must agree (D-REPRO);
+    # training data stays on the fast in-process path. The builder closes the backend.
+    backend = (
+        FreshProcessRenderBackend(RenderSettings.from_config(), renderer="dawdreamer")
+        if fresh_process
+        else None
+    )
+    if fresh_process:
+        print("--- Rendering in fresh spawned processes (one per preset; D-REPRO) ---")
+    summary = DatasetBuilder(synth, render_backend=backend).build(source, run_name=run_name)
     _report(summary, Path(config.DATASET_DIR) / run_name)
 
 
@@ -139,7 +155,7 @@ def build_synthetic(args: argparse.Namespace) -> None:
         seed=args.seed,
         sampling_ranges=synth.audible_sampling_ranges,
     )
-    _build(synth, source, args.run_name)
+    _build(synth, source, args.run_name, fresh_process=args.fresh_process)
 
 
 def build_human(args: argparse.Namespace) -> None:
@@ -157,7 +173,7 @@ def build_human(args: argparse.Namespace) -> None:
         f"({args.partition}; {len(split.train)} train / {len(split.test)} test after dedup) ---"
     )
     source = HumanPresetSource(presets, synth.parameter_space, partition=args.partition)
-    _build(synth, source, args.run_name)
+    _build(synth, source, args.run_name, fresh_process=args.fresh_process)
 
 
 def build_hybrid(args: argparse.Namespace) -> None:
@@ -187,7 +203,16 @@ def build_hybrid(args: argparse.Namespace) -> None:
         flip_categoricals=args.flip_categoricals,
         sampling_ranges=synth.audible_sampling_ranges,
     )
-    _build(synth, source, args.run_name)
+    _build(synth, source, args.run_name, fresh_process=args.fresh_process)
+
+
+def _add_fresh_process_flag(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument(
+        "--fresh-process",
+        action="store_true",
+        help="render each preset in its own clean spawned process (slow, leak-free); "
+        "use for test/eval corpora, leave off for training data (D-REPRO)",
+    )
 
 
 def main() -> None:
@@ -198,6 +223,7 @@ def main() -> None:
     synthetic.add_argument("--count", type=int, default=16, help="number of presets to render")
     synthetic.add_argument("--seed", type=int, default=0, help="master seed for the sampler")
     synthetic.add_argument("--run-name", default="synthetic_smoke", help="output subdirectory name")
+    _add_fresh_process_flag(synthetic)
     synthetic.set_defaults(func=build_synthetic)
 
     human = subparsers.add_parser("human", help="real .syx presets projected onto the subset")
@@ -207,6 +233,7 @@ def main() -> None:
     human.add_argument("--split-seed", type=int, default=0, help="seed for the train/test split")
     human.add_argument("--dedup-threshold", type=float, default=1e-3, help="duplicate distance")
     human.add_argument("--run-name", default=None, help="output subdirectory name")
+    _add_fresh_process_flag(human)
     human.set_defaults(func=build_human)
 
     hybrid = subparsers.add_parser("hybrid", help="human-train presets blended/augmented with synthetic")
@@ -222,6 +249,7 @@ def main() -> None:
     hybrid.add_argument("--split-seed", type=int, default=0, help="seed for the train/test split")
     hybrid.add_argument("--dedup-threshold", type=float, default=1e-3, help="duplicate distance")
     hybrid.add_argument("--run-name", default=None, help="output subdirectory name")
+    _add_fresh_process_flag(hybrid)
     hybrid.set_defaults(func=build_hybrid)
 
     args = parser.parse_args()

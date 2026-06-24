@@ -48,8 +48,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import config
-import benchmark_renderers as bench  # reuse suppressed_stderr, build_patches, agreement_metrics
-from synth.dexed import DexedWrapper
+import benchmark_renderers as bench  # reuse build_patches, agreement_metrics
+from synth.dexed import DexedWrapper, suppressed_stderr
 
 # Two fixed primer patches define the two contexts each probe patch is rendered in. Mirrors the
 # surrounding patches in the D-REPRO xfail test; fixed seeds keep the whole run reproducible.
@@ -159,7 +159,7 @@ def run_cartridge_arms(cartridges_dir: str, out_csv: str) -> None:
     per_arm_leak = {}
     for column, arm_label, transform in _ARMS:
         print(f"Measuring arm: {arm_label} ...")
-        with bench.suppressed_stderr():
+        with suppressed_stderr():
             wrapper = DexedWrapper(plugin_path, sample_rate=config.SAMPLE_RATE,
                                    buffer_size=config.BUFFER_SIZE)
         _assert_lfo_wave_semantics(wrapper)
@@ -242,7 +242,7 @@ def main() -> None:
     cross_engine_lsd = agreement["log_spectral_distance_db"]
 
     plugin_path = os.path.expanduser(config.DEXED_PATH)
-    with bench.suppressed_stderr():
+    with suppressed_stderr():
         wrapper = DexedWrapper(plugin_path, sample_rate=config.SAMPLE_RATE,
                                buffer_size=config.BUFFER_SIZE, renderer=args.renderer)
 

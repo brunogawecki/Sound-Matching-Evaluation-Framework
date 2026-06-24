@@ -7,7 +7,6 @@ Examples:
 """
 
 import argparse
-import contextlib
 import os
 import sys
 from pathlib import Path
@@ -21,24 +20,8 @@ from scipy.io import wavfile
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
-from synth.dexed import DexedWrapper
+from synth.dexed import DexedWrapper, suppressed_stderr
 from synth.dexed.cartridge import voice_names
-
-
-@contextlib.contextmanager
-def suppressed_stderr():
-    """Silence the benign JUCE 'invalid URI' notice the VST3 host writes to the
-    OS stderr file descriptor while Dexed loads. Only fd 2 is redirected, so real
-    Python exceptions and tracebacks are unaffected."""
-    saved_fd = os.dup(2)
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
-    try:
-        os.dup2(devnull_fd, 2)
-        yield
-    finally:
-        os.dup2(saved_fd, 2)
-        os.close(devnull_fd)
-        os.close(saved_fd)
 
 # Default cartridge: the standard Dexed factory install location. Override with --syx.
 DEFAULT_SYX = os.path.expanduser(
