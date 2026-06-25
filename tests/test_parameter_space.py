@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -175,6 +176,29 @@ def test_spec_validation():
             ParameterSpecification(name="X", kind="continuous"),
             ParameterSpecification(name="X", kind="continuous"),
         ])
+
+
+def test_to_dict_from_dict_roundtrips_the_space_exactly():
+    space = make_space()
+    restored = ParameterSpace.from_dict(space.to_dict())
+    assert restored.names == space.names
+    assert restored.synth_dimension == space.synth_dimension
+    assert restored.ml_dimension == space.ml_dimension
+    assert restored.loss_slices == space.loss_slices
+    assert restored.parameter_specs == space.parameter_specs  # frozen dataclass equality
+
+
+def test_to_dict_is_json_safe():
+    payload = json.dumps(make_space().to_dict())
+    restored = ParameterSpace.from_dict(json.loads(payload))
+    assert restored.parameter_specs == make_space().parameter_specs
+
+
+def test_spec_to_dict_from_dict_roundtrips_continuous_and_categorical():
+    continuous = ParameterSpecification(name="C", kind="continuous", bounds=(0.2, 0.8), default=0.5, label="lbl")
+    categorical = ParameterSpecification(name="K", kind="categorical", options=[0.0, 0.5, 1.0], default=0.5)
+    assert ParameterSpecification.from_dict(continuous.to_dict()) == continuous
+    assert ParameterSpecification.from_dict(categorical.to_dict()) == categorical
 
 
 # ---------------------------------------------------------------------------

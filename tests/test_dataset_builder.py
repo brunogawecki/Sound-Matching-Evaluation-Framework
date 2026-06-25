@@ -131,6 +131,14 @@ def test_run_summary_records_settings_seed_subset_and_source(tmp_path):
         assert json.load(handle)["num_samples"] == 2
 
 
+def test_run_summary_carries_a_reconstructable_parameter_space(tmp_path):
+    build(tmp_path, SyntheticPresetSource(make_space(), count=2, seed=5))
+    with open(tmp_path / "run" / "run_summary.json") as handle:
+        summary = json.load(handle)
+    restored = ParameterSpace.from_dict(summary["parameter_space"])
+    assert restored.parameter_specs == make_space().parameter_specs
+
+
 # -- determinism -------------------------------------------------------------
 
 def test_same_seed_reproduces_identical_metadata_and_wavs(tmp_path):
