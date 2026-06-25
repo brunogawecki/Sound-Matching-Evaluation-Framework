@@ -112,7 +112,7 @@ class RenderedCorpusDataset(Dataset):
         """Lazily read one sample's WAV as a ``float32`` mono tensor ``[num_samples]``."""
         relative_path = self.metadata.iloc[index]["audio_path"]
         _, audio = wavfile.read(self.corpus_dir / relative_path)
-        return torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
+        return torch.from_numpy(audio.astype(np.float32))
 
     # -- target-only access (for the mean-parameter baseline, #7) ------------
     @property
