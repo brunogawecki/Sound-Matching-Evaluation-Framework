@@ -175,6 +175,7 @@ class DatasetBuilder:
             "sample_rate": self._synth.sample_rate,
             "renderer": getattr(self._synth, "renderer_name", None),
             "subset_names": list(self._subset_names),
+            "parameter_space": self._parameter_space.to_dict(),
             "default_params": {name: float(value) for name, value in self._defaults.items()},
             "min_loudness_lufs": self._min_loudness_lufs,
             "max_redraw_attempts": self._max_redraw_attempts,

@@ -38,6 +38,30 @@ class ParameterSpecification:
             return len(self.options)
         return 1
 
+    def to_dict(self) -> Dict[str, object]:
+        """A JSON-safe dict round-tripping through :meth:`from_dict`."""
+        return {
+            "name": self.name,
+            "kind": self.kind,
+            "bounds": [self.bounds[0], self.bounds[1]],
+            "options": list(self.options) if self.options is not None else None,
+            "default": self.default,
+            "label": self.label,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "ParameterSpecification":
+        """Inverse of :meth:`to_dict`."""
+        options = data.get("options")
+        return cls(
+            name=data["name"],
+            kind=data["kind"],
+            bounds=(float(data["bounds"][0]), float(data["bounds"][1])),
+            options=[float(option) for option in options] if options is not None else None,
+            default=float(data["default"]),
+            label=data.get("label", ""),
+        )
+
 
 class ParameterSpace:
     """
@@ -62,6 +86,23 @@ class ParameterSpace:
             self._slices.append(slice(offset, offset + parameter_spec.ml_dimension))
             offset += parameter_spec.ml_dimension
         self._ml_dimension = offset
+
+    def to_dict(self) -> Dict[str, object]:
+        """Serialize the ordered spec list (JSON-safe). See :meth:`from_dict`.
+
+        Lets a built corpus carry its own parameter map so the ML-side vector can
+        be reconstructed offline, with no live synthesizer/VST (the training and
+        evaluation path runs where the plugin is unavailable).
+        """
+        return {"parameter_specs": [parameter_spec.to_dict() for parameter_spec in self._parameter_specs]}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, object]) -> "ParameterSpace":
+        """Rebuild a ParameterSpace from :meth:`to_dict` output; order is preserved."""
+        return cls([
+            ParameterSpecification.from_dict(serialized_spec)
+            for serialized_spec in data["parameter_specs"]
+        ])
 
     @property
     def parameter_specs(self) -> List[ParameterSpecification]:
