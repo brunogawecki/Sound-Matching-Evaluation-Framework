@@ -143,8 +143,8 @@ sound_matching_evaluation_framework/
 ### What is incomplete or known to be wrong
 
 - **No Surge XT wrapper** yet (the path is in `config.py` but no `SurgeXTWrapper` class exists).
-- **No `ParameterSpace` abstraction** — parameter metadata is locked inside the synth wrapper. Every ML model would currently have to reach into the synth to figure out which params are continuous vs categorical, which is wrong layering.
-- **No dataset abstraction** — `dataset/audio/` exists but there is no `DatasetBuilder` or `SoundMatchingDataset` class.
+- ~~No `ParameterSpace` abstraction~~ **(BUILT)** — `synth/parameter_space.py` now owns the ordered subset and the synth-dict ↔ ML-vector conversion; the wrapper exposes it via `parameter_space`.
+- ~~No dataset abstraction~~ **(BUILT)** — `dataset/builder.py` (`DatasetBuilder`) renders a corpus and `dataset/torch_dataset.py` (`RenderedCorpusDataset`) consumes it as `(audio, target)` pairs.
 - **No model abstraction** (`BaseModel`) and no model implementations.
 - **No evaluator / metric panel**.
 - **Categorical encoding is synth-friendly but ML-hostile** — see D2 above.
@@ -164,7 +164,7 @@ These are findings from a prior architectural review. Verify them and report on 
 
 ## 5. Target architecture
 
-The framework has four layers. The **Synth** layer is mostly built; the other three are todo.
+The framework has four layers. The **Synth** and **Data** layers are built; Layers 3–4 are todo.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -175,8 +175,8 @@ The framework has four layers. The **Synth** layer is mostly built; the other th
                           │
                           ▼
 ┌──────────────────────────────────────────────────────┐
-│  Layer 2 — Data      [TODO]                          │
-│  ParameterSpace · DatasetBuilder · SoundMatchDataset     │
+│  Layer 2 — Data      [BUILT]                         │
+│  ParameterSpace · DatasetBuilder · RenderedCorpusDataset │
 └──────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -194,9 +194,16 @@ The framework has four layers. The **Synth** layer is mostly built; the other th
 
 The Evaluator re-renders predicted parameters through the **same** `BaseSynthesizer` instance used at dataset-generation time, then computes the metric panel on (target_audio, rendered_predicted_audio). The synth is therefore shared across the data-generation path and the evaluation path — this is a contract, not an optimisation.
 
-### Layer 2 — Data (next to build)
+### Layer 2 — Data (BUILT)
 
-**`ParameterSpace`** is the keystone abstraction. Everything depends on it. Build this first. Sketch:
+> **Status (built):** `ParameterSpace`/`ParameterSpecification` (`synth/parameter_space.py`),
+> `DatasetBuilder` (`dataset/builder.py`), and the PyTorch `RenderedCorpusDataset`
+> (`dataset/torch_dataset.py`) all exist and are tested. The actual code and `DECISIONS.md` are
+> authoritative for the exact API; the sketches below are the original design intent and use older
+> names (`dim_ml`→`ml_dimension`, `dim_synth`→`synth_dimension`, no `synth_index`, kinds are only
+> `continuous`/`categorical`). See D1, D2, D-SILENCE, D-AUDIBLE, D-REPR, D-SELFDESC.
+
+**`ParameterSpace`** is the keystone abstraction. Everything depends on it. Sketch (original intent):
 
 ```python
 from dataclasses import dataclass
@@ -237,7 +244,7 @@ class ParameterSpace:
 
 **`DatasetBuilder`** — parallelises synthetic dataset generation. With 100k samples, parallelism matters. DawDreamer is not thread-safe within a process but works with `ProcessPoolExecutor` — one engine per worker. Use a parameter hash as the WAV filename for deduplication and reproducibility.
 
-**`SoundMatchingDataset`** — a PyTorch `Dataset` over (audio_path, ml_target_vector) pairs, loading WAVs lazily. Audio loading and conversion to mel/STFT should be the model's job, not the dataset's — different models want different representations.
+**`RenderedCorpusDataset`** (`dataset/torch_dataset.py`) — a PyTorch `Dataset` over a built corpus, emitting `(audio, target)` pairs: `audio` is the raw rendered waveform (fixed-length mono `float32` tensor, 88200 samples at the D3 contract) read lazily per item; `target` is the ML-side vector (built once up front from `metadata.csv` via `ParameterSpace.synth_dict_to_ml_vector`). Audio is returned **as rendered** — no feature extraction, no normalization; converting to mel/STFT/features is each model's job, since model families want different representations (**D-REPR**). `RenderedCorpusDataset.load(corpus_dir)` reconstructs the `ParameterSpace` from the corpus's own `run_summary.json`, so the whole train/eval path runs with **no live synth or VST** (**D-SELFDESC**); the class is deliberately not re-exported from `dataset/__init__` and `torch` is the framework's first torch dependency. A `.targets` property exposes the full `(N, ml_dimension)` target matrix for target-only consumers (e.g. the mean-parameter baseline).
 
 ### Layer 3 — Models
 

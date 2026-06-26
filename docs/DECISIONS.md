@@ -442,6 +442,39 @@ later step. Both are revisitable without changing the interface (`audible_sampli
 declarative per-synth; range overrides currently cover continuous params, and the design extends to
 categorical option-restriction if a future synth needs it).
 
+### D-REPR — Audio representation is the model's job, not the Dataset's (LOCKED 2026-06-24)
+
+The PyTorch Dataset over a rendered corpus (`dataset/torch_dataset.py`,
+`RenderedCorpusDataset`) returns the **raw rendered waveform** (a fixed-length mono `float32` tensor,
+88200 samples at the D3 contract) paired with the ML-side target vector. It computes **no**
+spectrogram / mel / features and applies no amplitude normalization. Converting audio to a
+representation (e.g. a mel-STFT on GPU, hand-crafted features for evolutionary search, or the raw
+waveform for an end-to-end model) is each model's own first stage.
+
+**Why**: this is a comparative benchmark across model families that want **different inputs**.
+Computing one representation inside the Dataset (as preset-gen-vae / InverSynth2 do in `__getitem__`
+— both are single-model codebases) would force every family onto one representation or require a
+corpus/Dataset variant per representation. A representation-agnostic Dataset lets all families share
+one corpus. Consequences: audio is fixed-length, so default collation suffices (no custom
+`collate_fn`); a per-model on-disk feature cache can sit on top later if a family proves I/O-bound,
+without changing the Dataset contract.
+
+### D-SELFDESC — A built corpus serializes its own ParameterSpace (LOCKED 2026-06-24)
+
+Each corpus's `run_summary.json` carries the full serialized `ParameterSpace`
+(`ParameterSpace.to_dict()` / `from_dict()`), so the ML-side target vector can be reconstructed
+**offline with no live synthesizer or VST**. `RenderedCorpusDataset.load(corpus_dir)` rebuilds the
+space from the summary; the Dataset otherwise takes a `ParameterSpace` by dependency injection.
+
+**Why**: building a `ParameterSpace` requires a live `DexedWrapper` (it reads names / options /
+bounds / defaults off the plugin, per D-NAMING). Training and evaluation run on an external (Linux)
+GPU cluster that cannot run the macOS Dexed VST. A self-describing corpus decouples the entire
+training / eval / test path from the VST + dawdreamer, matching how every run is already reproducible
+from `run_summary.json`. Consequences: the consumption module (`dataset/torch_dataset.py`) is
+deliberately **not** re-exported from `dataset/__init__`, and `dataset/__init__` exposes the
+generation API lazily (PEP 562 `__getattr__`), so importing the Dataset never drags in the
+synth / render stack. `torch` is added as a dependency (the framework's first torch user).
+
 ---
 
 ## OPEN
