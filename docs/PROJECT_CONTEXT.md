@@ -145,8 +145,11 @@ sound_matching_evaluation_framework/
 - **No Surge XT wrapper** yet (the path is in `config.py` but no `SurgeXTWrapper` class exists).
 - ~~No `ParameterSpace` abstraction~~ **(BUILT)** — `synth/parameter_space.py` now owns the ordered subset and the synth-dict ↔ ML-vector conversion; the wrapper exposes it via `parameter_space`.
 - ~~No dataset abstraction~~ **(BUILT)** — `dataset/builder.py` (`DatasetBuilder`) renders a corpus and `dataset/torch_dataset.py` (`RenderedCorpusDataset`) consumes it as `(audio, target)` pairs.
-- **No model abstraction** (`BaseModel`) and no model implementations.
-- **No evaluator / metric panel**.
+- ~~No model abstraction (`BaseModel`)~~ **(BUILT, 2026-06-26)** — `models/base_model.py`
+  defines the Layer 3 `BaseModel` ABC and `models/mean_parameter_baseline.py`
+  (`MeanParameterBaseline`) is the trivial mean/mode baseline that validates the
+  train → predict path (issue #7). **No real model families implemented yet.**
+- **No evaluator / metric panel** — still TODO (issues #8, #9).
 - **Categorical encoding is synth-friendly but ML-hostile** — see D2 above.
 - **Render duration is 4 seconds** — likely too long (see D3).
 
@@ -164,7 +167,8 @@ These are findings from a prior architectural review. Verify them and report on 
 
 ## 5. Target architecture
 
-The framework has four layers. The **Synth** and **Data** layers are built; Layers 3–4 are todo.
+The framework has four layers. The **Synth** and **Data** layers are built; **Layer 3 (Models)
+is started** — the `BaseModel` contract and a trivial baseline exist (2026-06-26); Layer 4 is todo.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -181,7 +185,7 @@ The framework has four layers. The **Synth** and **Data** layers are built; Laye
                           │
                           ▼
 ┌──────────────────────────────────────────────────────┐
-│  Layer 3 — Models    [TODO]                          │
+│  Layer 3 — Models    [STARTED]                       │
 │  BaseModel · GA · CNN · AST · VAE · Flow · Proxy     │
 └──────────────────────────────────────────────────────┘
                           │
@@ -247,6 +251,16 @@ class ParameterSpace:
 **`RenderedCorpusDataset`** (`dataset/torch_dataset.py`) — a PyTorch `Dataset` over a built corpus, emitting `(audio, target)` pairs: `audio` is the raw rendered waveform (fixed-length mono `float32` tensor, 88200 samples at the D3 contract) read lazily per item; `target` is the ML-side vector (built once up front from `metadata.csv` via `ParameterSpace.synth_dict_to_ml_vector`). Audio is returned **as rendered** — no feature extraction, no normalization; converting to mel/STFT/features is each model's job, since model families want different representations (**D-REPR**). `RenderedCorpusDataset.load(corpus_dir)` reconstructs the `ParameterSpace` from the corpus's own `run_summary.json`, so the whole train/eval path runs with **no live synth or VST** (**D-SELFDESC**); the class is deliberately not re-exported from `dataset/__init__` and `torch` is the framework's first torch dependency. A `.targets` property exposes the full `(N, ml_dimension)` target matrix for target-only consumers (e.g. the mean-parameter baseline).
 
 ### Layer 3 — Models
+
+> **Status (2026-06-26):** The `BaseModel` ABC (`models/base_model.py`) and the trivial
+> `MeanParameterBaseline` (`models/mean_parameter_baseline.py`) are built and tested (issue #7) —
+> enough to validate the train → predict path end-to-end on the real corpora. The baseline ignores
+> the audio and predicts the training-set mean (mean for continuous params, majority class for
+> categoricals via averaged one-hot argmax); it is the **naive floor**, not a primary family. **No
+> real model families are implemented yet**, and the metric panel (#8) and Evaluator (#9) that close
+> the train → predict → re-render → metric loop are still TODO. The sketch below is the original
+> design intent; the actual `models/base_model.py` is authoritative (e.g. `fit` takes a
+> `RenderedCorpusDataset`, `predict` takes a `torch.Tensor`).
 
 **`BaseModel`** sketch:
 
