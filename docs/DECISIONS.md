@@ -475,6 +475,44 @@ deliberately **not** re-exported from `dataset/__init__`, and `dataset/__init__`
 generation API lazily (PEP 562 `__getattr__`), so importing the Dataset never drags in the
 synth / render stack. `torch` is added as a dependency (the framework's first torch user).
 
+### D-METRIC-SR — Sample rate vs. deep-embedding metrics (LOCKED 2026-06-27)
+
+**Decision**: the render rate stays **22.05 kHz** (`config.py` `SAMPLE_RATE`; the D3 contract is
+unchanged). Spectral perceptual metrics (multi-resolution STFT / log-spectral distance / spectral
+convergence) and all parameter (diagnostic) metrics are computed **natively at 22.05 kHz**. Only the
+**deep-embedding metrics** (CLAP-style similarity, FAD) resample the audio to the embedding model's
+required rate **at metric time**, inside the embedding-metric stage of the panel.
+
+**Resampling contract**: high-quality, anti-aliased, deterministic resampling (e.g.
+`torchaudio.functional.resample` or `soxr`), applied **identically to target and prediction**, up to
+the model's native rate (48 kHz for CLAP). No amplitude renormalization beyond what the embedding
+model itself requires.
+
+**Why**:
+
+- Rendering at 22.05 kHz hard-limits all audio to **< 11.025 kHz** (Nyquist). Upsampling 22.05→48
+  therefore recovers nothing above 11 kHz — it only hands the embedding model the format it expects
+  (which it would resample to internally anyway). Re-rendering at a higher rate is the *only* way
+  embeddings would ever see genuine > 11 kHz FM content, and that cost (regenerate corpora, ~2×
+  compute/storage, longer waveform-model inputs, breaking the `D-REPR` 88200-sample constant, and
+  losing the direct 22.05 kHz comparability with preset-gen-vae) is not justified for a *comparative
+  ranking*.
+- The band-limit is **fair**: target and prediction are equally band-limited, so it adds no bias to
+  the between-model comparison — the core thesis result.
+- 22.05 kHz matches **preset-gen-vae** (`paper_repos/preset-gen-vae/config.py:30`, whose subset D1
+  matches) and the DX7-matching literature (16–22.05 kHz).
+
+**Threat to validity (document in thesis)**: the benchmark cannot perceptually distinguish content
+above 11.025 kHz (bright FM partials, metallic/bell timbres). This caps *absolute* embedding fidelity
+but does not bias model *ranking*. Report it as a stated limitation; revisit only if a later analysis
+shows the > 11 kHz blind spot materially changes conclusions.
+
+**Consequences**: `config.py` `SAMPLE_RATE` and the `D-REPR` 88200-sample tensor are unchanged — no
+corpus regeneration. The metric panel (GitHub issue #8) owns the resample; it is not a Dataset
+concern (per `D-REPR`, audio representation is the consumer's job). The embedding-metric dependency
+(CLAP/FAD library + its torch/torchaudio needs) is added to `requirements.txt` when #8 lands, not
+now.
+
 ---
 
 ## OPEN
@@ -500,8 +538,3 @@ Change offline, so a voice is applied as parameters, not loaded as a patch — t
 **Still open**: which cartridge collection(s) — or other source — actually become the benchmark test
 set, and the final train/test composition. The built importer currently covers DX7 `.syx`; a
 non-SysEx source (e.g. Surge `.fxp`) would need its own importer.
-
-### D-METRIC-SR — Sample rate vs. deep-embedding metrics (decide at Phase 3)
-
-Datasets render at 22 050 Hz; CLAP-style embedding metrics expect 48 kHz input.
-Decide at metric-panel time: resample for the embedding metric, or render at a higher rate.
