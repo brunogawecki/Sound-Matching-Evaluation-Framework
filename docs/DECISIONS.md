@@ -478,8 +478,8 @@ synth / render stack. `torch` is added as a dependency (the framework's first to
 ### D-METRIC-SR — Sample rate vs. deep-embedding metrics (LOCKED 2026-06-27)
 
 **Decision**: the render rate stays **22.05 kHz** (`config.py` `SAMPLE_RATE`; the D3 contract is
-unchanged). Spectral perceptual metrics (multi-resolution STFT / log-spectral distance / spectral
-convergence) and all parameter (diagnostic) metrics are computed **natively at 22.05 kHz**. Only the
+unchanged). Spectral perceptual metrics (log-spectral distance / spectral convergence) and all
+parameter (diagnostic) metrics are computed **natively at 22.05 kHz**. Only the
 **deep-embedding metrics** (CLAP-style similarity, FAD) resample the audio to the embedding model's
 required rate **at metric time**, inside the embedding-metric stage of the panel.
 
@@ -512,6 +512,26 @@ corpus regeneration. The metric panel (GitHub issue #8) owns the resample; it is
 concern (per `D-REPR`, audio representation is the consumer's job). The embedding-metric dependency
 (CLAP/FAD library + its torch/torchaudio needs) is added to `requirements.txt` when #8 lands, not
 now.
+
+### D-METRIC-NORM — Audio metrics compare raw audio by default (LOCKED 2026-06-27)
+
+**Decision**: audio metrics in the panel compare the **raw** target and predicted waveforms — no
+loudness matching — by default (`MetricSpecification.normalize_level = False`). This matches the reference
+implementations (`paper_repos/preset-gen-vae`, `paper_repos/InverSynth2`), which both default to no
+amplitude normalization and neither of which uses LUFS. Level normalization is available **per
+metric** via the `normalize_level` flag: when ON, the prediction is loudness-matched to the target
+(integrated LUFS via `pyloudnorm`, already a dependency under D-SILENCE; peak-match fallback for
+near-silent signals) before the distance is computed. The flag is **audio-only** — parameter metrics
+reject it (enforced in `MetricSpecification.__post_init__`).
+
+**Why**: raw comparison keeps the panel faithful to the literature it is benchmarked against and
+avoids hiding genuine loudness errors a model makes. A normalized variant is kept opt-in only as a
+diagnostic: a metric is flipped ON solely if rank-correlation analysis shows that D-REPRO render-level
+drift — not timbral character — is contaminating it. Centralized application is the Evaluator's job
+(#9), so the metric functions stay pure.
+
+**Scope**: this is a *level-normalization* decision and is independent of `D-METRIC-SR` (which governs
+sample rate only). The two are distinct knobs; do not conflate them.
 
 ---
 
