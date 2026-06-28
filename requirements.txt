@@ -5,6 +5,7 @@ pandas
 tqdm
 python-dotenv
 pyloudnorm
+librosa  # Core audio metrics (Layer 4): magnitude/timbre/loudness/pitch axes
 torch  # ML layer (Layer 3+): the PyTorch Dataset over a rendered corpus and the models
 # pedalboard  # Optional secondary renderer (DexedWrapper(renderer="pedalboard")); only needed for scripts/benchmark_renderers.py
 # matplotlib  # Optional, for the figure pipeline (figures/); only needed to regenerate thesis figures
