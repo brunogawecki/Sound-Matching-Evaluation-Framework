@@ -1,6 +1,7 @@
 """Per-axis metric implementations.
 
-Each module holds the pure callables for one metric axis. Only the parameter axis
-exists today; magnitude / timbre / loudness / pitch / perceptual modules land in
-later build-order slices (see ``docs/DECISIONS.md`` and issue #8).
+``parameter.py`` holds the parameter-axis callables; ``audio_based.py`` holds the
+audio-input callables (the magnitude axis today; timbre / loudness / pitch /
+perceptual axes land there in later build-order slices). See ``docs/DECISIONS.md``
+and issue #8.
 """

@@ -49,6 +49,24 @@ def test_panel_contains_the_three_parameter_metrics():
     assert {"param_mae", "param_mse", "param_accuracy"} <= set(metric_names())
 
 
+# -- magnitude axis (slice #2) -----------------------------------------------
+
+MAGNITUDE_METRICS = {"lsd", "spectral_convergence", "mel_mae", "mel_mse", "mss"}
+
+
+def test_panel_contains_the_magnitude_metrics():
+    assert MAGNITUDE_METRICS <= set(metric_names())
+
+
+def test_magnitude_specs_are_raw_audio_and_lower_is_better():
+    for spec in METRIC_PANEL:
+        if spec.name in MAGNITUDE_METRICS:
+            assert spec.axis == "magnitude"
+            assert spec.input_type == "audio"
+            assert spec.normalize_level is False
+            assert spec.higher_is_better is False
+
+
 # -- guard -------------------------------------------------------------------
 
 def test_normalize_level_must_be_false_for_parameter_metrics():

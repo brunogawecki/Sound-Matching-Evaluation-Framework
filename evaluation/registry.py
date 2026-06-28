@@ -20,6 +20,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, List, Literal
 
+from evaluation.metrics.audio_based import (
+    lsd,
+    mel_mae,
+    mel_mse,
+    mss,
+    spectral_convergence,
+)
 from evaluation.metrics.parameter import param_accuracy, param_mae, param_mse
 
 MetricAxis = Literal["magnitude", "timbre", "perceptual", "loudness", "pitch", "parameter"]
@@ -50,12 +57,18 @@ class MetricSpecification:
             )
 
 
-# The panel -- one line per metric. Parameter axis only in this slice; audio axes
-# (magnitude, timbre, loudness, pitch, perceptual) land in later build-order slices.
+# The panel -- one line per metric. Parameter and magnitude axes land here; the
+# remaining audio axes (timbre, loudness, pitch, perceptual) follow in later
+# build-order slices.
 METRIC_PANEL: List[MetricSpecification] = [
     MetricSpecification("param_mae", "parameter", "parameter", False, False, param_mae),
     MetricSpecification("param_mse", "parameter", "parameter", False, False, param_mse),
     MetricSpecification("param_accuracy", "parameter", "parameter", False, True, param_accuracy),
+    MetricSpecification("lsd", "magnitude", "audio", False, False, lsd),
+    MetricSpecification("spectral_convergence", "magnitude", "audio", False, False, spectral_convergence),
+    MetricSpecification("mel_mae", "magnitude", "audio", False, False, mel_mae),
+    MetricSpecification("mel_mse", "magnitude", "audio", False, False, mel_mse),
+    MetricSpecification("mss", "magnitude", "audio", False, False, mss),
 ]
 
 
