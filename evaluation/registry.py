@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from typing import Callable, List, Literal
 
 from evaluation.metrics.audio_based import (
+    f0_rmse,
+    integrated_loudness_error,
+    loudness_envelope_l1,
     lsd,
     mel_mae,
     mel_mse,
@@ -59,9 +62,9 @@ class MetricSpecification:
             )
 
 
-# The panel -- one line per metric. Parameter, magnitude, and timbre axes land
-# here; the remaining audio axes (loudness, pitch, perceptual) follow in later
-# build-order slices.
+# The panel -- one line per metric. Parameter, magnitude, timbre, loudness, and
+# pitch axes land here; the remaining audio axis (perceptual) follows in a later
+# build-order slice.
 METRIC_PANEL: List[MetricSpecification] = [
     MetricSpecification("param_mae", "parameter", "parameter", False, False, param_mae),
     MetricSpecification("param_mse", "parameter", "parameter", False, False, param_mse),
@@ -73,6 +76,9 @@ METRIC_PANEL: List[MetricSpecification] = [
     MetricSpecification("mss", "magnitude", "audio", False, False, mss),
     MetricSpecification("mfcc_mae", "timbre", "audio", False, False, mfcc_mae),
     MetricSpecification("mfcc_mse", "timbre", "audio", False, False, mfcc_mse),
+    MetricSpecification("loudness_envelope_l1", "loudness", "audio", False, False, loudness_envelope_l1),
+    MetricSpecification("integrated_loudness_error", "loudness", "audio", False, False, integrated_loudness_error),
+    MetricSpecification("f0_rmse", "pitch", "audio", False, False, f0_rmse),
 ]
 
 

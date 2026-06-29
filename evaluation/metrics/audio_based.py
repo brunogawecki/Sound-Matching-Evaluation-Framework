@@ -1,17 +1,21 @@
 """Audio-input metrics -- pure callables over raw waveforms.
 
-Currently holds the **magnitude axis** (spectral-magnitude distances) and the
-**timbre axis** (MFCC distances); the remaining audio axes (loudness, pitch,
-perceptual) land here in later build-order slices, each tagged by its
-``MetricSpecification.axis`` in the registry.
+Currently holds the **magnitude axis** (spectral-magnitude distances), the
+**timbre axis** (MFCC distances), the **loudness axis** (level and loudness-
+contour distances), and the **pitch axis** (F0-contour distance); the remaining
+audio axis (perceptual) lands here in a later build-order slice, each tagged by
+its ``MetricSpecification.axis`` in the registry.
 
 Pure functions over two **raw mono waveforms** -- the target and the re-rendered
 prediction -- sharing the uniform audio call convention::
 
     compute(target, prediction, *, sample_rate) -> float
 
-All magnitude metrics are lower-is-better and compare the audio **as rendered**
-(no level normalization; see D-METRIC-NORM). They never touch a live synthesizer.
+Every metric here is lower-is-better and compares the audio **as rendered** (no
+level normalization; see D-METRIC-NORM). They never touch a live synthesizer.
+The loudness metrics are deliberately *level-sensitive*: enabling
+``normalize_level`` would loudness-match the prediction first and so cancel
+exactly what they measure, which is why they stay raw.
 
 ``lsd`` and ``spectral_convergence`` follow the anchor definitions in
 ``paper_repos/preset-gen-vae/utils/audio.py`` (``SimilarityEvaluator``): MAE on
@@ -20,12 +24,21 @@ All magnitude metrics are lower-is-better and compare the audio **as rendered**
 multi-scale spectral loss (Engel et al., 2020). The STFT framing for the single-
 resolution metrics matches the anchor (``n_fft=1024``, ``hop=256``).
 
-``librosa`` is a hard dependency of the core panel and is imported eagerly.
+``loudness_envelope_l1`` follows DDSP's A-weighted loudness contour;
+``integrated_loudness_error`` uses the same ITU-R BS.1770 meter (``pyloudnorm``)
+as the dataset builder's near-silence gate (D-SILENCE). ``f0_rmse`` compares
+``librosa.pyin`` F0 contours. The loudness-contour, pitch-range, and FFT-size
+choices below are reasonable defaults, not anchored to a reference -- they are
+pickable later (as for the mel / MSS parameters).
+
+``librosa`` and ``pyloudnorm`` are hard dependencies of the core panel and are
+imported eagerly.
 """
 from __future__ import annotations
 
 import numpy as np
 import librosa
+import pyloudnorm
 
 # Single-resolution STFT framing -- matches the preset-gen-vae anchor.
 N_FFT = 1024
@@ -36,6 +49,11 @@ MEL_BINS = 128
 N_MFCC = 13
 # FFT sizes for the multi-scale spectral loss (DDSP), 75% overlap per scale.
 MSS_FFT_SIZES = (2048, 1024, 512, 256, 128, 64)
+# Finite floor (LUFS) for the -inf integrated loudness of silence.
+LOUDNESS_FLOOR_LUFS = -70.0
+# pyin F0 search range (~C2..C7); outside it is treated as unvoiced.
+F0_MIN_HZ = 65.0
+F0_MAX_HZ = 2093.0
 
 
 def _magnitude_stft(signal: np.ndarray, n_fft: int = N_FFT, hop_length: int = HOP_LENGTH) -> np.ndarray:
@@ -138,3 +156,72 @@ def mfcc_mae(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) ->
 def mfcc_mse(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) -> float:
     """Mean squared error on MFCCs -- the timbre axis (lower is better)."""
     return float(np.mean((_mfcc(target, sample_rate) - _mfcc(prediction, sample_rate)) ** 2))
+
+
+def _loudness_envelope(signal: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Per-frame A-weighted loudness contour in dB (DDSP-style).
+
+    Each STFT frame's power spectrum is A-weighted (perceptual frequency
+    response), averaged over frequency, and expressed in dB. A small floor keeps
+    the log finite on silent frames.
+    """
+    power = _magnitude_stft(signal) ** 2
+    frequencies = librosa.fft_frequencies(sr=sample_rate, n_fft=N_FFT)
+    with np.errstate(divide="ignore"):
+        # A-weighting at the 0 Hz DC bin is -inf dB (full attenuation, weight 0).
+        power_weighting = 10.0 ** (librosa.A_weighting(frequencies) / 10.0)
+    weighted_power = power * power_weighting[:, np.newaxis]
+    return 10.0 * np.log10(np.mean(weighted_power, axis=0) + 1e-10)
+
+
+def _integrated_loudness(signal: np.ndarray, sample_rate: int) -> float:
+    """Gated integrated loudness (LUFS, ITU-R BS.1770) floored at silence.
+
+    Uses the same ``pyloudnorm`` meter as the dataset builder's near-silence
+    gate (D-SILENCE). Silence integrates to ``-inf``; it is clamped to
+    :data:`LOUDNESS_FLOOR_LUFS` so downstream differences stay finite.
+    """
+    meter = pyloudnorm.Meter(sample_rate)
+    loudness = float(meter.integrated_loudness(np.asarray(signal, dtype=np.float64)))
+    return max(loudness, LOUDNESS_FLOOR_LUFS)
+
+
+def loudness_envelope_l1(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) -> float:
+    """L1 distance between A-weighted loudness contours in dB (lower is better).
+
+    A *level* metric: a common gain shifts both contours by the same number of
+    dB, so it does not cancel (unlike the magnitude/timbre metrics).
+    """
+    return float(np.mean(np.abs(
+        _loudness_envelope(target, sample_rate) - _loudness_envelope(prediction, sample_rate)
+    )))
+
+
+def integrated_loudness_error(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) -> float:
+    """Absolute difference in integrated loudness (LUFS; lower is better).
+
+    Captures whether the prediction matches the target's overall perceived level.
+    """
+    return abs(_integrated_loudness(target, sample_rate) - _integrated_loudness(prediction, sample_rate))
+
+
+def f0_rmse(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) -> float:
+    """RMSE (Hz) between pyin F0 contours over commonly-voiced frames.
+
+    F0 is estimated with ``librosa.pyin`` over :data:`F0_MIN_HZ`..:data:`F0_MAX_HZ`;
+    only frames voiced in *both* signals contribute (pyin marks the rest ``nan``).
+    Lower is better; returns ``float('nan')`` when no frame is voiced in both
+    (e.g. against silence), since the contours never overlap. Independent of a
+    common gain because pitch does not depend on amplitude.
+    """
+    f0_target, _, _ = librosa.pyin(
+        np.asarray(target, dtype=np.float32), fmin=F0_MIN_HZ, fmax=F0_MAX_HZ, sr=sample_rate
+    )
+    f0_prediction, _, _ = librosa.pyin(
+        np.asarray(prediction, dtype=np.float32), fmin=F0_MIN_HZ, fmax=F0_MAX_HZ, sr=sample_rate
+    )
+    commonly_voiced = ~np.isnan(f0_target) & ~np.isnan(f0_prediction)
+    if not np.any(commonly_voiced):
+        return float("nan")
+    errors = f0_target[commonly_voiced] - f0_prediction[commonly_voiced]
+    return float(np.sqrt(np.mean(errors ** 2)))

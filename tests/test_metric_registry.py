@@ -67,6 +67,25 @@ def test_magnitude_specs_are_raw_audio_and_lower_is_better():
             assert spec.higher_is_better is False
 
 
+# -- loudness + pitch axes (slice #4) ----------------------------------------
+
+LOUDNESS_METRICS = {"loudness_envelope_l1", "integrated_loudness_error"}
+PITCH_METRICS = {"f0_rmse"}
+
+
+def test_panel_contains_the_loudness_and_pitch_metrics():
+    assert (LOUDNESS_METRICS | PITCH_METRICS) <= set(metric_names())
+
+
+def test_loudness_and_pitch_specs_are_raw_audio_and_lower_is_better():
+    for spec in METRIC_PANEL:
+        if spec.name in (LOUDNESS_METRICS | PITCH_METRICS):
+            assert spec.axis == ("loudness" if spec.name in LOUDNESS_METRICS else "pitch")
+            assert spec.input_type == "audio"
+            assert spec.normalize_level is False
+            assert spec.higher_is_better is False
+
+
 # -- guard -------------------------------------------------------------------
 
 def test_normalize_level_must_be_false_for_parameter_metrics():
