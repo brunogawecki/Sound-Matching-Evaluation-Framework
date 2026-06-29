@@ -24,6 +24,8 @@ from evaluation.metrics.audio_based import (
     lsd,
     mel_mae,
     mel_mse,
+    mfcc_mae,
+    mfcc_mse,
     mss,
     spectral_convergence,
 )
@@ -57,8 +59,8 @@ class MetricSpecification:
             )
 
 
-# The panel -- one line per metric. Parameter and magnitude axes land here; the
-# remaining audio axes (timbre, loudness, pitch, perceptual) follow in later
+# The panel -- one line per metric. Parameter, magnitude, and timbre axes land
+# here; the remaining audio axes (loudness, pitch, perceptual) follow in later
 # build-order slices.
 METRIC_PANEL: List[MetricSpecification] = [
     MetricSpecification("param_mae", "parameter", "parameter", False, False, param_mae),
@@ -69,6 +71,8 @@ METRIC_PANEL: List[MetricSpecification] = [
     MetricSpecification("mel_mae", "magnitude", "audio", False, False, mel_mae),
     MetricSpecification("mel_mse", "magnitude", "audio", False, False, mel_mse),
     MetricSpecification("mss", "magnitude", "audio", False, False, mss),
+    MetricSpecification("mfcc_mae", "timbre", "audio", False, False, mfcc_mae),
+    MetricSpecification("mfcc_mse", "timbre", "audio", False, False, mfcc_mse),
 ]
 
 

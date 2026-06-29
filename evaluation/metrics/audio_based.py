@@ -1,8 +1,9 @@
 """Audio-input metrics -- pure callables over raw waveforms.
 
-Currently holds the **magnitude axis** (spectral-magnitude distances); the other
-audio axes (timbre, loudness, pitch, perceptual) land here in later build-order
-slices, each tagged by its ``MetricSpecification.axis`` in the registry.
+Currently holds the **magnitude axis** (spectral-magnitude distances) and the
+**timbre axis** (MFCC distances); the remaining audio axes (loudness, pitch,
+perceptual) land here in later build-order slices, each tagged by its
+``MetricSpecification.axis`` in the registry.
 
 Pure functions over two **raw mono waveforms** -- the target and the re-rendered
 prediction -- sharing the uniform audio call convention::
@@ -29,8 +30,10 @@ import librosa
 # Single-resolution STFT framing -- matches the preset-gen-vae anchor.
 N_FFT = 1024
 HOP_LENGTH = 256
-# Mel filterbank resolution for the log-mel metrics.
+# Mel filterbank resolution for the log-mel and MFCC metrics.
 MEL_BINS = 128
+# Number of MFCC coefficients for the timbre metrics.
+N_MFCC = 13
 # FFT sizes for the multi-scale spectral loss (DDSP), 75% overlap per scale.
 MSS_FFT_SIZES = (2048, 1024, 512, 256, 128, 64)
 
@@ -50,6 +53,18 @@ def _log_mel(signal: np.ndarray, sample_rate: int) -> np.ndarray:
         n_mels=MEL_BINS,
     )
     return librosa.power_to_db(mel_power)
+
+
+def _mfcc(signal: np.ndarray, sample_rate: int) -> np.ndarray:
+    """MFCCs as a ``(coefficient, time)`` array, sharing the module STFT/mel framing."""
+    return librosa.feature.mfcc(
+        y=np.asarray(signal, dtype=np.float32),
+        sr=sample_rate,
+        n_mfcc=N_MFCC,
+        n_fft=N_FFT,
+        hop_length=HOP_LENGTH,
+        n_mels=MEL_BINS,
+    )
 
 
 def lsd(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) -> float:
@@ -108,3 +123,18 @@ def mss(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) -> floa
         )
         total += linear_error + log_error
     return total
+
+
+def mfcc_mae(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) -> float:
+    """Mean absolute error on MFCCs -- the timbre axis (lower is better).
+
+    Anchored to ``SimilarityEvaluator.get_mae_mfcc``: MAE on librosa MFCCs.
+    Invariant to a gain common to both inputs (it shifts only the 0th cepstral
+    coefficient, equally, so the difference cancels).
+    """
+    return float(np.mean(np.abs(_mfcc(target, sample_rate) - _mfcc(prediction, sample_rate))))
+
+
+def mfcc_mse(target: np.ndarray, prediction: np.ndarray, *, sample_rate: int) -> float:
+    """Mean squared error on MFCCs -- the timbre axis (lower is better)."""
+    return float(np.mean((_mfcc(target, sample_rate) - _mfcc(prediction, sample_rate)) ** 2))
