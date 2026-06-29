@@ -533,6 +533,31 @@ drift — not timbral character — is contaminating it. Centralized application
 **Scope**: this is a *level-normalization* decision and is independent of `D-METRIC-SR` (which governs
 sample rate only). The two are distinct knobs; do not conflate them.
 
+### D-METRIC-PERCEPTUAL — Embedding (perceptual) metrics deferred to future work (2026-06-29)
+
+**Decision**: the **embedding-based perceptual axis** (CLAP, and the optional OpenL3 / JTFS
+candidates) is **not implemented** in this thesis. It is descoped to *potential future work*. The
+metric panel ships with its core audio axes — **magnitude, timbre, loudness, pitch** — plus the
+**parameter** diagnostics; these stand alone and require no embedding dependency.
+
+**Why**: the core panel already covers the thesis's primary metric axis — *perceptual audio
+similarity* in the broad sense (audio-based distances vs. parameter-space distances). The deep
+embedding metrics would add heavy, fragile dependencies (`laion_clap`/torch, `openl3`/TensorFlow,
+`kymatio`) and a resample stage for marginal benefit to a *comparative ranking*, at a real cost to the
+panel's reproducibility and dependency footprint. Keeping the panel embedding-free keeps the core
+deliverable light and self-contained.
+
+**Relation to `D-METRIC-SR` (LOCKED)**: `D-METRIC-SR` already defined the resample-at-metric-time
+contract and the deferred `requirements.txt` embedding dependency *for if/when embedding metrics are
+added*. That contract is unchanged and is **not re-litigated** here — it simply does not activate
+while the embedding axis stays unimplemented.
+
+**Consequences**: the `"perceptual"` value in `MetricAxis` (`evaluation/registry.py`) is retained as a
+**reserved, unused** axis so a future contributor can add embedding metrics as one function + one spec
+line; no embedding deps are added to `requirements.txt`. The glossary (`docs/CONTEXT.md`) marks the
+perceptual axis as defined-but-deferred. With this, the metric panel core (GitHub issue #8) is
+complete; next is the Evaluator (#9).
+
 ---
 
 ## OPEN

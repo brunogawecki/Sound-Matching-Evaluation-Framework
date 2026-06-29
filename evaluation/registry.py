@@ -34,6 +34,8 @@ from evaluation.metrics.audio_based import (
 )
 from evaluation.metrics.parameter import param_accuracy, param_mae, param_mse
 
+# "perceptual" (embedding metrics) is reserved but unimplemented -- deferred to
+# potential future work (see D-METRIC-PERCEPTUAL in docs/DECISIONS.md).
 MetricAxis = Literal["magnitude", "timbre", "perceptual", "loudness", "pitch", "parameter"]
 MetricInput = Literal["audio", "parameter"]
 
@@ -63,8 +65,8 @@ class MetricSpecification:
 
 
 # The panel -- one line per metric. Parameter, magnitude, timbre, loudness, and
-# pitch axes land here; the remaining audio axis (perceptual) follows in a later
-# build-order slice.
+# pitch axes are implemented here. The perceptual (embedding) axis is reserved but
+# unimplemented -- deferred to potential future work (D-METRIC-PERCEPTUAL).
 METRIC_PANEL: List[MetricSpecification] = [
     MetricSpecification("param_mae", "parameter", "parameter", False, False, param_mae),
     MetricSpecification("param_mse", "parameter", "parameter", False, False, param_mse),

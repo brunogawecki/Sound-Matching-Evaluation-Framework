@@ -2,9 +2,10 @@
 
 Currently holds the **magnitude axis** (spectral-magnitude distances), the
 **timbre axis** (MFCC distances), the **loudness axis** (level and loudness-
-contour distances), and the **pitch axis** (F0-contour distance); the remaining
-audio axis (perceptual) lands here in a later build-order slice, each tagged by
-its ``MetricSpecification.axis`` in the registry.
+contour distances), and the **pitch axis** (F0-contour distance), each tagged by
+its ``MetricSpecification.axis`` in the registry. The remaining audio axis --
+perceptual (embedding) metrics -- is out of scope (possible future work; see
+``D-METRIC-PERCEPTUAL`` in ``docs/DECISIONS.md``).
 
 Pure functions over two **raw mono waveforms** -- the target and the re-rendered
 prediction -- sharing the uniform audio call convention::
