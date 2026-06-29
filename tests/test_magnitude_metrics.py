@@ -81,15 +81,20 @@ def test_spectral_convergence_is_asymmetric_via_target_normalization(target):
     assert forward != pytest.approx(backward)
 
 
-# -- mel metrics are invariant to a common gain (dB floor tracks each peak) ---
-# ``lsd`` is intentionally *not* gain-invariant: its anchored fixed eps floor
-# (-80 dB) clamps low-energy bins, so scaling shifts them non-uniformly.
+# -- magnitude metrics are NOT gain-invariant --------------------------------
+# Like ``lsd``, the mel metrics use a fixed *absolute* dB floor (``top_db=None``
+# disables librosa's default per-signal-max clip; the residual ``amin`` floor is
+# absolute). An absolute floor does not track a common gain, so scaling both
+# inputs shifts above-floor bins but not floored bins, changing the score. This
+# matches the anchors -- preset-gen-vae's ``SimilarityEvaluator`` and InverSynth2
+# compare absolute log-magnitudes with a fixed floor and never normalize to each
+# signal's own peak (preset-gen-vae explicitly rejected the dynamic-range variant).
 
-@pytest.mark.parametrize("metric", [mel_mae, mel_mse])
-def test_log_mel_metric_is_invariant_to_common_gain(metric, target, different):
+@pytest.mark.parametrize("metric", [lsd, mel_mae, mel_mse])
+def test_magnitude_metric_is_not_gain_invariant(metric, target, different):
     base = metric(target, different, sample_rate=SAMPLE_RATE)
     scaled = metric(2.0 * target, 2.0 * different, sample_rate=SAMPLE_RATE)
-    assert scaled == pytest.approx(base, rel=1e-3)
+    assert scaled != pytest.approx(base, rel=1e-3)
 
 
 # -- symmetric metrics -------------------------------------------------------

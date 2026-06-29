@@ -63,7 +63,13 @@ def _magnitude_stft(signal: np.ndarray, n_fft: int = N_FFT, hop_length: int = HO
 
 
 def _log_mel(signal: np.ndarray, sample_rate: int) -> np.ndarray:
-    """Log-mel spectrogram in dB (``librosa.power_to_db``)."""
+    """Log-mel spectrogram in dB (``librosa.power_to_db``).
+
+    ``top_db=None`` disables librosa's default 80 dB clip, which is taken
+    *relative to each signal's own maximum*. Without it the target and prediction
+    would be floored at different absolute dB levels, so the MAE/MSE would depend
+    on each signal's peak rather than purely on their difference.
+    """
     mel_power = librosa.feature.melspectrogram(
         y=np.asarray(signal, dtype=np.float32),
         sr=sample_rate,
@@ -71,7 +77,7 @@ def _log_mel(signal: np.ndarray, sample_rate: int) -> np.ndarray:
         hop_length=HOP_LENGTH,
         n_mels=MEL_BINS,
     )
-    return librosa.power_to_db(mel_power)
+    return librosa.power_to_db(mel_power, top_db=None)
 
 
 def _mfcc(signal: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -102,14 +108,16 @@ def spectral_convergence(target: np.ndarray, prediction: np.ndarray, *, sample_r
     """Spectral convergence ``||S_t - S_p||_F / ||S_t||_F`` (lower is better).
 
     Anchored to ``SimilarityEvaluator.get_spectral_convergence``. Normalizing by
-    the *target* magnitude makes this metric order-dependent. Returns ``0.0`` when
-    the target is silent (zero denominator).
+    the *target* magnitude makes this metric order-dependent. Returns ``nan`` when
+    the target is silent (zero denominator): the ratio is undefined, and returning
+    ``0.0`` would falsely score any prediction -- including a loud one -- as a
+    perfect match.
     """
     magnitude_target = _magnitude_stft(target)
     magnitude_prediction = _magnitude_stft(prediction)
     denominator = float(np.linalg.norm(magnitude_target))
     if denominator == 0.0:
-        return 0.0
+        return float("nan")
     return float(np.linalg.norm(magnitude_target - magnitude_prediction) / denominator)
 
 
