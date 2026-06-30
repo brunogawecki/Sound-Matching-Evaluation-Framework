@@ -39,7 +39,7 @@ than discovering them family-by-family. It mirrors D-ORDER one level down.
 
 | Decision | Status | Blocks | Note |
 |---|---|---|---|
-| **D-FRAMEWORK** — PyTorch Lightning vs. raw PyTorch loop | OPEN (stub) | Phase 4 training harness | New record needed before the harness task. |
+| **D-FRAMEWORK** — PyTorch Lightning vs. raw PyTorch loop | LOCKED (Lightning) | — (unblocked) | Locked 2026-06-30; conventions for the harness recorded in `DECISIONS.md`. |
 | **D-FAMILIES** — final model-family set | OPEN (stub) | Phase 5 | Discriminative + generative (primary) + neural-proxy (baseline); evolutionary dropped. |
 | **D4** — human test-set composition | OPEN | Phase 6 | Importer built; final split unblocked once Phase 4 lands. |
 

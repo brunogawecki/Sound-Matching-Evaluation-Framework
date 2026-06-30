@@ -608,6 +608,50 @@ reported next to the mean so an "undefined hides failure" case (e.g. a silent pr
 
 ---
 
+### D-FRAMEWORK — Deep-model training framework: PyTorch Lightning (LOCKED 2026-06-30)
+
+**Decision**: the internal training harness shared by the deep families (discriminative — primary,
+generative VAE — primary, neural-proxy — baseline) is built on **PyTorch Lightning**, not a
+hand-written PyTorch loop. This fixes only the *internal* harness; it does **not** touch the
+`BaseModel` contract (`models/base_model.py`), which stays framework-agnostic — its docstring already
+states the loop-vs-`Trainer` choice "must never leak into this interface."
+
+**Why** — three inputs:
+
+1. **User priority.** Saving training boilerplate is valued over line-by-line loop transparency, and
+   the user has prior Lightning experience and prefers it to raw PyTorch.
+2. **Cluster fit** (PUT Poznań SLURM cluster): the `hgx` partition (8× A100-80GB/node), conda
+   user-space installs, and a **24 h wall-clock limit with SIGTERM → SIGKILL**. Lightning's
+   `SLURMEnvironment(auto_requeue=True)` gives automatic checkpoint-and-requeue on SIGTERM (directly
+   addresses the time limit), `strategy="ddp"` for multi-GPU, and one-flag bf16 on A100 — bespoke,
+   easy-to-get-wrong harness work a raw loop would force us to own.
+3. **Contract fit.** The one real cost — Lightning leaking into the Mac-side eval path (D-EVAL) — is
+   designed out (see "Conventions" below). The closest reference, preset-gen-vae, uses a hand-rolled
+   loop with a heavy custom `RunLogger`/metrics harness; Lightning replaces that bespoke layer rather
+   than reimplementing it.
+
+**Conventions imposed on the Phase 4 training-harness task (issue #22)** — detailed-designed in that
+task's own session, recorded here as inputs:
+
+- **Decoupling from the eval path (the key pattern).** The trainable network is a plain `nn.Module`
+  ("inference core"); a `LightningModule` *wraps* it for training only. `BaseModel.save`/`load`
+  round-trip a **plain `torch` `state_dict`** (+ minimal hparams), never a raw Lightning `.ckpt`. The
+  Mac Evaluator (D-EVAL — runs locally, calls `model.load`) therefore needs only `torch`; **Lightning
+  never becomes a Mac-side dependency**, leaving D-SELFDESC / D-EVAL unchanged.
+- **SLURM survival.** `SLURMEnvironment(auto_requeue=True)` + a `ModelCheckpoint` callback so the 24 h
+  SIGTERM checkpoints and requeues.
+- **Logging.** `CSVLogger` (no-internet-friendly on compute nodes); avoid W&B unless outbound network
+  from `hgx` nodes is confirmed.
+- **Precision / scale.** bf16 mixed precision on A100; `devices` / `strategy="ddp"` left config-driven
+  (a student GrpTRES quota may cap GPUs).
+- **Reproducibility.** `pl.seed_everything(seed, workers=True)` + deterministic flags, recorded in the
+  run config.
+- **Dependency placement.** `lightning` goes in the **cluster/training** requirements set (created by
+  the Phase 4 cluster-packaging task, issue #20), **not** the base `requirements.txt` (the local/VST
+  side, which already has `torch` and is unchanged by this decision).
+
+---
+
 ## OPEN
 
 ### D4 — Human preset source for the test set (deferred by user; importer built 2026-06-24)
@@ -637,18 +681,6 @@ non-SysEx source (e.g. Surge `.fxp`) would need its own importer.
 ~30k voices). That source is **parameter vectors, not `.syx`** (see `ROADMAP.md`, Phase 4 corpus
 task), so it needs a name-based adapter rather than the SysEx importer. Under this plan D4 narrows to
 a **voice-disjoint split of that same human corpus** (Phase 6). Still the user's call to finalize.
-
-### D-FRAMEWORK — Deep-model training framework: PyTorch Lightning vs. raw PyTorch (OPEN, stub)
-
-**What** orchestrates training for the deep families — a hand-written PyTorch train/val loop or a
-PyTorch-Lightning `Trainer`. `BaseModel` (`models/base_model.py`) deliberately leaves this open ("that
-choice is deferred to the first deep family and must never leak into this interface"), so the contract
-is unaffected either way; this decision only fixes the *internal* harness shared across families.
-
-**Why it's open**: trade-off between Lightning's batteries-included loop/logging/checkpoint/distributed
-support and the transparency + zero-dependency control of a raw loop on a constrained cluster.
-
-**Blocks**: the Phase 4 *training harness* task. Resolve here before that task starts.
 
 ### D-FAMILIES — Final model-family set (OPEN, stub)
 
