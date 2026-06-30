@@ -467,10 +467,12 @@ Each corpus's `run_summary.json` carries the full serialized `ParameterSpace`
 space from the summary; the Dataset otherwise takes a `ParameterSpace` by dependency injection.
 
 **Why**: building a `ParameterSpace` requires a live `DexedWrapper` (it reads names / options /
-bounds / defaults off the plugin, per D-NAMING). Training and evaluation run on an external (Linux)
-GPU cluster that cannot run the macOS Dexed VST. A self-describing corpus decouples the entire
-training / eval / test path from the VST + dawdreamer, matching how every run is already reproducible
-from `run_summary.json`. Consequences: the consumption module (`dataset/torch_dataset.py`) is
+bounds / defaults off the plugin, per D-NAMING). Training runs on an external (Linux) GPU cluster
+where we deliberately do **not** install a VST + dawdreamer toolchain (the plugins do ship Linux
+builds, so this is a setup choice, not a hard platform limit). A self-describing corpus decouples the
+training and target-reconstruction path from the VST + dawdreamer, matching how every run is already
+reproducible from `run_summary.json`. (Note: the *Evaluator* still needs the VST for its re-render
+step and runs locally on the Mac — see the Evaluator record below.) Consequences: the consumption module (`dataset/torch_dataset.py`) is
 deliberately **not** re-exported from `dataset/__init__`, and `dataset/__init__` exposes the
 generation API lazily (PEP 562 `__getattr__`), so importing the Dataset never drags in the
 synth / render stack. `torch` is added as a dependency (the framework's first torch user).
@@ -513,22 +515,27 @@ concern (per `D-REPR`, audio representation is the consumer's job). The embeddin
 (CLAP/FAD library + its torch/torchaudio needs) is added to `requirements.txt` when #8 lands, not
 now.
 
-### D-METRIC-NORM — Audio metrics compare raw audio by default (LOCKED 2026-06-27)
+### D-METRIC-NORM — Audio metrics compare raw audio (LOCKED 2026-06-27, REVISED 2026-06-30)
 
-**Decision**: audio metrics in the panel compare the **raw** target and predicted waveforms — no
-loudness matching — by default (`MetricSpecification.normalize_level = False`). This matches the reference
-implementations (`paper_repos/preset-gen-vae`, `paper_repos/InverSynth2`), which both default to no
-amplitude normalization and neither of which uses LUFS. Level normalization is available **per
-metric** via the `normalize_level` flag: when ON, the prediction is loudness-matched to the target
-(integrated LUFS via `pyloudnorm`, already a dependency under D-SILENCE; peak-match fallback for
-near-silent signals) before the distance is computed. The flag is **audio-only** — parameter metrics
-reject it (enforced in `MetricSpecification.__post_init__`).
+**Decision**: audio metrics in the panel compare the **raw** target and re-rendered prediction
+waveforms — no loudness matching, period. There is no normalization knob. This matches **all five**
+reference implementations surveyed (`paper_repos/preset-gen-vae`, `paper_repos/InverSynth2`,
+synth-permutations, SynthRL, Sound2Synth), none of which loudness-normalizes before its audio
+distances.
 
-**Why**: raw comparison keeps the panel faithful to the literature it is benchmarked against and
-avoids hiding genuine loudness errors a model makes. A normalized variant is kept opt-in only as a
-diagnostic: a metric is flipped ON solely if rank-correlation analysis shows that D-REPRO render-level
-drift — not timbral character — is contaminating it. Centralized application is the Evaluator's job
-(#9), so the metric functions stay pure.
+**Why**: loudness is part of a sound's character, and the panel's `loudness_*` metrics exist
+precisely to measure it; matching levels first would cancel exactly what they capture. Raw comparison
+also keeps the panel faithful to the literature it is benchmarked against and avoids hiding genuine
+loudness errors a model makes.
+
+**Revision note (2026-06-30, Evaluator #9)**: the originally-locked version kept a per-metric
+`normalize_level` flag (off by default) as an opt-in escape hatch for a speculative problem — D-REPRO
+render-level drift fooling a magnitude metric. The flag shipped **unused**: nothing ever set it true,
+and the fresh-process re-render contract (see the Evaluator record below) removes the drift it was
+meant to guard against. It was deleted with the Evaluator — the field, its `__post_init__` guard, and
+all metric-line args. Re-adding it later (loudness-match in the Evaluator before a flagged metric) is
+~20 minutes of work if rank-correlation analysis ever shows a metric needs it; the decision to
+default-raw is unchanged.
 
 **Scope**: this is a *level-normalization* decision and is independent of `D-METRIC-SR` (which governs
 sample rate only). The two are distinct knobs; do not conflate them.
@@ -557,6 +564,47 @@ while the embedding axis stays unimplemented.
 line; no embedding deps are added to `requirements.txt`. The glossary (`docs/CONTEXT.md`) marks the
 perceptual axis as defined-but-deferred. With this, the metric panel core (GitHub issue #8) is
 complete; next is the Evaluator (#9).
+
+### D-EVAL — The Evaluator: monolithic + local, contract from the corpus (LOCKED 2026-06-30)
+
+**Decision**: the Evaluator (`evaluation/evaluator.py`, GitHub issue #9) is the consumer of the metric
+panel. Given a **fitted** model and a loaded `RenderedCorpusDataset`, for each sample it calls
+`model.predict` (CPU), re-renders the prediction, runs the whole `METRIC_PANEL`, and writes a
+self-describing results folder. Three non-obvious, hard-to-reverse choices are locked:
+
+1. **Monolithic + local boundary.** `predict` + re-render + metrics run as one step on the Mac. There
+   is **no** predict/re-render split artifact. Training (GPU-heavy) stays cluster-side; checkpoints are
+   pulled to the Mac and the entire Evaluator runs locally, because the re-render step needs the VST
+   (D-REPRO) and we keep the VST off the cluster (D-SELFDESC). The self-describing corpus means a
+   split *can* be introduced later with no rework if a model's inference ever can't run on the Mac.
+
+2. **Render contract comes from the corpus, never `config.py`.** The Evaluator reconstructs
+   `RenderSettings` + renderer + sample_rate + `default_params` from the target corpus's
+   `run_summary.json` and **hard-fails** if any field is missing. `config.py` could have drifted since
+   the corpus was built; silently re-rendering every prediction under the wrong contract would corrupt
+   the whole benchmark, so a wrong/absent contract must be loud.
+
+3. **Re-render only the prediction, fresh-process at pos 0; the target is never re-rendered.** Audio
+   metrics compare the fresh re-render against the **stored target WAV** (itself rendered fresh-process
+   at pos 0 for the test corpus). Target and prediction therefore share an identical clean pos-0
+   context, so the benchmark has no hidden error floor — a perfect prediction floors the audio metrics
+   at ~0 (verified by the `test_true_parameters_floor_audio_metrics_at_zero` plugin test).
+
+**Persistence**: each eval run is a self-describing folder mirroring the corpus convention —
+`results/<corpus_name>/<model_name>/` (nesting by corpus makes "all models on one test set" a single
+folder — the benchmark-table shape). Two files: `per_sample.csv` (the N×M matrix, `NaN`s intact — the
+source of truth for the metric-panel rank-correlation pruning) and `eval_summary.json` (the render
+contract echoed from the corpus, the checkpoint path + sha256 fingerprint, and per-metric
+mean/std/**valid-count**). The Evaluator both writes the files and returns the in-memory result
+(like `DatasetBuilder.build`).
+
+**Aggregation**: the per-sample matrix is the source of truth; `NaN` means "metric undefined for this
+sample" (not zero, not error). Aggregates are `nanmean` + std + valid-count, and the count is always
+reported next to the mean so an "undefined hides failure" case (e.g. a silent prediction making
+`f0_rmse` undefined everywhere) is visible, not masked.
+
+**Why**: see the three points above — each trades a small amount of generality (no split artifact, no
+`config.py` fallback) for a benchmark that is reproducible and impossible to silently corrupt.
 
 ---
 
