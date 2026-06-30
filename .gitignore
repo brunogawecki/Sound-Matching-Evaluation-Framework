@@ -12,3 +12,10 @@ docs/superpowers/
 # dataset package source. Track the Python package; ignore rendered data.
 /dataset/*
 !/dataset/*.py
+
+# Pipeline outputs: fitted model checkpoints and eval runs. Regenerable from
+# source + corpus, and self-described by eval_summary.json (corpus/checkpoint/
+# eval git revisions + sha256), so the bytes need not live in git. Keeps large
+# future neural checkpoints (.ckpt/.pt) out of history.
+/checkpoints/
+/results/
