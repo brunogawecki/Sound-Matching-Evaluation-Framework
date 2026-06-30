@@ -118,19 +118,35 @@ The conversion from SysEx/`.fxp` to DawDreamer normalised floats is **non-trivia
 ```
 sound_matching_evaluation_framework/
 ├── config.py                  # Env-var-driven paths + audio defaults
-├── requirements.txt           # numpy, scipy, dawdreamer, pandas, tqdm, python-dotenv
+├── requirements.txt           # numpy, scipy, dawdreamer, pandas, tqdm, python-dotenv, torch
 ├── GEMINI.md                  # Original project notes (predecessor to this document)
 ├── .env                       # Local VST paths (not committed)
 ├── scripts/
 │   ├── verify_dexed.py        # Smoke test: renders one random Dexed patch to WAV
 │   ├── render_preset.py       # Render one voice of a DX7 .syx cartridge to WAV
-│   └── benchmark_renderers.py  # DawDreamer-vs-Pedalboard render speed + audio agreement
-└── synth/
-    ├── __init__.py
-    ├── base_synth.py          # BaseSynthesizer abstract class
-    ├── parameter_space.py     # ParameterSpecification / ParameterSpace (Layer 2)
-    ├── renderers/             # Renderer ABC (base.py) + DawDreamerRenderer / PedalboardRenderer
-    └── dexed/                 # DexedWrapper, provisional subset, cartridge parsing
+│   ├── benchmark_renderers.py # DawDreamer-vs-Pedalboard render speed + audio agreement
+│   ├── measure_context_leakage.py # Quantifies Dexed's hidden-voice-state leak (D-REPRO)
+│   ├── build_dataset.py       # Render a corpus from a preset source (Layer 2)
+│   ├── fit_baseline.py        # Fit + save the mean baseline checkpoint (Layer 3)
+│   └── evaluate.py            # Run the Evaluator on a checkpoint + corpus (Layer 4)
+├── synth/                     # Layer 1
+│   ├── base_synth.py          # BaseSynthesizer abstract class
+│   ├── parameter_space.py     # ParameterSpecification / ParameterSpace (Layer 2 keystone)
+│   ├── renderers/             # Renderer ABC (base.py) + DawDreamerRenderer / PedalboardRenderer
+│   └── dexed/                 # DexedWrapper, locked D1 subset, cartridge parsing
+├── dataset/                   # Layer 2 — corpus generation + consumption
+│   ├── builder.py             # DatasetBuilder: preset source → rendered corpus
+│   ├── preset_sources.py      # Synthetic / human / hybrid preset sources
+│   ├── dexed_preset_loader.py # DX7 cartridge load → dedup → train/test split
+│   ├── render_backends.py     # RenderSettings + FreshProcessRenderBackend (D-REPRO)
+│   └── torch_dataset.py       # RenderedCorpusDataset (self-describing, D-SELFDESC)
+├── models/                    # Layer 3
+│   ├── base_model.py          # BaseModel ABC (fit / predict / save / load)
+│   └── mean_parameter_baseline.py # MeanParameterBaseline (naive floor, issue #7)
+└── evaluation/                # Layer 4
+    ├── registry.py            # METRIC_PANEL: MetricSpecification list across axes (issue #8)
+    ├── metrics/               # parameter.py + audio_based.py per-sample callables
+    └── evaluator.py           # Evaluator: predict → re-render → panel → results (issue #9)
 ```
 
 ### What works
@@ -149,7 +165,11 @@ sound_matching_evaluation_framework/
   defines the Layer 3 `BaseModel` ABC and `models/mean_parameter_baseline.py`
   (`MeanParameterBaseline`) is the trivial mean/mode baseline that validates the
   train → predict path (issue #7). **No real model families implemented yet.**
-- **No evaluator / metric panel** — still TODO (issues #8, #9).
+- ~~No evaluator / metric panel~~ **(BUILT)** — `evaluation/registry.py` (`METRIC_PANEL`, 13
+  per-sample metrics across the parameter / magnitude / timbre / loudness / pitch axes; issue #8) and
+  `evaluation/evaluator.py` (`Evaluator`; issue #9) close the train → predict → re-render → metric
+  loop. The embedding/perceptual axis is **deferred** (D-METRIC-PERCEPTUAL). **No real model families
+  implemented yet** — only the mean baseline runs end-to-end.
 - **Categorical encoding is synth-friendly but ML-hostile** — see D2 above.
 - **Render duration is 4 seconds** — likely too long (see D3).
 
@@ -167,8 +187,10 @@ These are findings from a prior architectural review. Verify them and report on 
 
 ## 5. Target architecture
 
-The framework has four layers. The **Synth** and **Data** layers are built; **Layer 3 (Models)
-is started** — the `BaseModel` contract and a trivial baseline exist (2026-06-26); Layer 4 is todo.
+The framework has four layers. The **Synth**, **Data**, and **Evaluation** layers are built;
+**Layer 3 (Models) is started** — the `BaseModel` contract and a trivial baseline exist (2026-06-26),
+enough to run the full train → predict → re-render → metric loop end-to-end, but no real model
+families are implemented yet.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -191,12 +213,17 @@ is started** — the `BaseModel` contract and a trivial baseline exist (2026-06-
                           │
                           ▼
 ┌──────────────────────────────────────────────────────┐
-│  Layer 4 — Evaluation [TODO]                         │
-│  BaseMetric · Evaluator · perceptual metric panel    │
+│  Layer 4 — Evaluation [BUILT]                        │
+│  METRIC_PANEL · Evaluator (perceptual axis deferred) │
 └──────────────────────────────────────────────────────┘
 ```
 
-The Evaluator re-renders predicted parameters through the **same** `BaseSynthesizer` instance used at dataset-generation time, then computes the metric panel on (target_audio, rendered_predicted_audio). The synth is therefore shared across the data-generation path and the evaluation path — this is a contract, not an optimisation.
+The Evaluator re-renders each predicted parameter dict in a **fresh OS process at sequence position 0**
+(`FreshProcessRenderBackend`), identically to how the test corpus's targets were rendered, then computes
+the metric panel on `(stored target WAV, re-rendered prediction)`. It re-renders **only the prediction**;
+the target is never re-rendered. This clean, shared pos-0 context is a contract (**D-REPRO**, **D-EVAL**),
+not an optimisation — it is what keeps Dexed's hidden-voice-state leak from dominating the benchmark and
+gives a perfect prediction an audio-metric floor of ~0.
 
 ### Layer 2 — Data (BUILT)
 
@@ -257,10 +284,11 @@ class ParameterSpace:
 > enough to validate the train → predict path end-to-end on the real corpora. The baseline ignores
 > the audio and predicts the training-set mean (mean for continuous params, majority class for
 > categoricals via averaged one-hot argmax); it is the **naive floor**, not a primary family. **No
-> real model families are implemented yet**, and the metric panel (#8) and Evaluator (#9) that close
-> the train → predict → re-render → metric loop are still TODO. The sketch below is the original
-> design intent; the actual `models/base_model.py` is authoritative (e.g. `fit` takes a
-> `RenderedCorpusDataset`, `predict` takes a `torch.Tensor`).
+> real model families are implemented yet**. The metric panel (#8) and Evaluator (#9) that close
+> the train → predict → re-render → metric loop are now **built** (see Layer 4 below), so the baseline
+> already produces a full results table. The sketch below is the original design intent; the actual
+> `models/base_model.py` is authoritative (e.g. `fit` takes a `RenderedCorpusDataset`, `predict` takes
+> a `torch.Tensor`).
 
 **`BaseModel`** sketch:
 
@@ -285,16 +313,35 @@ For the GA baseline, `fit` is a no-op and `predict` runs the GA loop. For deep m
 
 ### Layer 4 — Evaluation
 
-**Metric panel** — at minimum, all of:
+> **Status (built, 2026-06-30):** the metric panel (`evaluation/registry.py`, issue #8) and the
+> `Evaluator` (`evaluation/evaluator.py`, issue #9) are built and tested; the mean baseline produces a
+> full results table over `dataset/run_A_test`. The authoritative design lives in **D-EVAL**,
+> **D-METRIC-NORM**, and **D-METRIC-PERCEPTUAL** (`DECISIONS.md`); the notes below are the as-built
+> summary.
 
-- **Parameter-side**: MAE on continuous params, accuracy on categoricals (for diagnostic; not the primary)
-- **Audio-side, spectral**: log-spectral distance (LSD), spectral convergence (SC), multi-scale STFT MAE
-- **Audio-side, perceptual proxy**: MFCC MAE, optionally a deep embedding distance (CLAP or Wav2CLIP)
-- **Optional**: human listening study for the final results table
+**Metric panel** (`METRIC_PANEL`) — 13 pure per-sample callables, each a `MetricSpecification`
+(name, `input_type` of `parameter`/`audio`, `higher_is_better`, metric axis), deliberately
+over-provisioned and pruned later by cross-sample rank-correlation:
 
-The Evaluator iterates over a test dataset, predicts params for each target, re-renders via the synth, and computes every metric. Output: a results table (pandas DataFrame → CSV/Markdown).
+- **Parameter axis** (diagnostic, not primary): `param_mae`, `param_mse`, `param_accuracy`.
+- **Magnitude axis**: `lsd` (log-spectral distance), `spectral_convergence`, `mel_mae`, `mel_mse`, `mss`
+  (multi-scale STFT).
+- **Timbre axis**: `mfcc_mae`, `mfcc_mse`.
+- **Loudness axis**: `loudness_envelope_l1`, `integrated_loudness_error`.
+- **Pitch axis**: `f0_rmse`.
+- **Perceptual (embedding) axis** — *defined but deferred to future work* (CLAP/FAD); see
+  **D-METRIC-PERCEPTUAL**. The `"perceptual"` axis value is reserved but unused.
 
-A reference panel that matches recent literature (see SLR Table 1): MAE, Mel MAE, SC, MFCC MAE, MSS, and either CLAP or human eval as the perceptual top-line.
+Audio metrics compare **raw** waveforms (no loudness matching — **D-METRIC-NORM**) at the native
+22.05 kHz render rate (**D-METRIC-SR**). A `NaN` means the metric is *undefined for that sample* (e.g.
+`f0_rmse` on an unpitched target), never zero or error.
+
+The `Evaluator` iterates the test corpus, calls `model.predict` for each target, re-renders the
+prediction fresh-process at pos 0 (see Layer 4 contract above), runs every panel metric, and writes a
+self-describing run folder `results/<corpus_name>/<model_name>/`: `per_sample.csv` (the N×M matrix,
+`NaN`s intact — the source of truth for the pruning analysis) and `eval_summary.json` (render contract
+echoed from the corpus, checkpoint sha256 fingerprint, per-metric mean/std/valid-count). A human
+listening study for the final top-line remains optional future work.
 
 ---
 
@@ -313,6 +360,11 @@ These are inherited from `GEMINI.md` and extended.
 ---
 
 ## 7. Recommended next-step sequence
+
+> **Status (2026-06-30):** steps 1–2 and 4–7 are done; step 3 (`SurgeXTWrapper`) was **not** built
+> early — the second synth is still undecided and deferred. The live frontier is **step 8** —
+> implementing real model families, starting with whichever the user prioritises. The original
+> ordering is kept below for reference.
 
 In strict order. Don't skip ahead.
 
