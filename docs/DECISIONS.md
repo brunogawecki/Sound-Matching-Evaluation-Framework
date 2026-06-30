@@ -631,3 +631,34 @@ Change offline, so a voice is applied as parameters, not loaded as a patch — t
 **Still open**: which cartridge collection(s) — or other source — actually become the benchmark test
 set, and the final train/test composition. The built importer currently covers DX7 `.syx`; a
 non-SysEx source (e.g. Surge `.fxp`) would need its own importer.
+
+**Update (roadmap)**: the leading plan is now "train human → test human" on the
+**preset-gen-vae human DX7 collection** (`paper_repos/preset-gen-vae/synth/dexed_presets.sqlite`,
+~30k voices). That source is **parameter vectors, not `.syx`** (see `ROADMAP.md`, Phase 4 corpus
+task), so it needs a name-based adapter rather than the SysEx importer. Under this plan D4 narrows to
+a **voice-disjoint split of that same human corpus** (Phase 6). Still the user's call to finalize.
+
+### D-FRAMEWORK — Deep-model training framework: PyTorch Lightning vs. raw PyTorch (OPEN, stub)
+
+**What** orchestrates training for the deep families — a hand-written PyTorch train/val loop or a
+PyTorch-Lightning `Trainer`. `BaseModel` (`models/base_model.py`) deliberately leaves this open ("that
+choice is deferred to the first deep family and must never leak into this interface"), so the contract
+is unaffected either way; this decision only fixes the *internal* harness shared across families.
+
+**Why it's open**: trade-off between Lightning's batteries-included loop/logging/checkpoint/distributed
+support and the transparency + zero-dependency control of a raw loop on a constrained cluster.
+
+**Blocks**: the Phase 4 *training harness* task. Resolve here before that task starts.
+
+### D-FAMILIES — Final model-family set (OPEN, stub)
+
+**What** model families enter the comparative benchmark. Working set: **discriminative** (primary) +
+**generative** (primary, VAE — preset-gen-vae lineage) + **neural-proxy** (baseline, not a primary
+family). **Evolutionary search is dropped** (user: "probably no evolutionary algorithms"); if ever
+reinstated, note it runs a per-target search locally with the live VST and does **not** fit the
+cluster training harness.
+
+**Why it's open**: the exact generative architecture and whether the neural-proxy baseline is worth
+the build are not yet committed.
+
+**Blocks**: Phase 5. Resolve here before the Phase 5 family tasks start.
