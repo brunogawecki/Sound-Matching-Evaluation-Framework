@@ -2,7 +2,6 @@ import os
 import sys
 
 import numpy as np
-import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -32,11 +31,10 @@ def test_metric_names_helper_matches_panel():
     assert metric_names() == [spec.name for spec in METRIC_PANEL]
 
 
-def test_parameter_axis_specs_are_parameter_input_and_unnormalized():
+def test_parameter_axis_specs_are_parameter_input():
     for spec in METRIC_PANEL:
         if spec.axis == "parameter":
             assert spec.input_type == "parameter"
-            assert spec.normalize_level is False
 
 
 def test_higher_is_better_flags():
@@ -63,7 +61,6 @@ def test_magnitude_specs_are_raw_audio_and_lower_is_better():
         if spec.name in MAGNITUDE_METRICS:
             assert spec.axis == "magnitude"
             assert spec.input_type == "audio"
-            assert spec.normalize_level is False
             assert spec.higher_is_better is False
 
 
@@ -82,22 +79,7 @@ def test_loudness_and_pitch_specs_are_raw_audio_and_lower_is_better():
         if spec.name in (LOUDNESS_METRICS | PITCH_METRICS):
             assert spec.axis == ("loudness" if spec.name in LOUDNESS_METRICS else "pitch")
             assert spec.input_type == "audio"
-            assert spec.normalize_level is False
             assert spec.higher_is_better is False
-
-
-# -- guard -------------------------------------------------------------------
-
-def test_normalize_level_must_be_false_for_parameter_metrics():
-    with pytest.raises(ValueError):
-        MetricSpecification(
-            name="bad",
-            axis="parameter",
-            input_type="parameter",
-            normalize_level=True,
-            higher_is_better=False,
-            compute=lambda *args, **kwargs: 0.0,
-        )
 
 
 # -- specs are callable ------------------------------------------------------
