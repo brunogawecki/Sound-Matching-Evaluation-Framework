@@ -14,9 +14,9 @@ prediction -- sharing the uniform audio call convention::
 
 Every metric here is lower-is-better and compares the audio **as rendered** (no
 level normalization; see D-METRIC-NORM). They never touch a live synthesizer.
-The loudness metrics are deliberately *level-sensitive*: enabling
-``normalize_level`` would loudness-match the prediction first and so cancel
-exactly what they measure, which is why they stay raw.
+The loudness metrics are deliberately *level-sensitive*: loudness-matching the
+prediction to the target first would cancel exactly what they measure, which is
+one reason the panel compares raw audio throughout.
 
 ``lsd`` and ``spectral_convergence`` follow the anchor definitions in
 ``paper_repos/preset-gen-vae/utils/audio.py`` (``SimilarityEvaluator``): MAE on
