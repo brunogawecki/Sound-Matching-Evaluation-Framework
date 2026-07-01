@@ -1,0 +1,11 @@
+# Cluster / training-only requirements (issue #22 training harness).
+#
+# Installed on the GPU cluster IN ADDITION to the torch/numpy core, but WITHOUT the
+# VST/render stack (dawdreamer): training reads self-describing corpora and never
+# touches a live plugin (D-SELFDESC / D-EVAL). PyTorch Lightning is imported only by
+# the modules under models/training/; pyyaml only by TrainingConfig.from_yaml. Neither
+# is in the base requirements.txt, so the Mac eval path stays Lightning-free
+# (D-FRAMEWORK). The full cluster dependency split (base-minus-VST) is finalized by
+# the cluster-packaging task (issue #20).
+lightning
+pyyaml
