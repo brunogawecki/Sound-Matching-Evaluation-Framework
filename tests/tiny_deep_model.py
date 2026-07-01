@@ -1,11 +1,8 @@
-"""Test-only tiny deep model used to drive the training harness end-to-end (issue #22).
+"""Test-only tiny deep model that drives the training harness end-to-end.
 
-Not a test module (no ``test_`` prefix, not collected). The real discriminative
-network is a separate Phase-4 issue; this stands in for it so the harness can be
-exercised on CPU with no GPU and no VST. ``TinyNetwork`` does its own (trivial)
-featurization inside ``forward`` -- raw waveform -> a few pooled bins -> linear ->
-ML-side vector -- so ``BaseDeepModel.predict`` runs end-to-end from the raw audio
-with the network alone, exactly as a real family would.
+Not collected as a test (no ``test_`` prefix). ``TinyNetwork`` featurizes inside
+``forward`` (waveform -> pooled bins -> linear -> ML-side vector) so the harness can
+be exercised on CPU with no GPU and no VST, standing in for a real deep family.
 """
 from __future__ import annotations
 
@@ -75,10 +72,13 @@ class TinyDeepModel(BaseDeepModel):
             train_dataset, validation_dataset, training_config.data, seed=training_config.seed
         )
 
-        has_validation = validation_dataset is not None or training_config.data.val_fraction
-        monitor = "val_loss" if has_validation else "train_loss"
+        will_validate = data_module.will_validate
+        monitor = "val_loss" if will_validate else "train_loss"
         trainer = build_trainer(
-            training_config, default_root_dir=self._default_root_dir, monitor=monitor
+            training_config,
+            default_root_dir=self._default_root_dir,
+            monitor=monitor,
+            run_validation=will_validate,
         )
         trainer.fit(lightning_regressor, datamodule=data_module)
 

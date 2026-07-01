@@ -1,20 +1,9 @@
-"""LightningDataModule over a rendered corpus (issue #22).
+"""LightningDataModule over a rendered corpus.
 
-Wraps a :class:`~dataset.torch_dataset.RenderedCorpusDataset` (which already emits
-``(audio, target)`` pairs -- raw fixed-length waveform per D-REPR, ML-side target
-vector) in the DataLoader plumbing Lightning expects. Default collation is correct
-because every sample is the same length on both sides.
-
-Validation source, in priority order:
-1. an explicit ``validation_dataset`` (``fit`` already accepts one); else
-2. a seeded sample-level split carved from the train corpus when
-   ``data_config.val_fraction`` is set; else
-3. no validation (``val_dataloader`` returns nothing).
-
-The held-out human test set is never used here -- training-time validation is for
-model selection only; final scoring is the Evaluator's job (D-EVAL, Phase 6).
-
-Imports Lightning: a training-only module, never touched by the Mac eval path.
+Provides train (and optional validation) DataLoaders over a
+:class:`~dataset.torch_dataset.RenderedCorpusDataset`. Validation source, in
+priority order: an explicit ``validation_dataset``; else a seeded split of size
+``data_config.val_fraction`` from the train corpus; else no validation.
 """
 from __future__ import annotations
 
@@ -75,8 +64,17 @@ class CorpusDataModule(pl.LightningDataModule):
         )
 
     @property
-    def has_validation(self) -> bool:
-        return self._val_split is not None
+    def will_validate(self) -> bool:
+        """Whether a validation loop will run -- known before ``setup``.
+
+        The single source of truth for choosing the monitored metric
+        (``val_loss`` vs ``train_loss``): true when an explicit validation dataset
+        was given or ``val_fraction`` is set.
+        """
+        return (
+            self._explicit_validation_dataset is not None
+            or self._data_config.val_fraction is not None
+        )
 
     def train_dataloader(self) -> DataLoader:
         return self._make_loader(self._train_split, shuffle=True)

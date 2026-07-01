@@ -1,17 +1,8 @@
-"""The generic training wrapper around a prediction network (issue #22).
+"""LightningModule that trains an injected prediction network.
 
-A :class:`LightningRegressor` is a thin :class:`~lightning.pytorch.LightningModule` that
-wraps an injected **network** (a plain ``nn.Module``) for training only. The
-network owns everything inference needs -- featurization (audio -> STFT/mel) lives
-inside its ``forward``, so ``predict`` later runs end-to-end from the raw waveform
-with the network alone, no Lightning. The LightningModule adds only the training
-recipe: the step functions, the optimizer, and logging.
-
-This is the decoupling that keeps Lightning off the Mac eval path (D-FRAMEWORK):
-the wrapper exists during training; the checkpoint exported afterwards carries only
-the network's ``state_dict``.
-
-Imports Lightning: a training-only module.
+Wraps a plain ``nn.Module`` network with the training recipe (step functions,
+optimizer, logging) and a :class:`ParameterLoss`. The network owns featurization
+inside its ``forward``; the wrapper exists during training only.
 """
 from __future__ import annotations
 
@@ -61,12 +52,14 @@ class LightningRegressor(pl.LightningModule):
         predictions = self.network(audio)
         losses = self.parameter_loss(predictions, targets)
         batch_size = audio.shape[0]
-        self.log(f"{stage}_loss", losses["loss"], prog_bar=True, batch_size=batch_size)
-        self.log(f"{stage}_continuous_loss", losses["continuous_loss"], batch_size=batch_size)
-        self.log(f"{stage}_categorical_loss", losses["categorical_loss"], batch_size=batch_size)
+        # Epoch aggregates: {stage}_loss is what ModelCheckpoint/EarlyStopping monitor.
+        log = dict(on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}_loss", losses["loss"], prog_bar=True, **log)
+        self.log(f"{stage}_continuous_loss", losses["continuous_loss"], **log)
+        self.log(f"{stage}_categorical_loss", losses["categorical_loss"], **log)
         if self.parameter_loss.has_categorical:
             accuracy = self.parameter_loss.categorical_accuracy(predictions, targets)
-            self.log(f"{stage}_categorical_accuracy", accuracy, batch_size=batch_size)
+            self.log(f"{stage}_categorical_accuracy", accuracy, **log)
         return losses["loss"]
 
     def configure_optimizers(self) -> Dict[str, Any]:

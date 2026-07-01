@@ -1,23 +1,10 @@
-"""Shared base for deep model families (issue #22).
+"""Shared base for deep model families: save/load/predict over an injected network.
 
-:class:`BaseDeepModel` implements the parts of :class:`~models.base_model.BaseModel`
-that are provably shared by every deep family **because of the ParameterSpace
-contract** -- ``save``, ``load`` and ``predict`` -- against an injected network
-(a plain ``nn.Module``). What is *not* shared, ``fit`` (each family trains
-differently) and the network's architecture, stay abstract.
-
-Crucially this base imports **no Lightning** and no VST: it depends only on
-``torch`` and the pure :mod:`models.training.checkpoint` / ``synth.parameter_space``.
-A family's ``fit`` uses the Lightning harness under ``models/training/``; the Mac
-eval path only ever calls ``load``/``predict`` here, so Lightning never reaches the
-Mac (D-FRAMEWORK / D-SELFDESC / D-EVAL).
-
-The split between this and a family subclass:
-
-- the subclass provides ``_build_network(architecture_hparams) -> nn.Module``
-  (its architecture) so ``load`` can rebuild the network before loading weights, and a
-  ``fit`` that trains a network and registers it via :meth:`_set_trained_network`;
-- everything else (the checkpoint format, ``predict``'s decode path) lives here.
+``fit`` and the network architecture stay abstract; a subclass provides
+``_build_network`` (so ``load`` can rebuild the network before loading weights) and a
+``fit`` that registers a trained network via :meth:`_set_trained_network`. Everything
+else -- the checkpoint format and ``predict``'s decode path -- lives here, depending
+only on ``torch`` and the pure :mod:`models.training.checkpoint` / ``synth.parameter_space``.
 """
 from __future__ import annotations
 
@@ -107,6 +94,7 @@ class BaseDeepModel(BaseModel):
         if self._network is None or self._parameter_space is None:
             raise RuntimeError("Model must be fit (or loaded) before predict.")
         self._network.eval()
+        audio = audio.to(next(self._network.parameters()).device)
         with torch.no_grad():
             prediction = self._network(audio.unsqueeze(0))
         vector = prediction.squeeze(0).cpu().numpy()

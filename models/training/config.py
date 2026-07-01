@@ -1,25 +1,17 @@
-"""Typed training configuration (issue #22).
+"""Typed training configuration.
 
-A hand-edited ``training_config.yaml`` on the cluster -> ``dict`` -> a frozen
-:class:`TrainingConfig` of nested frozen sub-configs. The dataclass is the single
-source of truth for every training knob; unknown keys are rejected at parse time
-so a typo in the YAML fails loudly rather than being silently ignored.
-
-This module is **pure** ``torch``/stdlib -- no Lightning, no VST. ``yaml`` is
-imported lazily inside :meth:`TrainingConfig.from_yaml` so the Mac eval path
-(which never builds a config) does not need ``pyyaml`` installed. The resolved
-config is echoed back to disk next to the checkpoint via :meth:`to_dict` for
-reproducibility.
-
-``BaseModel.fit`` still receives a plain ``dict`` (the contract is unchanged); a
-family parses it with :meth:`TrainingConfig.from_dict`.
+A nested ``dict`` (or ``training_config.yaml``) parsed into a frozen
+:class:`TrainingConfig` of frozen sub-configs, the single source of truth for every
+training knob. Unknown keys are rejected at parse time so a typo fails loudly.
+``yaml`` is imported lazily so the eval path needs no ``pyyaml``; :meth:`to_dict`
+round-trips the resolved config for reproducibility.
 """
 from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 
 def _reject_unknown_keys(cls: type, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -141,13 +133,7 @@ class TrainingConfig:
         Unknown keys at any level raise ``ValueError``.
         """
         data = dict(data or {})
-        known = {"seed", "optimizer", "loss", "data", "trainer"}
-        unknown = set(data) - known
-        if unknown:
-            raise ValueError(
-                f"TrainingConfig got unknown top-level key(s) {sorted(unknown)}; "
-                f"valid keys are {sorted(known)}."
-            )
+        _reject_unknown_keys(cls, data)
         return cls(
             seed=int(data.get("seed", 0)),
             optimizer=OptimizerConfig.from_dict(data.get("optimizer")),

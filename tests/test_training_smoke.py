@@ -11,6 +11,7 @@ import sys
 from typing import Dict
 
 import numpy as np
+import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -100,12 +101,25 @@ def training_config(tmp_path, seed=0):
     }
 
 
+def logged_metric(log_dir, name) -> list:
+    """The non-NaN values logged for ``name`` across a run's metrics.csv."""
+    metrics_files = list(log_dir.rglob("metrics.csv"))
+    assert metrics_files, "CSVLogger should have written a metrics.csv"
+    return pd.read_csv(metrics_files[0])[name].dropna().tolist()
+
+
 def test_fit_export_load_predict_end_to_end(tmp_path):
     train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
-    log_dir = str(tmp_path / "logs")
+    log_dir = tmp_path / "logs"
 
-    model = TinyDeepModel(default_root_dir=log_dir)
-    model.fit(train_dataset, config=training_config(tmp_path))
+    config = training_config(tmp_path)
+    config["trainer"]["max_epochs"] = 5  # enough epochs for a reliable loss decrease
+    model = TinyDeepModel(default_root_dir=str(log_dir))
+    model.fit(train_dataset, config=config)
+
+    # Training actually learned: the epoch-mean train_loss fell over the run.
+    train_losses = logged_metric(log_dir, "train_loss")
+    assert train_losses[-1] < train_losses[0]
 
     checkpoint_path = tmp_path / "tiny.pt"
     model.save(checkpoint_path)
@@ -130,9 +144,27 @@ def test_explicit_validation_dataset_is_used(tmp_path):
     config = training_config(tmp_path)
     config["data"].pop("val_fraction")  # validation comes from the explicit corpus instead
 
-    model = TinyDeepModel(default_root_dir=str(tmp_path / "logs"))
+    log_dir = tmp_path / "logs"
+    model = TinyDeepModel(default_root_dir=str(log_dir))
     model.fit(train_dataset, validation_dataset=validation_dataset, config=config)
-    # A prediction after fit confirms the run completed and a network was registered.
+    # val_loss is only logged if the explicit validation dataset was actually consumed.
+    assert logged_metric(log_dir, "val_loss")
+    prediction = model.predict(train_dataset[0][0])
+    assert set(prediction) == set(train_dataset.parameter_space.names)
+
+
+def test_trains_without_validation(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    config = training_config(tmp_path)
+    config["data"].pop("val_fraction")  # no explicit val set and no split -> no validation
+
+    log_dir = tmp_path / "logs"
+    model = TinyDeepModel(default_root_dir=str(log_dir))
+    # Exercises monitor="train_loss" and val_dataloader() -> None (the default DataConfig).
+    model.fit(train_dataset, config=config)
+
+    train_losses = logged_metric(log_dir, "train_loss")
+    assert train_losses  # training ran and logged an epoch-level train_loss
     prediction = model.predict(train_dataset[0][0])
     assert set(prediction) == set(train_dataset.parameter_space.names)
 

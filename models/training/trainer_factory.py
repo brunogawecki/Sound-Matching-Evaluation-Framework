@@ -1,22 +1,9 @@
-"""``pl.Trainer`` factory wiring callbacks, logger, and SLURM survival (issue #22).
+"""``pl.Trainer`` factory wiring callbacks, logger, and SLURM survival.
 
-Centralizes the harness's Trainer policy so every family builds the same Trainer
-from its :class:`~models.training.config.TrainingConfig`:
-
-- **SLURM survival** -- when running under SLURM, a
-  ``SLURMEnvironment(auto_requeue=True)`` plugin so the cluster's 24 h SIGTERM
-  checkpoints and requeues (D-FRAMEWORK). Off SLURM (e.g. the local Mac) it is
-  omitted so the same factory runs anywhere.
-- **Checkpointing** -- ``ModelCheckpoint(monitor=..., save_top_k=1, mode="min",
-  save_last=True)``. ``last.ckpt`` is the requeue resume point; ``best`` is what the
-  family exports into the clean inference artifact afterwards.
-- **Logging** -- ``CSVLogger`` (no-internet-friendly on compute nodes) +
-  ``LearningRateMonitor``.
-- **Precision / scale** -- ``precision`` / ``accelerator`` / ``devices`` /
-  ``strategy`` straight from config (``bf16-mixed`` + ``ddp`` on A100; 32-bit single
-  device locally).
-
-Imports Lightning: a training-only module.
+Builds a Trainer from a :class:`~models.training.config.TrainingConfig`: a
+``ModelCheckpoint`` (best + last) and ``LearningRateMonitor``, optional
+``EarlyStopping``, a ``CSVLogger``, precision/scale straight from config, and a
+``SLURMEnvironment(auto_requeue=True)`` plugin when running under SLURM.
 """
 from __future__ import annotations
 
@@ -40,6 +27,7 @@ def build_trainer(
     training_config: TrainingConfig,
     default_root_dir: Union[str, Path] = "lightning_logs",
     monitor: str = "val_loss",
+    run_validation: bool = True,
 ) -> pl.Trainer:
     """Build a configured :class:`~lightning.pytorch.Trainer`.
 
@@ -49,8 +37,9 @@ def build_trainer(
             ``pl.seed_everything`` before ``fit``).
         default_root_dir: where checkpoints and CSV logs are written.
         monitor: the logged metric ``ModelCheckpoint``/``EarlyStopping`` track.
-            Defaults to ``"val_loss"``; callers training without validation should
-            pass ``"train_loss"``.
+        run_validation: whether a validation loop runs. Pass both ``monitor`` and
+            this from the DataModule's ``will_validate``: ``True`` -> ``"val_loss"``,
+            ``False`` -> ``"train_loss"`` and the validation loop is disabled.
     """
     trainer_config = training_config.trainer
     default_root_dir = Path(default_root_dir)
@@ -78,12 +67,7 @@ def build_trainer(
     if SLURMEnvironment.detect():
         plugins.append(SLURMEnvironment(auto_requeue=True))
 
-    # CSVLogger only, by D-FRAMEWORK (no-internet-friendly on the hgx compute nodes).
-    # TODO(later): make the logger config-driven (a TrainerConfig knob, e.g.
-    #   "csv" | "tensorboard" | "wandb", or a list). TensorBoardLogger is offline-safe
-    #   (add `tensorboard` to requirements-cluster.txt); WandbLogger only once outbound
-    #   network from the hgx nodes is confirmed. Lightning accepts a list of loggers, so
-    #   this is an additive change isolated to this factory.
+    # CSVLogger only (offline-safe on compute nodes). TODO(later): make config-driven.
     logger = CSVLogger(save_dir=str(default_root_dir))
 
     return pl.Trainer(
@@ -99,4 +83,6 @@ def build_trainer(
         callbacks=callbacks,
         logger=logger,
         plugins=plugins or None,
+        # No validation loop when the DataModule has no validation source.
+        limit_val_batches=1.0 if run_validation else 0,
     )

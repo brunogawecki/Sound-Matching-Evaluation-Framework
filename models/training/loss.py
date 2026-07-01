@@ -1,19 +1,9 @@
-"""Parameter-space training loss, routed by the corpus's ParameterSpace (issue #22).
+"""Parameter-space training loss, routed by the corpus's ParameterSpace.
 
-Implements D2: continuous parameters are regressed (MSE, or MAE) and categorical
-parameters are classified (cross-entropy over their one-hot block). The routing is
-driven entirely by :attr:`ParameterSpace.loss_slices`, so the same loss works for
-any subset without per-parameter special-casing.
-
-Structure mirrors preset-gen-vae's ``SynthParamsLoss``
-(``paper_repos/preset-gen-vae/model/loss.py``): a per-element-mean continuous term
-plus a per-categorical-param-mean cross-entropy term, combined as
-``continuous + categorical_loss_weight * categorical``. The default weight ``0.2``
-matches its empirically-tuned ``categorical_loss_factor`` (cross-entropy is usually
-much larger than MSE).
-
-Pure ``torch`` -- no Lightning import, so it can be unit-tested on CPU with no
-training framework.
+Continuous parameters are regressed (MSE or MAE); categorical parameters are
+classified (cross-entropy over their one-hot block). Routing is driven by
+:attr:`ParameterSpace.loss_slices`, so the same loss works for any subset. The terms
+combine as ``continuous + categorical_loss_weight * categorical``.
 """
 from __future__ import annotations
 

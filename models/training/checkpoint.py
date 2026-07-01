@@ -1,23 +1,9 @@
-"""The exported inference checkpoint -- a single, self-contained ``torch`` artifact.
+"""The exported inference checkpoint -- a single self-contained ``torch`` artifact.
 
-D-FRAMEWORK requires that ``BaseModel.save``/``load`` round-trip a plain ``torch``
-``state_dict`` (+ minimal hparams), **never** a raw Lightning ``.ckpt``. Lightning's
-own ``.ckpt`` files stay cluster-side for crash/requeue only; at the end of training
-a family exports the best weights through :func:`export_checkpoint` into the clean
-artifact this module defines.
-
-The artifact is one ``torch.save`` dict carrying everything ``load`` needs to fully
-reconstruct a model with **no training data and no VST**:
-
-- ``state_dict``            -- the network's weights;
-- ``architecture_hparams``  -- the hyperparameters ``_build_network`` needs to
-  rebuild the network's structure before loading the weights;
-- ``parameter_space``       -- the serialized :class:`ParameterSpace`
-  (:meth:`ParameterSpace.to_dict`), so ``predict`` can decode ML-side vectors back to
-  synth-side dicts with no live synth.
-
-Pure ``torch`` -- no Lightning import, so the Mac eval path can load a checkpoint
-without the training framework installed.
+One ``torch.save`` dict carrying everything ``load`` needs to reconstruct a model with
+no training data and no VST: the network ``state_dict``, the ``architecture_hparams``
+``_build_network`` consumes, and the serialized :class:`ParameterSpace`. Pure ``torch``
+(no Lightning), so the eval path can load a checkpoint without the training framework.
 """
 from __future__ import annotations
 
@@ -72,11 +58,17 @@ def network_state_dict_from_lightning_checkpoint(
     """
     checkpoint = torch.load(Path(path), map_location="cpu", weights_only=False)
     state_dict = checkpoint["state_dict"]
-    return {
+    network_state_dict = {
         key[len(network_prefix):]: value
         for key, value in state_dict.items()
         if key.startswith(network_prefix)
     }
+    if not network_state_dict:
+        raise ValueError(
+            f"No keys prefixed '{network_prefix}' in {path}; the LightningModule's "
+            "network attribute name does not match network_prefix."
+        )
+    return network_state_dict
 
 
 def load_checkpoint(path: Union[str, Path]) -> Dict[str, Any]:

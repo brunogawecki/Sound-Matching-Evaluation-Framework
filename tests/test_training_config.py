@@ -64,7 +64,7 @@ def test_to_dict_round_trips_through_from_dict():
 # -- strictness --------------------------------------------------------------
 
 def test_unknown_top_level_key_is_rejected():
-    with pytest.raises(ValueError, match="unknown top-level key"):
+    with pytest.raises(ValueError, match="unknown config key"):
         TrainingConfig.from_dict({"learning_rate": 1e-3})  # belongs under 'optimizer'
 
 
