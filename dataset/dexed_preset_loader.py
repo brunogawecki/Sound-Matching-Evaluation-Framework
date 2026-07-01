@@ -34,6 +34,52 @@ class PresetSplit:
     test: List[LoadedPreset]
 
 
+# -- shared dedup / split (synth-agnostic; reused by every human-preset loader) --
+
+def _projected_vector(preset: LoadedPreset, parameter_space: ParameterSpace) -> np.ndarray:
+    """The preset's ML vector on the estimated subset (what actually gets rendered)."""
+    subset = {name: preset.params[name] for name in parameter_space.names}
+    return parameter_space.synth_dict_to_ml_vector(subset)
+
+
+def deduplicate_presets(
+    presets: List[LoadedPreset],
+    parameter_space: ParameterSpace,
+    dedup_threshold: float = 1e-3,
+) -> List[LoadedPreset]:
+    """Drop near-twins: any preset whose subset projection is within
+    ``dedup_threshold`` (max-norm) of one already kept. Presets that render
+    identically under the fixed contract collapse to a single representative.
+    """
+    kept: List[LoadedPreset] = []
+    kept_vectors: List[np.ndarray] = []
+    for preset in presets:
+        vector = _projected_vector(preset, parameter_space)
+        if any(
+            np.max(np.abs(vector - other)) <= dedup_threshold
+            for other in kept_vectors
+        ):
+            continue
+        kept.append(preset)
+        kept_vectors.append(vector)
+    return kept
+
+
+def split_presets(
+    presets: List[LoadedPreset],
+    test_fraction: float,
+    split_seed: int = 0,
+) -> PresetSplit:
+    """Seeded voice-level train/test split; the two partitions are disjoint by
+    construction (a preset is in exactly one)."""
+    order = np.random.default_rng(split_seed).permutation(len(presets))
+    num_test = int(round(len(presets) * test_fraction))
+    test_positions = set(order[:num_test].tolist())
+    train = [preset for index, preset in enumerate(presets) if index not in test_positions]
+    test = [preset for index, preset in enumerate(presets) if index in test_positions]
+    return PresetSplit(train=train, test=test)
+
+
 class DexedPresetLoader:
     """Load, deduplicate and split DX7 ``.syx`` cartridges into human presets.
 
@@ -64,8 +110,8 @@ class DexedPresetLoader:
     def load(self, syx_paths: Sequence[str]) -> PresetSplit:
         """Load every voice from the given cartridges, deduplicate, and split into train/test."""
         presets = self._load_presets_from_cartridges(syx_paths)
-        kept = self._deduplicate(presets)
-        return self._split(kept)
+        kept = deduplicate_presets(presets, self._parameter_space, self._dedup_threshold)
+        return split_presets(kept, self._test_fraction, self._split_seed)
 
     # -- loading -------------------------------------------------------------
     def _load_presets_from_cartridges(self, syx_paths: Sequence[str]) -> List[LoadedPreset]:
@@ -85,31 +131,3 @@ class DexedPresetLoader:
                     )
                 )
         return presets
-
-    # -- deduplication -------------------------------------------------------
-    def _projected_vector(self, preset: LoadedPreset) -> np.ndarray:
-        subset = {name: preset.params[name] for name in self._parameter_space.names}
-        return self._parameter_space.synth_dict_to_ml_vector(subset)
-
-    def _deduplicate(self, presets: List[LoadedPreset]) -> List[LoadedPreset]:
-        kept: List[LoadedPreset] = []
-        kept_vectors: List[np.ndarray] = []
-        for preset in presets:
-            vector = self._projected_vector(preset)
-            if any(
-                np.max(np.abs(vector - other)) <= self._dedup_threshold
-                for other in kept_vectors
-            ):
-                continue
-            kept.append(preset)
-            kept_vectors.append(vector)
-        return kept
-
-    # -- split ---------------------------------------------------------------
-    def _split(self, presets: List[LoadedPreset]) -> PresetSplit:
-        order = np.random.default_rng(self._split_seed).permutation(len(presets))
-        num_test = int(round(len(presets) * self._test_fraction))
-        test_positions = set(order[:num_test].tolist())
-        train = [preset for index, preset in enumerate(presets) if index not in test_positions]
-        test = [preset for index, preset in enumerate(presets) if index in test_positions]
-        return PresetSplit(train=train, test=test)
