@@ -3,7 +3,7 @@
 The reusable orchestration layer every deep family shares: a typed
 :class:`~models.training.config.TrainingConfig`, a :class:`ParameterLoss` routed
 by the corpus's :class:`~synth.parameter_space.ParameterSpace`, a
-:class:`CorpusDataModule`, a generic :class:`LitRegressor` LightningModule, a
+:class:`CorpusDataModule`, a generic :class:`LightningRegressor` LightningModule, a
 ``build_trainer`` factory, and the plain ``torch`` checkpoint I/O consumed by
 ``BaseModel.load``.
 
