@@ -36,7 +36,7 @@ from pathlib import Path
 # top-level packages (config, synth, dataset) import when run from anywhere.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from synth.dexed import DexedWrapper
+from synth.dexed import DexedWrapper, suppressed_stderr
 from dataset.builder import DatasetBuilder
 from dataset.preset_sources import HumanPresetSource
 from dataset.dexed_sqlite_preset_loader import DexedSqlitePresetLoader
@@ -49,11 +49,13 @@ def _make_synth() -> DexedWrapper:
         print(f"Could not find Dexed plugin at: {plugin_path}")
         print("Please update DEXED_PATH in your .env file.")
         sys.exit(1)
-    synth = DexedWrapper(
-        plugin_path=plugin_path,
-        sample_rate=config.SAMPLE_RATE,
-        buffer_size=config.BUFFER_SIZE,
-    )
+    # Suppress the benign JUCE 'invalid URI' notice the VST3 host writes to fd 2 on load.
+    with suppressed_stderr():
+        synth = DexedWrapper(
+            plugin_path=plugin_path,
+            sample_rate=config.SAMPLE_RATE,
+            buffer_size=config.BUFFER_SIZE,
+        )
     print(f"Initialized Dexed at {synth.sample_rate}Hz; subset = {len(synth.parameter_space.names)} params")
     return synth
 
