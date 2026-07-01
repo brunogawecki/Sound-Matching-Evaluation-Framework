@@ -56,7 +56,9 @@ class DexedSqlitePresetLoader:
     Args:
         parameter_space: the estimated subset; presets are projected onto it for
             deduplication (so dedup sees what actually gets rendered).
-        test_fraction: share of surviving voices held out for the test set.
+        test_fraction: share of surviving voices held out for the test set
+            (default 0.0 -- all presets go to train; raise to hold out a
+            seeded, disjoint test set).
         split_seed: seed for the voice-level train/test shuffle.
         dedup_threshold: max-norm distance between projected ML vectors below
             which two presets are duplicates.
@@ -65,7 +67,7 @@ class DexedSqlitePresetLoader:
     def __init__(
         self,
         parameter_space: ParameterSpace,
-        test_fraction: float = 0.20,
+        test_fraction: float = 0.0,
         split_seed: int = 0,
         dedup_threshold: float = 1e-3,
     ):

@@ -22,7 +22,8 @@ Render a capped pilot (validate the whole path end-to-end before a full run)::
     --limit            cap on raw voices read from the DB before dedup/split;
                        omit to use the whole collection (~30k)   [default: none]
     --run-name         output subdirectory name                  [default: presetgen_train]
-    --test-fraction    share held out for the (unrendered) test set  [default: 0.20]
+    --test-fraction    share held out for the (unrendered) test set; default 0.0
+                       renders every voice as train                  [default: 0.00]
     --split-seed       seed for the train/test shuffle            [default: 0]
     --dedup-threshold  distance below which two voices collapse to one  [default: 0.001]
 """
@@ -75,7 +76,8 @@ def main() -> None:
     parser.add_argument("--db-path", default=config.PRESETGEN_DB_PATH, help="path to dexed_presets.sqlite")
     parser.add_argument("--limit", type=int, default=None, help="cap on raw voices read before dedup/split")
     parser.add_argument("--run-name", default="presetgen_train", help="output subdirectory name")
-    parser.add_argument("--test-fraction", type=float, default=0.20, help="share held out for test")
+    parser.add_argument("--test-fraction", type=float, default=0.0,
+                        help="share held out for test; 0.0 (default) renders every voice as train")
     parser.add_argument("--split-seed", type=int, default=0, help="seed for the train/test split")
     parser.add_argument("--dedup-threshold", type=float, default=1e-3, help="duplicate distance")
     args = parser.parse_args()
