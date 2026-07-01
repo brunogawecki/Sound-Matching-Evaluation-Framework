@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import pyloudnorm
 from scipy.io import wavfile
+from tqdm import tqdm
 
 import config
 from synth.base_synth import BaseSynthesizer
@@ -79,8 +80,11 @@ class DatasetBuilder:
         source: PresetSource,
         run_name: str,
         output_root: Optional[Path] = None,
+        show_progress: bool = False,
     ) -> Dict[str, object]:
         """Render every preset from ``source`` into ``output_root/<run_name>/``.
+
+        Pass ``show_progress=True`` to draw a tqdm bar over the render loop.
 
         Returns the run-summary dict (also written to ``run_summary.json``).
         """
@@ -88,9 +92,14 @@ class DatasetBuilder:
         audio_dir = run_dir / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
 
+        total = source.describe().get("count")
         rows: List[Dict[str, object]] = []
         try:
-            for index, preset in enumerate(source.iter_presets()):
+            presets = tqdm(
+                source.iter_presets(), total=total, desc="Rendering",
+                unit="preset", disable=not show_progress,
+            )
+            for index, preset in enumerate(presets):
                 sample_id = f"sample_{index:06d}"
                 kept_preset, audio, loudness = self._render_with_redraw(source, preset)
                 relative_path = f"audio/{sample_id}.wav"

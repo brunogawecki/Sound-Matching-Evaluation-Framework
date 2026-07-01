@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Sequence
 
 import numpy as np
+from tqdm import tqdm
 
 from synth.parameter_space import ParameterSpace
 from synth.dexed.cartridge import NUM_VOICES, voice_names, voice_parameters
@@ -46,14 +47,18 @@ def deduplicate_presets(
     presets: List[LoadedPreset],
     parameter_space: ParameterSpace,
     dedup_threshold: float = 1e-3,
+    show_progress: bool = False,
 ) -> List[LoadedPreset]:
     """Drop near-twins: any preset whose subset projection is within
     ``dedup_threshold`` (max-norm) of one already kept. Presets that render
     identically under the fixed contract collapse to a single representative.
+
+    This is O(n^2) in the number of presets; pass ``show_progress=True`` to draw a
+    tqdm bar (the scan is silent and slow on the full ~30k-voice collection).
     """
     kept: List[LoadedPreset] = []
     kept_vectors: List[np.ndarray] = []
-    for preset in presets:
+    for preset in tqdm(presets, desc="Deduplicating", unit="preset", disable=not show_progress):
         vector = _projected_vector(preset, parameter_space)
         if any(
             np.max(np.abs(vector - other)) <= dedup_threshold
@@ -109,10 +114,12 @@ class DexedPresetLoader:
         self._split_seed = int(split_seed)
         self._dedup_threshold = float(dedup_threshold)
 
-    def load(self, syx_paths: Sequence[str]) -> PresetSplit:
+    def load(self, syx_paths: Sequence[str], show_progress: bool = False) -> PresetSplit:
         """Load every voice from the given cartridges, deduplicate, and split into train/test."""
         presets = self._load_presets_from_cartridges(syx_paths)
-        kept = deduplicate_presets(presets, self._parameter_space, self._dedup_threshold)
+        kept = deduplicate_presets(
+            presets, self._parameter_space, self._dedup_threshold, show_progress=show_progress
+        )
         return split_presets(kept, self._test_fraction, self._split_seed)
 
     # -- loading -------------------------------------------------------------

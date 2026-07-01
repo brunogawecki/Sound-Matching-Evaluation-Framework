@@ -78,7 +78,9 @@ class DexedSqlitePresetLoader:
         self._split_seed = int(split_seed)
         self._dedup_threshold = float(dedup_threshold)
 
-    def load(self, db_path: str, limit: Optional[int] = None) -> PresetSplit:
+    def load(
+        self, db_path: str, limit: Optional[int] = None, show_progress: bool = False
+    ) -> PresetSplit:
         """Load voices from the SQLite database, deduplicate, and split into train/test.
 
         Args:
@@ -86,9 +88,12 @@ class DexedSqlitePresetLoader:
             limit: cap on the number of raw voices read (ordered by ``index_preset``);
                 ``None`` loads all of them. Deduplication and the split then run over
                 the capped set, so a capped run stays fast and self-consistent.
+            show_progress: draw a tqdm bar for the (slow, O(n^2)) deduplication scan.
         """
         presets = self._load_presets_from_db(db_path, limit)
-        kept = deduplicate_presets(presets, self._parameter_space, self._dedup_threshold)
+        kept = deduplicate_presets(
+            presets, self._parameter_space, self._dedup_threshold, show_progress=show_progress
+        )
         return split_presets(kept, self._test_fraction, self._split_seed)
 
     # -- loading -------------------------------------------------------------

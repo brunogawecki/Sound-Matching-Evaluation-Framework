@@ -100,14 +100,14 @@ def main() -> None:
         test_fraction=args.test_fraction,
         split_seed=args.split_seed,
         dedup_threshold=args.dedup_threshold,
-    ).load(db_path, limit=args.limit)
+    ).load(db_path, limit=args.limit, show_progress=True)
     print(f"--- preset-gen-vae split: {len(split.train)} train / {len(split.test)} test after dedup ---")
 
     # Train renders in-process (fast; D-REPRO reserves fresh-process for the test/eval
     # corpora). The test partition is produced by the split but not rendered here (D4).
     print(f"--- Building '{args.run_name}': {len(split.train)} train presets (in-process) ---")
     source = HumanPresetSource(split.train, synth.parameter_space, partition="train")
-    summary = DatasetBuilder(synth).build(source, run_name=args.run_name)
+    summary = DatasetBuilder(synth).build(source, run_name=args.run_name, show_progress=True)
     _report(summary, Path(config.DATASET_DIR) / args.run_name)
 
 
