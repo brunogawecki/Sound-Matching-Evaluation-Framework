@@ -19,9 +19,10 @@ corpus.
     --seed      master seed for the random sampler           [default: 0]
     --run-name  output subdirectory name                     [default: synthetic_smoke]
 
-``human`` -- real DX7 presets read from ``.syx`` cartridges. Renders **both** the
-train and test partitions of one split in a single run, so they are disjoint by
-construction (no seed to re-match across separate runs)::
+``human`` -- real DX7 presets read from ``.syx`` cartridges. By default every
+voice is train (``--test-fraction 0.0``); raise it to also render a held-out test
+partition in the same run, disjoint by construction (no seed to re-match across
+separate runs). Empty partitions are skipped::
 
     python scripts/build_dataset.py human --cartridges presets/
 
@@ -30,8 +31,8 @@ construction (no seed to re-match across separate runs)::
                        accepts several at once               [REQUIRED]
     --partition        render only this half, "train" or "test"
                                                              [default: both]
-    --test-fraction    share of presets held out as the test set
-                                                             [default: 0.20]
+    --test-fraction    share of presets held out as the test set; 0.0 renders
+                       every voice as train                  [default: 0.00]
     --split-seed       seed for the train/test shuffle       [default: 0]
     --dedup-threshold  distance below which two presets count as duplicates
                        and collapse to one                   [default: 0.001]
@@ -55,7 +56,7 @@ construction (no seed to re-match across separate runs)::
                                                              [default: 0.05]
     --flip-categoricals  augment only: also allow categorical params to flip
                                                              [default: off]
-    --test-fraction    share held out as the test set        [default: 0.20]
+    --test-fraction    share held out as the test set        [default: 0.00]
     --split-seed       seed for the train/test shuffle       [default: 0]
     --dedup-threshold  duplicate-collapse distance           [default: 0.001]
     --run-name         output subdirectory name              [default: hybrid_<mode>]
@@ -183,9 +184,14 @@ def build_human(args: argparse.Namespace) -> None:
         split_seed=args.split_seed,
         dedup_threshold=args.dedup_threshold,
     ).load(cartridges)
-    partitions = [args.partition] if args.partition else ["train", "test"]
+    requested = [args.partition] if args.partition else ["train", "test"]
+    # Skip any partition the split left empty (e.g. test when --test-fraction is 0).
+    partitions = [p for p in requested if (split.test if p == "test" else split.train)]
     render_both = len(partitions) == 2
     print(f"--- Human split: {len(split.train)} train / {len(split.test)} test after dedup ---")
+    if not partitions:
+        print(f"No presets to render for partition(s) {requested}. Nothing written.")
+        return
     for partition in partitions:
         presets = split.test if partition == "test" else split.train
         # The test set renders in fresh processes (D-REPRO, generation/eval contexts must
@@ -252,7 +258,8 @@ def main() -> None:
     human.add_argument("--cartridges", nargs="+", required=True, help=".syx paths or globs")
     human.add_argument("--partition", choices=["train", "test"], default=None,
                        help="render only this partition; default renders both")
-    human.add_argument("--test-fraction", type=float, default=0.20, help="share held out for test")
+    human.add_argument("--test-fraction", type=float, default=0.0,
+                       help="share held out for test; 0.0 (default) renders every voice as train")
     human.add_argument("--split-seed", type=int, default=0, help="seed for the train/test split")
     human.add_argument("--dedup-threshold", type=float, default=1e-3, help="duplicate distance")
     human.add_argument("--run-name", default=None, help="output subdirectory name")
@@ -268,7 +275,8 @@ def main() -> None:
     hybrid.add_argument("--num-perturbed-params", type=int, default=2, help="augment: params jittered/flipped")
     hybrid.add_argument("--jitter", type=float, default=0.05, help="augment: continuous jitter magnitude")
     hybrid.add_argument("--flip-categoricals", action="store_true", help="augment: allow categorical flips")
-    hybrid.add_argument("--test-fraction", type=float, default=0.20, help="share held out for test")
+    hybrid.add_argument("--test-fraction", type=float, default=0.0,
+                        help="share held out for test; 0.0 (default) uses every voice for train")
     hybrid.add_argument("--split-seed", type=int, default=0, help="seed for the train/test split")
     hybrid.add_argument("--dedup-threshold", type=float, default=1e-3, help="duplicate distance")
     hybrid.add_argument("--run-name", default=None, help="output subdirectory name")
