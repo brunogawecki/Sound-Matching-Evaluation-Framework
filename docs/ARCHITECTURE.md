@@ -69,6 +69,10 @@ A typical full run, script by script:
 Steps 1 and 3 need the Dexed VST locally (they render audio); step 2 does not — it reads
 only the corpus on disk, so training can run on a cluster.
 
+Every step can be driven either from the terminal (the scripts above) or from the local
+Streamlit **dashboard**, which builds and subprocesses the exact same commands. See the
+`dashboard/` section below.
+
 ## Module map
 
 ### `config.py`
@@ -146,9 +150,32 @@ Outputs under `results/` and `checkpoints/` are gitignored.
 | `measure_context_leakage.py` | D-RENDERER experiment: tests whether cross-engine divergence is within-engine context leakage. |
 | `render_divergence_examples.py` | D-RENDERER experiment: renders the most divergent patches through all three strategies for side-by-side listening. |
 
+### `dashboard/` — the local control panel
+
+A private, localhost Streamlit front-end over the pipeline scripts (build → fit → evaluate →
+browse results). It **subprocesses** the `scripts/*.py` commands and reads their output files
+back for display; it never imports the pipeline library, so it cannot drift from the CLI. The
+D1 subset is shown read-only — the forms expose only the per-run knobs the scripts already
+take. Run with `streamlit run dashboard/app.py`.
+
+| File | Purpose |
+| --- | --- |
+| `app.py` | Streamlit entrypoint: home page with environment status (VST present?, render contract, corpus/checkpoint/result counts) and the sidebar that links the four pages. |
+| `script_specs.py` | Declarative `ArgSpec` / `ScriptSpec` tables transcribed from each script's `argparse`. One spec per build source (synthetic/human/hybrid/presetgen), the baseline fit, and evaluate. Adding a future script = append one spec. |
+| `forms.py` | `render_form(spec)` draws a widget per arg and returns the argv list; `build_command(spec, values)` is the pure, unit-tested spec→argv core. Required-but-blank fields raise before anything runs. |
+| `command_runner.py` | `run_streaming` launches the subprocess and streams stdout into a live log box, honoring `\r` so `tqdm` bars update in place on one line; `run_capture` is the blocking variant used by tests. |
+| `discovery.py` | Scans `config.py` paths for dropdown options: `list_corpora` (dirs with `run_summary.json`, flagged fresh-process for D-REPRO), `list_checkpoints`, `list_result_runs`. |
+| `ui.py` | Shared widgets: `command_preview` (copyable command) and `run_button` (streams a run, reports the exit code). |
+| `env.py` | Path bootstrap so pages import both the project and dashboard modules. |
+| `pages/1_Build_dataset.py` | Pick a preset source → per-run form → build; shows the D1 subset read-only, then the new corpus's `run_summary.json` and a WAV preview. |
+| `pages/2_Fit_model.py` | Pick a corpus → fit the baseline → confirm the checkpoint on disk. |
+| `pages/3_Evaluate.py` | Pick a checkpoint + a (fresh-process) corpus → evaluate; warns when the VST is missing or the corpus is in-process (not D-REPRO). |
+| `pages/4_Results.py` | The metric × (corpus/model) benchmark table from every `eval_summary.json`, plus a per-run `per_sample.csv` drill-down with per-metric histograms. |
+
 ### Everything else
 
-- `tests/` — pytest suite; tests that need the Dexed VST skip automatically when it is absent.
+- `tests/` — pytest suite; tests that need the Dexed VST skip automatically when it is absent
+  (`test_dashboard_forms.py` covers the spec→argv, runner, and discovery pieces with no Streamlit runtime).
 - `figures/` — thesis figure scripts plus the shared matplotlib style (`style.py`; contract in `docs/figure-style.md`).
 - `paper_repos/` — read-only reference code from related papers (InverSynth2, preset-gen-vae); also where the DX7 SQLite database ships.
 - `docs/` — `DECISIONS.md` (design decisions and rationale), `CONTEXT.md` (glossary), `ROADMAP.md` (phases), `walkthroughs/` (PR-sized deep dives).
