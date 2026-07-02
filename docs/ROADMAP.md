@@ -5,7 +5,8 @@ trivial baseline, and a working Evaluator) and the project's goal (a comparative
 model families on Dexed). It is high-level on purpose: each task below gets its own detailed-design
 session later. Scope is **Dexed-only** (D-ORDER) — the full pipeline must be proven on Dexed before
 any second synth — and the roadmap **ends at "benchmark results produced."** Thesis prose/figures,
-the #12 dashboard, and Surge XT are out of scope.
+the #12 dashboard (built — see `ARCHITECTURE.md`, but tangential to the benchmark path), and
+Surge XT are out of scope.
 
 The split with the rest of `docs/` is the usual one: **this file owns the *decomposition and
 ordering*; `DECISIONS.md` owns the *why*; GitHub issues own the *do*.** Open decisions resolve in
