@@ -14,8 +14,8 @@ import ui
 from forms import render_form
 from script_specs import BUILD_SOURCES
 
-st.set_page_config(page_title="Build dataset", page_icon="🧱", layout="wide")
-st.title("🧱 Build dataset")
+st.set_page_config(page_title="Build dataset", layout="wide")
+st.title("Build dataset")
 
 # The D1 subset is locked; the forms below only expose the per-run knobs.
 try:

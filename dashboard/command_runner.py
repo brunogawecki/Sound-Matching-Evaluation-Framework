@@ -12,6 +12,8 @@ Two entry points share one behaviour:
 Commands run with ``cwd=PROJECT_ROOT`` so the scripts resolve their imports and
 relative paths exactly as they do from a terminal.
 """
+import codecs
+import os
 import subprocess
 from typing import List, Optional, Tuple
 
@@ -35,22 +37,49 @@ def run_capture(argv: List[str], cwd: Optional[str] = None) -> Tuple[int, str]:
 def run_streaming(argv: List[str], placeholder) -> int:
     """Run ``argv``, tailing output into a Streamlit ``placeholder``; return code.
 
-    ``placeholder`` is an ``st.empty()`` (or any object with ``.code(str)``).
+    The raw byte stream is consumed so carriage returns are honoured the way a
+    terminal does: a ``\\r`` rewinds the current line, so a ``tqdm`` progress bar
+    stays a single line that updates in place instead of one line per tick. A
+    ``\\n`` commits the current line to the scrollback. ``placeholder`` is an
+    ``st.empty()`` (or any object with ``.code(str)``).
     """
-    lines: List[str] = []
+    committed: List[str] = []  # finished lines (ended with \n)
+    current = ""  # the line currently being (over)written
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
     process = subprocess.Popen(
         argv,
         cwd=str(PROJECT_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+        bufsize=0,
     )
     assert process.stdout is not None
-    for line in process.stdout:
-        lines.append(line.rstrip("\n"))
-        placeholder.code("\n".join(lines[-_TAIL_LINES:]) or "…")
+    file_descriptor = process.stdout.fileno()
+
+    def render() -> None:
+        tail = committed[-_TAIL_LINES:]
+        text = "\n".join(tail + ([current] if current else []))
+        placeholder.code(text or "…")
+
+    while True:
+        chunk = os.read(file_descriptor, 4096)
+        if not chunk:
+            break
+        for char in decoder.decode(chunk):
+            if char == "\n":
+                committed.append(current)
+                current = ""
+            elif char == "\r":
+                current = ""  # carriage return: overwrite the current line
+            else:
+                current += char
+        render()
+
+    if current:
+        committed.append(current)
+    render()
     return_code = process.wait()
-    if not lines:
+    if not committed:
         placeholder.code("(no output)")
     return return_code

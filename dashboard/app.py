@@ -20,9 +20,9 @@ import streamlit as st
 import config
 import discovery
 
-st.set_page_config(page_title="Sound-matching control panel", page_icon="🎛️", layout="wide")
+st.set_page_config(page_title="Sound-matching control panel", layout="wide")
 
-st.title("🎛️ Sound-matching control panel")
+st.title("Sound-matching control panel")
 st.caption(
     "A local front-end over the pipeline scripts. Pick a page in the sidebar: "
     "**Build dataset → Fit model → Evaluate → Results**."

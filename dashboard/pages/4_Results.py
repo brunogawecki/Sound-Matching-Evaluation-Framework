@@ -9,8 +9,8 @@ import streamlit as st
 
 import discovery
 
-st.set_page_config(page_title="Results", page_icon="📊", layout="wide")
-st.title("📊 Results")
+st.set_page_config(page_title="Results", layout="wide")
+st.title("Results")
 
 runs = discovery.list_result_runs()
 if not runs:

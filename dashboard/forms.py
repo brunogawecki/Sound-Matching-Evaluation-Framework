@@ -65,31 +65,34 @@ def render_form(spec: ScriptSpec, key_prefix: str = "") -> List[str]:
     for arg in spec.args:
         widget_key = f"{prefix}:{arg.name}"
         label = arg.label or arg.flag
-        help_text = arg.help or None
         if arg.kind == "int":
             values[arg.name] = int(
-                st.number_input(label, value=int(arg.default or 0), step=1, key=widget_key, help=help_text)
+                st.number_input(label, value=int(arg.default or 0), step=1, key=widget_key)
             )
         elif arg.kind == "float":
             values[arg.name] = float(
                 st.number_input(
                     label, value=float(arg.default or 0.0), step=0.01,
-                    format="%.4f", key=widget_key, help=help_text,
+                    format="%.4f", key=widget_key,
                 )
             )
         elif arg.kind == "bool":
-            values[arg.name] = st.checkbox(label, value=bool(arg.default), key=widget_key, help=help_text)
+            values[arg.name] = st.checkbox(label, value=bool(arg.default), key=widget_key)
         elif arg.kind == "choice":
             options = list(arg.choices)
             if not arg.required and "" not in options:
                 options = ["(default)"] + options
             default = arg.default if arg.default in options else options[0]
-            picked = st.selectbox(label, options, index=options.index(default), key=widget_key, help=help_text)
+            picked = st.selectbox(label, options, index=options.index(default), key=widget_key)
             values[arg.name] = "" if picked in ("(default)", "") else picked
         elif arg.kind == "paths":
-            raw = st.text_area(label, value="", key=widget_key, help=help_text,
+            raw = st.text_area(label, value="", key=widget_key,
                                placeholder="one path / glob / folder per line")
             values[arg.name] = raw
         else:  # str, path
-            values[arg.name] = st.text_input(label, value=str(arg.default or ""), key=widget_key, help=help_text)
+            values[arg.name] = st.text_input(label, value=str(arg.default or ""), key=widget_key)
+        # Show the parameter's description inline (always visible, not hover-only).
+        if arg.help:
+            required_tag = " · **required**" if arg.required else ""
+            st.caption(arg.help + required_tag)
     return build_command(spec, values)

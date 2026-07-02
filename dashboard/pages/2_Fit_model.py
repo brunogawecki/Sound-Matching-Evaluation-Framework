@@ -10,8 +10,8 @@ import ui
 from forms import build_command
 from script_specs import FIT_MODELS
 
-st.set_page_config(page_title="Fit model", page_icon="🏋️", layout="wide")
-st.title("🏋️ Fit model")
+st.set_page_config(page_title="Fit model", layout="wide")
+st.title("Fit model")
 
 corpora = discovery.list_corpora()
 if not corpora:

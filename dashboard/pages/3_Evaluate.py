@@ -14,8 +14,8 @@ import ui
 from forms import build_command
 from script_specs import EVALUATE
 
-st.set_page_config(page_title="Evaluate", page_icon="📏", layout="wide")
-st.title("📏 Evaluate")
+st.set_page_config(page_title="Evaluate", layout="wide")
+st.title("Evaluate")
 
 if not os.path.exists(os.path.expanduser(config.DEXED_PATH)):
     st.warning(
