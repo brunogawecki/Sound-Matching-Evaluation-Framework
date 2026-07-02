@@ -650,6 +650,54 @@ task's own session, recorded here as inputs:
   the Phase 4 cluster-packaging task, issue #20), **not** the base `requirements.txt` (the local/VST
   side, which already has `torch` and is unchanged by this decision).
 
+**Implementation notes (2026-07-02)** — append-only; the decision above is unchanged. Issue #22
+shipped in PR #28; the conventions above are delivered as specified — Lightning is quarantined to
+`models/training/`, `save`/`load` round-trip a plain-`torch` artifact, `SLURMEnvironment(auto_requeue=True)`
+is attached only when `SLURMEnvironment.detect()`, logging is `CSVLogger`, precision is `bf16-mixed`,
+and `lightning`/`pyyaml` live in `requirements-cluster.txt` (a smoke test asserts importing `models`
+pulls in no Lightning). The build also settled these sub-decisions, recorded here for their *why*:
+
+- **Loss weighting follows preset-gen-vae, not a fresh guess.** `models/training/loss.py`
+  (`ParameterLoss`) routes losses off `ParameterSpace.loss_slices` (D2): MSE (or MAE) on the
+  continuous slots, per-block `cross_entropy` on categorical logits **averaged over blocks**, combined
+  as `continuous + categorical_loss_weight · categorical`. `LossConfig.categorical_loss_weight`
+  defaults to **0.2**, matching preset-gen-vae's empirically-tuned `categorical_loss_factor` — cross-
+  entropy is typically much larger in magnitude than MSE, so an unweighted sum would let categoricals
+  dominate. Config-overridable; 0.2 is the starting point, not a locked value.
+- **The held-out human test set is never used for training-time validation.** `DataConfig.val_fraction`
+  is `Optional` and defaults to `None`; validation is opt-in. `CorpusDataModule.setup` source priority:
+  explicit validation corpus → seeded sample-level `random_split` by `val_fraction`
+  (`torch.Generator().manual_seed(seed)`) → no validation. With no validation source the val loop is
+  *disabled* (`limit_val_batches=0`) and the monitored metric falls back from `val_loss` to
+  `train_loss`; `CorpusDataModule.will_validate` (readable before `setup`) is the single source of
+  truth the caller uses to pick the monitor. Keeps D4's human split out of the training signal.
+- **Config is fail-loud and reproducible.** Training knobs are frozen dataclasses
+  (`models/training/config.py`) that **reject unknown keys** at every nesting level
+  (`_reject_unknown_keys`) — a YAML typo errors rather than silently no-op'ing — and round-trip via
+  `to_dict` so the resolved config can be echoed next to the checkpoint and a run's exact settings
+  recovered. `from_yaml` imports `yaml` lazily so the eval path never needs pyyaml.
+- **Checkpoint is a self-contained, versioned `torch` artifact** (`models/training/checkpoint.py`):
+  one `torch.save` dict of `{format_version, CPU state_dict, architecture_hparams,
+  parameter_space.to_dict()}` — enough to rebuild and reload a model with no training data and no VST
+  (extends D-SELFDESC to the model side). `CHECKPOINT_FORMAT_VERSION = 1` is guarded on load;
+  `weights_only=False` is intentional (our own trusted artifact carries Python containers). Training
+  writes Lightning `.ckpt`s; `fit` then exports the best one by stripping the `network.` prefix via
+  plain `torch.load` (no Lightning import).
+- **New `BaseDeepModel` base class** (`models/base_deep_model.py`) sits between `BaseModel` and the deep
+  families: `_build_network(architecture_hparams)` (abstract, torch-only so `load` can rebuild the net
+  before loading weights) plus shared, Lightning-free `save`/`load`/`predict`. `predict` decodes the
+  network's raw output (continuous floats + categorical logits) into a valid synth-side dict via
+  `ParameterSpace.ml_vector_to_synth_dict` (argmax + bounds-clip), honoring the `BaseModel` contract.
+  The network is *injected* into the harness (featurization lives in its `forward`), keeping the
+  harness architecture-agnostic; `tests/tiny_deep_model.py` is the reference wiring a real family
+  mirrors.
+- **Seeding is the caller's job** — `pl.seed_everything(seed, workers=True)` before `fit`, not inside
+  `build_trainer`.
+
+Provisional (not locked): `CSVLogger` is currently hardcoded (has a `TODO` to make it config-driven);
+AdamW `3e-4` / `weight_decay=0.0` / constant LR / `bf16-mixed` are sensible, config-overridable
+defaults from the discriminative-regressor lineage.
+
 ---
 
 ## OPEN
