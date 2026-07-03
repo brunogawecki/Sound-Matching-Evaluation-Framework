@@ -22,7 +22,7 @@ pytest.importorskip("lightning")  # training-only dependency (cluster-side); ski
 from dataset.builder import DatasetBuilder, RenderSettings
 from dataset.preset_sources import SyntheticPresetSource
 from dataset.torch_dataset import RenderedCorpusDataset
-from models.spectrogram_convolutional_regressor import (
+from models.Sound2Synth import (
     SpectrogramConvolutionalNetwork,
     SpectrogramConvolutionalRegressor,
 )
@@ -32,13 +32,12 @@ SAMPLE_RATE = 8000
 DURATION_SEC = 0.5
 EXPECTED_SAMPLES = int(SAMPLE_RATE * DURATION_SEC)
 
-# A tiny STFT + conv schedule: two pools only, so the small spectrogram never collapses.
+# The backbone is fixed (byte-faithful to the paper); only the STFT + head knobs vary.
+# A small n_fft and a narrow head keep the CPU smoke test fast.
 TINY_KWARGS = dict(
     n_fft=256,
     hop_length=128,
     win_length=256,
-    conv_config=[8, "M", 16, "M"],
-    embedding_dim=32,
     head_hidden_dim=16,
     dropout=0.0,
 )
