@@ -142,7 +142,10 @@ sound_matching_evaluation_framework/
 │   └── torch_dataset.py       # RenderedCorpusDataset (self-describing, D-SELFDESC)
 ├── models/                    # Layer 3
 │   ├── base_model.py          # BaseModel ABC (fit / predict / save / load)
-│   └── mean_parameter_baseline.py # MeanParameterBaseline (naive floor, issue #7)
+│   ├── base_deep_model.py     # BaseDeepModel: shared save/load/predict for deep families
+│   ├── mean_parameter_baseline.py # MeanParameterBaseline (naive floor, issue #7)
+│   ├── sound2synth.py         # Sound2SynthSpectrogramRegressor (first real deep family, #19/#31)
+│   └── training/              # PyTorch-Lightning training harness (#28, D-FRAMEWORK)
 └── evaluation/                # Layer 4
     ├── registry.py            # METRIC_PANEL: MetricSpecification list across axes (issue #8)
     ├── metrics/               # parameter.py + audio_based.py per-sample callables
@@ -164,12 +167,17 @@ sound_matching_evaluation_framework/
 - ~~No model abstraction (`BaseModel`)~~ **(BUILT, 2026-06-26)** — `models/base_model.py`
   defines the Layer 3 `BaseModel` ABC and `models/mean_parameter_baseline.py`
   (`MeanParameterBaseline`) is the trivial mean/mode baseline that validates the
-  train → predict path (issue #7). **No real model families implemented yet.**
+  train → predict path (issue #7).
+- ~~No training harness / no real model families~~ **(BUILT, 2026-07)** — the PyTorch-Lightning
+  training harness (`models/training/`, issue #28) and the **first real deep family**,
+  `Sound2SynthSpectrogramRegressor` (`models/sound2synth.py` + `base_deep_model.py`, issue #19/#31),
+  now exist. The model is a *basic* first cut (single log-power-STFT branch + plain MLP head), **not**
+  the paper's full multi-modal encoder / grouped-FC classifier — that fuller architecture is still
+  future work.
 - ~~No evaluator / metric panel~~ **(BUILT)** — `evaluation/registry.py` (`METRIC_PANEL`, 13
   per-sample metrics across the parameter / magnitude / timbre / loudness / pitch axes; issue #8) and
   `evaluation/evaluator.py` (`Evaluator`; issue #9) close the train → predict → re-render → metric
-  loop. The embedding/perceptual axis is **deferred** (D-METRIC-PERCEPTUAL). **No real model families
-  implemented yet** — only the mean baseline runs end-to-end.
+  loop. The embedding/perceptual axis is **deferred** (D-METRIC-PERCEPTUAL).
 - **Categorical encoding is synth-friendly but ML-hostile** — see D2 above.
 - **Render duration is 4 seconds** — likely too long (see D3).
 
@@ -188,9 +196,10 @@ These are findings from a prior architectural review. Verify them and report on 
 ## 5. Target architecture
 
 The framework has four layers. The **Synth**, **Data**, and **Evaluation** layers are built;
-**Layer 3 (Models) is started** — the `BaseModel` contract and a trivial baseline exist (2026-06-26),
-enough to run the full train → predict → re-render → metric loop end-to-end, but no real model
-families are implemented yet.
+**Layer 3 (Models) is in progress** — the `BaseModel` contract and a trivial baseline exist
+(2026-06-26), the PyTorch-Lightning training harness is built (#28), and the first real deep family
+(a basic Sound2Synth spectrogram regressor, #19/#31) is implemented. The remaining model families,
+cluster packaging, and the first real results row are still to come.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -207,8 +216,8 @@ families are implemented yet.
                           │
                           ▼
 ┌──────────────────────────────────────────────────────┐
-│  Layer 3 — Models    [STARTED]                       │
-│  BaseModel · GA · CNN · AST · VAE · Flow · Proxy     │
+│  Layer 3 — Models    [IN PROGRESS]                   │
+│  BaseModel · Sound2Synth(basic) · GA · AST · VAE ... │
 └──────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -283,10 +292,14 @@ class ParameterSpace:
 > `MeanParameterBaseline` (`models/mean_parameter_baseline.py`) are built and tested (issue #7) —
 > enough to validate the train → predict path end-to-end on the real corpora. The baseline ignores
 > the audio and predicts the training-set mean (mean for continuous params, majority class for
-> categoricals via averaged one-hot argmax); it is the **naive floor**, not a primary family. **No
-> real model families are implemented yet**. The metric panel (#8) and Evaluator (#9) that close
-> the train → predict → re-render → metric loop are now **built** (see Layer 4 below), so the baseline
-> already produces a full results table. The sketch below is the original design intent; the actual
+> categoricals via averaged one-hot argmax); it is the **naive floor**, not a primary family. The
+> metric panel (#8) and Evaluator (#9) that close the train → predict → re-render → metric loop are
+> now **built** (see Layer 4 below), so the baseline already produces a full results table.
+>
+> **Update (2026-07):** the training harness (`models/training/`, #28) and the **first real deep
+> family** — a *basic* `Sound2SynthSpectrogramRegressor` (`models/sound2synth.py` + `base_deep_model.py`,
+> #19/#31) — are now built. It is a single-spectrogram-branch first cut, not the paper's full
+> multi-modal architecture (future work). The sketch below is the original design intent; the actual
 > `models/base_model.py` is authoritative (e.g. `fit` takes a `RenderedCorpusDataset`, `predict` takes
 > a `torch.Tensor`).
 
@@ -361,9 +374,10 @@ These are inherited from `GEMINI.md` and extended.
 
 ## 7. Recommended next-step sequence
 
-> **Status (2026-06-30):** steps 1–2 and 4–7 are done; step 3 (`SurgeXTWrapper`) was **not** built
-> early — the second synth is still undecided and deferred. The live frontier is **step 8** —
-> implementing real model families, starting with whichever the user prioritises. The original
+> **Status (2026-07):** steps 1–2 and 4–7 are done; step 3 (`SurgeXTWrapper`) was **not** built
+> early — the second synth is still undecided and deferred. **Step 8 is underway**: the training
+> harness (#28) and the first real deep family (a basic Sound2Synth spectrogram regressor, #19/#31)
+> are built; the remaining families and the fuller Sound2Synth architecture come next. The original
 > ordering is kept below for reference.
 
 In strict order. Don't skip ahead.

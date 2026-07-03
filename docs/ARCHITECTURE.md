@@ -113,6 +113,7 @@ Built corpora land under `dataset/<run-name>/` (gitignored).
 | `base_model.py` | `BaseModel`, the contract every family implements: `fit` / `predict` / `save` / `load`. Says *what* a model does, not how it trains. |
 | `base_deep_model.py` | Shared base for deep families: checkpoint save/load and the `predict` decode path over an injected network. Subclasses provide the architecture and `fit`. |
 | `mean_parameter_baseline.py` | Predicts the training-set mean parameter vector no matter the input audio. The floor every family must beat. |
+| `sound2synth.py` | `Sound2SynthSpectrogramRegressor`, the first real deep family (Sound2Synth lineage, issue #19). A VGG11-BN conv net over a log-power STFT of the target audio, emitting the ML-side vector through `ParameterSpace`. A deliberately *basic* first cut — a single spectrogram branch plus a plain MLP head, **not** the paper's multi-modal encoder or grouped-FC parameter classifier (that fuller architecture is future work). |
 
 ### `models/training/` — the PyTorch-Lightning training harness
 

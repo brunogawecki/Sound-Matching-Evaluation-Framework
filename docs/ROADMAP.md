@@ -16,18 +16,22 @@ ordering*; `DECISIONS.md` owns the *why*; GitHub issues own the *do*.** Open dec
 
 Built and run end-to-end once: Layer 2 (data), the Layer 3 `BaseModel` interface + trivial
 `MeanParameterBaseline`, and Layer 4 (evaluation). Corpora exist on disk; the baseline is fitted and
-scored; Phase 2 / Phase 3 milestones are closed.
+scored; Phase 2 / Phase 3 milestones are closed. The Phase 4 **training harness** (PyTorch Lightning,
+`models/training/`) is now built, and the **first real deep family** is implemented — a *basic*
+Sound2Synth spectrogram regressor (`models/sound2synth.py`, `BaseDeepModel`, issue #19/#31) that
+trains through the harness and predicts through the `ParameterSpace` contract.
 
 What does **not** exist yet:
 
-- **No training orchestration.** `BaseModel` (`models/base_model.py`) deliberately defers the
-  training-framework choice to "the first deep family." There is no train/val loop, config system,
-  logging, checkpoint convention, or seeding harness — only the mean baseline's trivial `fit`.
 - **No cluster packaging.** Training is meant to run on an external Linux GPU cluster with no VST
   (D-SELFDESC), but nothing splits dependencies, submits jobs, or moves corpora up / checkpoints
   down.
-- **No real models.** `models/` holds only the ABC + mean baseline.
-- **No real training corpus, no human test set, no benchmark table.**
+- **No first real results row yet.** The Sound2Synth regressor exists and trains locally, but the
+  Phase 4 exit criterion — train on cluster → pull checkpoint → Evaluator scores a held-out split —
+  has not been run.
+- **No fuller Sound2Synth architecture.** The landed model is a single-spectrogram-branch first cut;
+  the paper's multi-modal encoder + grouped-FC parameter classifier is still future work.
+- **No human test set, no benchmark table.**
 
 ## Sequencing — vertical slice first
 
@@ -50,9 +54,13 @@ Goal: a real (non-trivial) results row, produced by training a discriminative mo
 and scoring it through the existing Evaluator.
 
 - **Training harness** — config system, train/val loop, logging, checkpoint convention consumable by
-  `BaseModel.load`, seeding/reproducibility. *(Gated by D-FRAMEWORK.)*
+  `BaseModel.load`, seeding/reproducibility. *(Gated by D-FRAMEWORK.)* **DONE** (#28): PyTorch
+  Lightning harness under `models/training/`.
 - **Discriminative parameter regressor** — first real model family (spectrogram→params, the
-  InverSynth / preset-gen-vae lineage; lowest-risk architecture). First real `BaseModel.fit`.
+  InverSynth / preset-gen-vae lineage; lowest-risk architecture). First real `BaseModel.fit`. **DONE
+  (basic cut)** (#19/#31): `Sound2SynthSpectrogramRegressor` — a VGG11-BN log-power-STFT net with a
+  plain MLP head. The fuller paper architecture (multi-modal encoder + grouped-FC classifier) is
+  deferred to a later sub-project.
 - **Cluster packaging** — dependency split (cluster requirements **without** VST/dawdreamer, per
   D-SELFDESC), environment/container spec, job-submission scripts, corpus-up / checkpoint-down
   transfer, entrypoint.
