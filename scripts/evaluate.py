@@ -29,9 +29,13 @@ import config
 from dataset.torch_dataset import RenderedCorpusDataset
 from evaluation.evaluator import EvaluationResult, Evaluator
 from models.mean_parameter_baseline import MeanParameterBaseline
+from models.sound2synth import Sound2SynthSpectrogramRegressor
 
 # The model classes a checkpoint can be loaded into. One per family as they land.
-MODELS = {"MeanParameterBaseline": MeanParameterBaseline}
+MODELS = {
+    "MeanParameterBaseline": MeanParameterBaseline,
+    "Sound2SynthSpectrogramRegressor": Sound2SynthSpectrogramRegressor,
+}
 
 
 def _require_dexed() -> None:
