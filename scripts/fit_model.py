@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 from dataset.torch_dataset import RenderedCorpusDataset
-from models.Sound2Synth import SpectrogramConvolutionalRegressor
+from models.sound2synth import Sound2SynthSpectrogramRegressor
 from models.training.config import TrainingConfig
 
 
@@ -54,10 +54,10 @@ def main() -> None:
 
     corpus = RenderedCorpusDataset.load(args.corpus)
     validation_corpus = RenderedCorpusDataset.load(args.val) if args.val else None
-    print(f"--- Fitting SpectrogramConvolutionalRegressor on '{corpus.corpus_dir.name}' "
+    print(f"--- Fitting Sound2SynthSpectrogramRegressor on '{corpus.corpus_dir.name}' "
           f"({len(corpus)} samples) ---")
 
-    model = SpectrogramConvolutionalRegressor(
+    model = Sound2SynthSpectrogramRegressor(
         default_root_dir=str(Path(config.BASE_DIR) / "lightning_logs"),
     )
     model.fit(corpus, validation_dataset=validation_corpus, config=training_config)

@@ -1,18 +1,19 @@
-"""Discriminative spectrogram->parameters regressor (issue #19, Sound2Synth lineage).
+"""Sound2Synth-lineage models (Chen et al., 2022; github.com/Sound2Synth/Sound2Synth).
 
-The first real deep family: a VGG11-BN convolutional network over a log-power STFT
-of the target audio, predicting the ML-side parameter vector. It recreates the STFT
-``ConvBackbone`` branch of Sound2Synth (Chen et al., 2022;
-``github.com/Sound2Synth/Sound2Synth``) -- the ``main`` branch only, deliberately the
-lowest-risk architecture -- but emits through this framework's own ``ParameterSpace``
-contract (regression for continuous params, logits for categorical blocks) rather than
-Sound2Synth's quantise-everything-into-bins scheme, so it plugs straight into the
-existing training harness and ``ParameterLoss``.
+Discriminative spectrogram->parameters regressor (issue #19). The first real deep
+family: a VGG11-BN convolutional network over a log-power STFT of the target audio,
+predicting the ML-side parameter vector. It recreates the STFT ``ConvBackbone`` branch
+of Sound2Synth -- the ``main`` branch only, deliberately the lowest-risk architecture --
+but emits through this framework's own ``ParameterSpace`` contract (regression for
+continuous params, logits for categorical blocks) rather than Sound2Synth's
+quantise-everything-into-bins scheme, so it plugs straight into the existing training
+harness and ``ParameterLoss``. Future Sound2Synth variants (e.g. the paper's
+oscillator-attention head) belong in this module too.
 
 Featurisation lives inside ``forward`` (D-REPR: the dataset yields raw waveforms). The
 spectrogram is computed with ``torch.stft`` -- differentiable, device-aware, and part
-of core ``torch`` (no ``torchaudio`` dependency). ``SpectrogramConvolutionalNetwork``
-is the plain ``nn.Module``; ``SpectrogramConvolutionalRegressor`` is the
+of core ``torch`` (no ``torchaudio`` dependency). ``Sound2SynthSpectrogramNetwork``
+is the plain ``nn.Module``; ``Sound2SynthSpectrogramRegressor`` is the
 :class:`BaseDeepModel` family that trains it through the harness. The ``fit`` wiring
 mirrors ``tests/tiny_deep_model.py`` (the harness's reference wiring).
 
@@ -50,7 +51,7 @@ def _convolution_block(in_channels: int, out_channels: int) -> nn.Sequential:
     )
 
 
-class SpectrogramConvolutionalNetwork(nn.Module):
+class Sound2SynthSpectrogramNetwork(nn.Module):
     """Raw audio ``[batch, num_samples]`` -> ML-side vector ``[batch, ml_dimension]``.
 
     A log-power STFT front-end feeds a VGG11-BN convolutional backbone written out layer
@@ -138,8 +139,8 @@ class SpectrogramConvolutionalNetwork(nn.Module):
         return self.head(embedding)
 
 
-class SpectrogramConvolutionalRegressor(BaseDeepModel):
-    """The :class:`BaseDeepModel` family wrapping :class:`SpectrogramConvolutionalNetwork`.
+class Sound2SynthSpectrogramRegressor(BaseDeepModel):
+    """The :class:`BaseDeepModel` family wrapping :class:`Sound2SynthSpectrogramNetwork`.
 
     Only ``_build_network`` and ``fit`` are family-specific; ``save``/``load``/``predict``
     are inherited. The spectrogram + architecture knobs are stored on the instance and
@@ -165,7 +166,7 @@ class SpectrogramConvolutionalRegressor(BaseDeepModel):
         self._default_root_dir = default_root_dir
 
     def _build_network(self, architecture_hparams: Dict[str, Any]) -> nn.Module:
-        return SpectrogramConvolutionalNetwork(
+        return Sound2SynthSpectrogramNetwork(
             ml_dimension=architecture_hparams["ml_dimension"],
             n_fft=architecture_hparams["n_fft"],
             hop_length=architecture_hparams["hop_length"],

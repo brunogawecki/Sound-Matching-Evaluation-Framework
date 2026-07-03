@@ -22,9 +22,9 @@ pytest.importorskip("lightning")  # training-only dependency (cluster-side); ski
 from dataset.builder import DatasetBuilder, RenderSettings
 from dataset.preset_sources import SyntheticPresetSource
 from dataset.torch_dataset import RenderedCorpusDataset
-from models.Sound2Synth import (
-    SpectrogramConvolutionalNetwork,
-    SpectrogramConvolutionalRegressor,
+from models.sound2synth import (
+    Sound2SynthSpectrogramNetwork,
+    Sound2SynthSpectrogramRegressor,
 )
 from synth.parameter_space import ParameterSpace, ParameterSpecification
 
@@ -121,14 +121,14 @@ def logged_metric(log_dir, name) -> list:
 
 def test_forward_maps_audio_batch_to_ml_dimension():
     ml_dimension = 333
-    network = SpectrogramConvolutionalNetwork(ml_dimension=ml_dimension, **TINY_KWARGS)
+    network = Sound2SynthSpectrogramNetwork(ml_dimension=ml_dimension, **TINY_KWARGS)
     audio = torch.randn(3, EXPECTED_SAMPLES)
     output = network(audio)
     assert output.shape == (3, ml_dimension)
 
 
 def test_build_network_is_deterministic_in_hparams():
-    model = SpectrogramConvolutionalRegressor(**TINY_KWARGS)
+    model = Sound2SynthSpectrogramRegressor(**TINY_KWARGS)
     hparams = {"ml_dimension": 12, **TINY_KWARGS}
     first = model._build_network(hparams)
     second = model._build_network(hparams)
@@ -142,7 +142,7 @@ def test_fit_export_load_predict_end_to_end(tmp_path):
     train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
     log_dir = tmp_path / "logs"
 
-    model = SpectrogramConvolutionalRegressor(default_root_dir=str(log_dir), **TINY_KWARGS)
+    model = Sound2SynthSpectrogramRegressor(default_root_dir=str(log_dir), **TINY_KWARGS)
     model.fit(train_dataset, config=training_config())
 
     # Training actually learned: the epoch-mean train_loss fell over the run.
@@ -154,7 +154,7 @@ def test_fit_export_load_predict_end_to_end(tmp_path):
     assert checkpoint_path.exists()
 
     # Fresh instance loads with no dataset and no VST, then predicts.
-    reloaded = SpectrogramConvolutionalRegressor(**TINY_KWARGS)
+    reloaded = Sound2SynthSpectrogramRegressor(**TINY_KWARGS)
     reloaded.load(checkpoint_path)
 
     audio, _ = train_dataset[0]
