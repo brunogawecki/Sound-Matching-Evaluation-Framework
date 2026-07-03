@@ -23,7 +23,7 @@ this module -- and hence the eval-path ``load``/``predict`` inherited from
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional
 
 import torch
 from torch import nn
@@ -34,30 +34,31 @@ from models.training.checkpoint import network_state_dict_from_lightning_checkpo
 from models.training.config import TrainingConfig
 from models.training.loss import ParameterLoss
 
-# A conv-stack schedule (torchvision-VGG style): each int is a conv layer's output
-# channel count, "M" is a 2x2 max-pool. This is the VGG11 schedule Sound2Synth's
-# ``ConvBackbone`` uses -- 8 conv layers, 5 pools, channels 1->64->...->512.
-ConvConfig = List[Union[int, str]]
-DEFAULT_CONV_CONFIG: ConvConfig = [
-    64, "M", 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M",
-]
-
-# Fixed architecture constants (not tuned per-instance): the adaptive-pool output is
-# 2x2 (so the flattened width is last_channels * 4, independent of spectrogram size),
-# LeakyReLU's slope, and the log-power floor. Sound2Synth used ``power=2.0`` then a log.
-_ADAPTIVE_POOL_SIZE = 2
+# Fixed architecture constants (LeakyReLU slope and the log-power floor). Sound2Synth's
+# ConvBackbone used ``power=2.0`` then a log; the backbone below is written out layer by
+# layer to stay byte-faithful to ``model/conv_backbone.py`` in the Sound2Synth repo.
 _NEGATIVE_SLOPE = 0.01
 _LOG_EPSILON = 1e-5
+
+
+def _convolution_block(in_channels: int, out_channels: int) -> nn.Sequential:
+    """A 3x3 conv + BatchNorm + LeakyReLU block (Sound2Synth's ``CONV`` helper)."""
+    return nn.Sequential(
+        nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+        nn.BatchNorm2d(out_channels),
+        nn.LeakyReLU(_NEGATIVE_SLOPE),
+    )
 
 
 class SpectrogramConvolutionalNetwork(nn.Module):
     """Raw audio ``[batch, num_samples]`` -> ML-side vector ``[batch, ml_dimension]``.
 
-    A log-power STFT front-end feeds a VGG11-BN conv stack; adaptive max-pooling to a
-    fixed ``2x2`` grid makes the fully-connected sizes independent of the spectrogram
-    dimensions. The output is raw (no softmax/sigmoid): continuous slots are raw floats
-    and categorical blocks are logits, exactly what :class:`ParameterLoss` and
-    ``ParameterSpace.ml_vector_to_synth_dict`` consume.
+    A log-power STFT front-end feeds a VGG11-BN convolutional backbone written out layer
+    by layer to match Sound2Synth's ``ConvBackbone`` (``model/conv_backbone.py``) exactly:
+    8 conv blocks, 4 max-pools, a final ``AdaptiveMaxPool2d((2,2))``, then a 2048->2048
+    embedding. Only the head differs from the paper -- an MLP to ``ml_dimension`` raw
+    outputs (continuous floats + categorical logits), the layout :class:`ParameterLoss`
+    and ``ParameterSpace.ml_vector_to_synth_dict`` consume.
     """
 
     def __init__(
@@ -66,8 +67,6 @@ class SpectrogramConvolutionalNetwork(nn.Module):
         n_fft: int = 1024,
         hop_length: int = 256,
         win_length: int = 1024,
-        conv_config: Optional[ConvConfig] = None,
-        embedding_dim: int = 512,
         head_hidden_dim: int = 512,
         dropout: float = 0.3,
     ) -> None:
@@ -79,38 +78,37 @@ class SpectrogramConvolutionalNetwork(nn.Module):
         # follows the module across ``.to(device)`` (kept out of the saved state_dict).
         self.register_buffer("_window", torch.hann_window(win_length), persistent=False)
 
-        conv_config = list(conv_config) if conv_config is not None else list(DEFAULT_CONV_CONFIG)
-        self.features = self._build_conv_stack(conv_config)
-        self.adaptive_pool = nn.AdaptiveMaxPool2d((_ADAPTIVE_POOL_SIZE, _ADAPTIVE_POOL_SIZE))
-
-        last_channels = [item for item in conv_config if isinstance(item, int)][-1]
-        flattened_dim = last_channels * _ADAPTIVE_POOL_SIZE * _ADAPTIVE_POOL_SIZE
+        # VGG11-BN backbone, byte-faithful to Sound2Synth's ConvBackbone: channels
+        # 1->64->128->256->256->512->512->512->512, a max-pool after blocks 1, 2, 4 and 6,
+        # then AdaptiveMaxPool2d((2,2)) after block 8 (note: no 5th max-pool). The adaptive
+        # pool fixes the output at 512x2x2 = 2048 regardless of the spectrogram size.
+        self.convolutional_backbone = nn.Sequential(
+            _convolution_block(1, 64),
+            nn.MaxPool2d(2, 2),
+            _convolution_block(64, 128),
+            nn.MaxPool2d(2, 2),
+            _convolution_block(128, 256),
+            _convolution_block(256, 256),
+            nn.MaxPool2d(2, 2),
+            _convolution_block(256, 512),
+            _convolution_block(512, 512),
+            nn.MaxPool2d(2, 2),
+            _convolution_block(512, 512),
+            _convolution_block(512, 512),
+            nn.AdaptiveMaxPool2d((2, 2)),
+        )
         self.embedding = nn.Sequential(
-            nn.Linear(flattened_dim, embedding_dim),
+            nn.Linear(2048, 2048),
             nn.LeakyReLU(_NEGATIVE_SLOPE),
         )
+        # The head is ours, not the paper's classifier: a plain MLP to the flat ML-side
+        # vector (the paper instead has two grouped-FC classification heads).
         self.head = nn.Sequential(
-            nn.Linear(embedding_dim, head_hidden_dim),
+            nn.Linear(2048, head_hidden_dim),
             nn.LeakyReLU(_NEGATIVE_SLOPE),
             nn.Dropout(dropout),
             nn.Linear(head_hidden_dim, ml_dimension),
         )
-
-    @staticmethod
-    def _build_conv_stack(conv_config: ConvConfig) -> nn.Sequential:
-        """Build the VGG-style Conv2d+BN+LeakyReLU / MaxPool stack from a schedule."""
-        layers: List[nn.Module] = []
-        in_channels = 1
-        for item in conv_config:
-            if item == "M":
-                layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
-            else:
-                out_channels = int(item)
-                layers.append(nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1))
-                layers.append(nn.BatchNorm2d(out_channels))
-                layers.append(nn.LeakyReLU(_NEGATIVE_SLOPE))
-                in_channels = out_channels
-        return nn.Sequential(*layers)
 
     def _log_power_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
         """``log(|STFT|^2 + eps)`` as ``[batch, 1, frequency, frames]``."""
@@ -132,11 +130,10 @@ class SpectrogramConvolutionalNetwork(nn.Module):
         log_power = torch.log(power + _LOG_EPSILON)
         return log_power.unsqueeze(1)  # add the single input channel
 
-    def forward(self, audio: torch.Tensor) -> torch.Tensor:
-        spectrogram = self._log_power_spectrogram(audio)
-        features = self.features(spectrogram)
-        pooled = self.adaptive_pool(features)
-        flattened = torch.flatten(pooled, start_dim=1)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        spectrogram = self._log_power_spectrogram(x)
+        features = self.convolutional_backbone(spectrogram)
+        flattened = torch.flatten(features, start_dim=1)  # [batch, 2048]
         embedding = self.embedding(flattened)
         return self.head(embedding)
 
@@ -155,8 +152,6 @@ class SpectrogramConvolutionalRegressor(BaseDeepModel):
         n_fft: int = 1024,
         hop_length: int = 256,
         win_length: int = 1024,
-        conv_config: Optional[ConvConfig] = None,
-        embedding_dim: int = 512,
         head_hidden_dim: int = 512,
         dropout: float = 0.3,
         default_root_dir: str = "lightning_logs",
@@ -165,8 +160,6 @@ class SpectrogramConvolutionalRegressor(BaseDeepModel):
         self._n_fft = n_fft
         self._hop_length = hop_length
         self._win_length = win_length
-        self._conv_config = list(conv_config) if conv_config is not None else list(DEFAULT_CONV_CONFIG)
-        self._embedding_dim = embedding_dim
         self._head_hidden_dim = head_hidden_dim
         self._dropout = dropout
         self._default_root_dir = default_root_dir
@@ -177,8 +170,6 @@ class SpectrogramConvolutionalRegressor(BaseDeepModel):
             n_fft=architecture_hparams["n_fft"],
             hop_length=architecture_hparams["hop_length"],
             win_length=architecture_hparams["win_length"],
-            conv_config=architecture_hparams["conv_config"],
-            embedding_dim=architecture_hparams["embedding_dim"],
             head_hidden_dim=architecture_hparams["head_hidden_dim"],
             dropout=architecture_hparams["dropout"],
         )
@@ -206,8 +197,6 @@ class SpectrogramConvolutionalRegressor(BaseDeepModel):
             "n_fft": self._n_fft,
             "hop_length": self._hop_length,
             "win_length": self._win_length,
-            "conv_config": list(self._conv_config),
-            "embedding_dim": self._embedding_dim,
             "head_hidden_dim": self._head_hidden_dim,
             "dropout": self._dropout,
         }

@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 from dataset.torch_dataset import RenderedCorpusDataset
-from models.spectrogram_convolutional_regressor import SpectrogramConvolutionalRegressor
+from models.Sound2Synth import SpectrogramConvolutionalRegressor
 from models.training.config import TrainingConfig
 
 
