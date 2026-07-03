@@ -139,6 +139,18 @@ FIT_BASELINE = ScriptSpec(
     ),
 )
 
+FIT_SOUND2SYNTH = ScriptSpec(
+    key="Sound2SynthSpectrogramRegressor",
+    script="scripts/fit_model.py",
+    description="Fit the spectrogram-CNN discriminative regressor (Sound2Synth lineage; "
+                "log-STFT VGG11-BN over the target audio; needs torch + lightning).",
+    args=(
+        ArgSpec("corpus", "--corpus", "path", "", required=True, help="Training corpus directory."),
+        ArgSpec("out", "--out", "path", "",
+                help="Checkpoint path to write. Blank uses checkpoints/spectrogram_cnn.pt."),
+    ),
+)
+
 EVALUATE = ScriptSpec(
     key="evaluate",
     script="scripts/evaluate.py",
@@ -149,7 +161,8 @@ EVALUATE = ScriptSpec(
         ArgSpec("corpus", "--corpus", "path", "", required=True,
                 help="Eval corpus directory (must be fresh-process)."),
         ArgSpec("model", "--model", "choice", "MeanParameterBaseline",
-                choices=("MeanParameterBaseline",), help="Model class to load the checkpoint into."),
+                choices=("MeanParameterBaseline", "Sound2SynthSpectrogramRegressor"),
+                help="Model class to load the checkpoint into."),
         ArgSpec("out", "--out", "path", "", help="Results root. Blank uses <project>/results."),
     ),
 )
@@ -162,8 +175,9 @@ BUILD_SOURCES = {
     "presetgen": BUILD_PRESETGEN,
 }
 
-# The models the "Fit model" page can train (label -> fit spec). Baseline only
-# today; a future train_deep.py registers here and gets a working page for free.
+# The models the "Fit model" page can train (label -> fit spec). Each new fit
+# script registers here and gets a working page for free (the "generic seam").
 FIT_MODELS = {
     "MeanParameterBaseline": FIT_BASELINE,
+    "Sound2SynthSpectrogramRegressor": FIT_SOUND2SYNTH,
 }

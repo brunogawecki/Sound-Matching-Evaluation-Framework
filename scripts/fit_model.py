@@ -1,18 +1,10 @@
-"""Fit the spectrogram-CNN discriminative regressor on a corpus and save a checkpoint.
+"""Fit the spectrogram-CNN regressor on a corpus and save a checkpoint (issue #19).
 
-The first real deep family (issue #19, Sound2Synth lineage): a VGG11-BN conv net over
-a log-power STFT of the target audio. Fitting drives the training harness end-to-end
-(config -> DataModule -> LightningRegressor -> Trainer -> exported checkpoint) and needs
-no VST -- only the corpus's rendered audio + ML-side targets. This mirrors the real flow
-(train + save on the cluster, then load + eval locally) and produces the checkpoint
-``scripts/evaluate.py`` loads.
+Drives the training harness end-to-end (config -> DataModule -> LightningRegressor ->
+Trainer -> exported checkpoint) and needs no VST, only the corpus's rendered audio +
+ML-side targets. Produces the checkpoint ``scripts/evaluate.py`` loads.
 
     python scripts/fit_model.py --corpus dataset/run_A_train --config training_config.yaml
-
-    --corpus  training corpus directory                            [default: dataset/run_A_train]
-    --out     checkpoint path to write       [default: <project>/checkpoints/spectrogram_cnn.pt]
-    --config  training_config.yaml (harness knobs); omit for harness defaults  [optional]
-    --val     optional explicit validation corpus directory                    [optional]
 """
 import argparse
 import sys

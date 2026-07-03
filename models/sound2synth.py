@@ -1,26 +1,15 @@
 """Sound2Synth-lineage models (Chen et al., 2022; github.com/Sound2Synth/Sound2Synth).
 
-Discriminative spectrogram->parameters regressor (issue #19). The first real deep
-family: a VGG11-BN convolutional network over a log-power STFT of the target audio,
-predicting the ML-side parameter vector. It recreates the STFT ``ConvBackbone`` branch
-of Sound2Synth -- the ``main`` branch only, deliberately the lowest-risk architecture --
-but emits through this framework's own ``ParameterSpace`` contract (regression for
-continuous params, logits for categorical blocks) rather than Sound2Synth's
-quantise-everything-into-bins scheme, so it plugs straight into the existing training
-harness and ``ParameterLoss``. Future Sound2Synth variants (e.g. the paper's
-oscillator-attention head) belong in this module too.
+Discriminative spectrogram->parameters regressor (issue #19), the first real deep
+family. A VGG11-BN conv net over a log-power STFT of the target audio, emitting the
+ML-side parameter vector (continuous floats + categorical logits) through this
+framework's ``ParameterSpace`` contract rather than Sound2Synth's binning scheme, so it
+trains through the existing harness and ``ParameterLoss``.
 
-Featurisation lives inside ``forward`` (D-REPR: the dataset yields raw waveforms). The
-spectrogram is computed with ``torch.stft`` -- differentiable, device-aware, and part
-of core ``torch`` (no ``torchaudio`` dependency). ``Sound2SynthSpectrogramNetwork``
-is the plain ``nn.Module``; ``Sound2SynthSpectrogramRegressor`` is the
-:class:`BaseDeepModel` family that trains it through the harness. The ``fit`` wiring
-mirrors ``tests/tiny_deep_model.py`` (the harness's reference wiring).
-
-Lightning (and the harness modules that import it) is imported lazily inside ``fit`` so
-this module -- and hence the eval-path ``load``/``predict`` inherited from
-:class:`BaseDeepModel` -- stays importable without the training-only dependency
-(D-FRAMEWORK); ``models/__init__`` imports this module eagerly.
+``Sound2SynthSpectrogramNetwork`` is the plain ``nn.Module`` (STFT featurisation lives in
+``forward``, per D-REPR); ``Sound2SynthSpectrogramRegressor`` trains it. Lightning is
+imported lazily in ``fit`` so the eval path (load/predict) needs no training deps
+(D-FRAMEWORK).
 """
 from __future__ import annotations
 
@@ -35,9 +24,7 @@ from models.training.checkpoint import network_state_dict_from_lightning_checkpo
 from models.training.config import TrainingConfig
 from models.training.loss import ParameterLoss
 
-# Fixed architecture constants (LeakyReLU slope and the log-power floor). Sound2Synth's
-# ConvBackbone used ``power=2.0`` then a log; the backbone below is written out layer by
-# layer to stay byte-faithful to ``model/conv_backbone.py`` in the Sound2Synth repo.
+# Fixed architecture constants: LeakyReLU slope and the log-power floor.
 _NEGATIVE_SLOPE = 0.01
 _LOG_EPSILON = 1e-5
 
@@ -54,12 +41,9 @@ def _convolution_block(in_channels: int, out_channels: int) -> nn.Sequential:
 class Sound2SynthSpectrogramNetwork(nn.Module):
     """Raw audio ``[batch, num_samples]`` -> ML-side vector ``[batch, ml_dimension]``.
 
-    A log-power STFT front-end feeds a VGG11-BN convolutional backbone written out layer
-    by layer to match Sound2Synth's ``ConvBackbone`` (``model/conv_backbone.py``) exactly:
-    8 conv blocks, 4 max-pools, a final ``AdaptiveMaxPool2d((2,2))``, then a 2048->2048
-    embedding. Only the head differs from the paper -- an MLP to ``ml_dimension`` raw
-    outputs (continuous floats + categorical logits), the layout :class:`ParameterLoss`
-    and ``ParameterSpace.ml_vector_to_synth_dict`` consume.
+    A log-power STFT front-end feeds a VGG11-BN backbone matching Sound2Synth's
+    ``ConvBackbone``. Only the head is ours: an MLP to ``ml_dimension`` raw outputs
+    (continuous floats + categorical logits) that :class:`ParameterLoss` consumes.
     """
 
     def __init__(
@@ -75,14 +59,12 @@ class Sound2SynthSpectrogramNetwork(nn.Module):
         self._n_fft = n_fft
         self._hop_length = hop_length
         self._win_length = win_length
-        # Non-persistent: deterministic from win_length, rebuilt in __init__, and it
-        # follows the module across ``.to(device)`` (kept out of the saved state_dict).
+        # Non-persistent: deterministic from win_length, follows .to(device), kept out of state_dict.
         self.register_buffer("_window", torch.hann_window(win_length), persistent=False)
 
-        # VGG11-BN backbone, byte-faithful to Sound2Synth's ConvBackbone: channels
-        # 1->64->128->256->256->512->512->512->512, a max-pool after blocks 1, 2, 4 and 6,
-        # then AdaptiveMaxPool2d((2,2)) after block 8 (note: no 5th max-pool). The adaptive
-        # pool fixes the output at 512x2x2 = 2048 regardless of the spectrogram size.
+        # VGG11-BN backbone matching Sound2Synth's ConvBackbone: channels
+        # 1->64->128->256->256->512->512->512->512, max-pool after blocks 1, 2, 4, 6 (no 5th),
+        # then AdaptiveMaxPool2d((2,2)) -> fixed 512x2x2 = 2048 regardless of spectrogram size.
         self.convolutional_backbone = nn.Sequential(
             _convolution_block(1, 64),
             nn.MaxPool2d(2, 2),
@@ -102,8 +84,7 @@ class Sound2SynthSpectrogramNetwork(nn.Module):
             nn.Linear(2048, 2048),
             nn.LeakyReLU(_NEGATIVE_SLOPE),
         )
-        # The head is ours, not the paper's classifier: a plain MLP to the flat ML-side
-        # vector (the paper instead has two grouped-FC classification heads).
+        # Our head, not the paper's grouped-FC classifier: a plain MLP to the flat ML-side vector.
         self.head = nn.Sequential(
             nn.Linear(2048, head_hidden_dim),
             nn.LeakyReLU(_NEGATIVE_SLOPE),
@@ -113,9 +94,7 @@ class Sound2SynthSpectrogramNetwork(nn.Module):
 
     def _log_power_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
         """``log(|STFT|^2 + eps)`` as ``[batch, 1, frequency, frames]``."""
-        # ``.float()``: torch.stft needs float32/64 -- under bf16-mixed autocast the
-        # input would otherwise arrive as bf16 and error. The conv stack downstream is
-        # free to autocast normally.
+        # torch.stft needs float32/64; under bf16-mixed autocast the input arrives bf16.
         audio = audio.float()
         complex_stft = torch.stft(
             audio,
@@ -142,10 +121,9 @@ class Sound2SynthSpectrogramNetwork(nn.Module):
 class Sound2SynthSpectrogramRegressor(BaseDeepModel):
     """The :class:`BaseDeepModel` family wrapping :class:`Sound2SynthSpectrogramNetwork`.
 
-    Only ``_build_network`` and ``fit`` are family-specific; ``save``/``load``/``predict``
-    are inherited. The spectrogram + architecture knobs are stored on the instance and
-    flow into ``architecture_hparams`` at ``fit`` time, so ``load`` can rebuild the exact
-    network before restoring weights (no VST, no Lightning).
+    Only ``_build_network`` and ``fit`` are family-specific (save/load/predict are inherited).
+    The spectrogram + architecture knobs flow into ``architecture_hparams`` at ``fit`` time so
+    ``load`` can rebuild the exact network before restoring weights (no VST, no Lightning).
     """
 
     def __init__(
@@ -181,8 +159,7 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
         validation_dataset: Optional[RenderedCorpusDataset] = None,
         config: Optional[Dict[str, object]] = None,
     ) -> None:
-        # Lazy: the training-only Lightning stack (D-FRAMEWORK) is imported here so the
-        # module stays importable on the eval path (load/predict need no Lightning).
+        # Lazy: the training-only Lightning stack (D-FRAMEWORK) stays off the eval path.
         import lightning.pytorch as pl
 
         from models.training.data_module import CorpusDataModule
@@ -218,7 +195,7 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
         )
         trainer.fit(lightning_regressor, datamodule=data_module)
 
-        # Export step: load the best .ckpt's network weights, then register the network.
+        # Load the best checkpoint's weights, then register the trained network.
         best_path = trainer.checkpoint_callback.best_model_path
         if best_path:
             network.load_state_dict(network_state_dict_from_lightning_checkpoint(best_path))
