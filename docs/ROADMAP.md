@@ -63,7 +63,10 @@ and scoring it through the existing Evaluator.
   deferred to a later sub-project.
 - **Cluster packaging** — dependency split (cluster requirements **without** VST/dawdreamer, per
   D-SELFDESC), environment/container spec, job-submission scripts, corpus-up / checkpoint-down
-  transfer, entrypoint.
+  transfer, entrypoint. **DONE** (#20): `requirements-cluster.txt` finalized as the complete VST-free
+  split, plus `cluster/` (sbatch job, `cluster.env` template, smoke config, `push_corpus.sh` /
+  `pull_checkpoint.sh`, README walkthrough) for the PUT SLURM cluster. No library changes — the
+  harness was already SLURM-aware. See **D-CLUSTER** in `DECISIONS.md`.
 - **Training corpus from preset-gen-vae** — the human DX7 collection at
   `paper_repos/preset-gen-vae/synth/dexed_presets.sqlite`. Note: that path is currently a **Git LFS
   pointer** (the ~25.6 MB DB is not pulled), and the data is stored as **parameter vectors, not
