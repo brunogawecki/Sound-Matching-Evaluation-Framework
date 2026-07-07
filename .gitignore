@@ -26,3 +26,7 @@ docs/walkthroughs/
 # future neural checkpoints (.ckpt/.pt) out of history.
 /checkpoints/
 /results/
+
+# PyTorch Lightning's default autolog output (metrics.csv + checkpoints per
+# run). Regenerable, same rationale as /checkpoints/ and /results/ above.
+/lightning_logs/
