@@ -700,6 +700,49 @@ defaults from the discriminative-regressor lineage.
 
 ---
 
+### D-CLUSTER — Cluster packaging: conda + pip, git-clone provenance, /home-in-place (LOCKED 2026-07-06)
+
+**Decision**: how the training path is packaged for the PUT Poznań SLURM cluster (`hgx` partition,
+A100-80GB, `slurm.cs.put.poznan.pl`). Six choices, all grounded in the cluster guide
+(`put-gpu-access.pdf`) and the confirmed VST-free import chain. Delivered under `cluster/` + a
+finalized root `requirements-cluster.txt`; **no library code changes** (the harness was already
+SLURM-aware — `models/training/trainer_factory.py` attaches `SLURMEnvironment(auto_requeue=True)`
+when SLURM is detected, per D-FRAMEWORK).
+
+1. **Environment: conda + pip.** `conda create -n smef python=3.11`, then
+   `pip install -r requirements-cluster.txt`. Conda is the guide's supported install route (no
+   Docker) and only supplies a user-space Python 3.11 without root; pip installs the actual deps. The
+   requirements file **is** the dependency-split artifact.
+2. **`requirements-cluster.txt` is the complete VST-free split**, not an add-on. It finalizes the
+   #22 stub (which listed only `lightning`/`pyyaml`) into the full base-minus-VST set: `numpy`,
+   `scipy`, `pandas`, `python-dotenv`, `torch` + `lightning`, `pyyaml`. Dropped vs. base
+   `requirements.txt`: `dawdreamer`, `librosa`, `pyloudnorm`, `streamlit`, `tqdm`
+   (render/eval/dashboard, none reached by the training import chain — D-SELFDESC / D-EVAL). Pinned
+   to the local dev versions
+   for reproducible runs.
+3. **Code sync: git clone + `git pull`.** The repo is public, so no auth on the cluster, and every
+   run is traceable to a commit.
+4. **Corpus: `rsync -avP` to `/home`, read in place.** `/home` is shared Lustre across all nodes; no
+   node-local `/raid` staging (premature at ~10 GB). The cluster corpus path is passed through the
+   existing `--corpus` flag.
+5. **Machine-specific values via gitignored `cluster/cluster.env`** (+ committed
+   `cluster.env.example`), mirroring the repo's `.env` convention — no SSH target, account, or path
+   is hardcoded in a committed script. Sourced by both the sbatch job and the laptop transfer
+   scripts. The SLURM billing account is passed as `sbatch -A "$SLURM_ACCOUNT" cluster/train.sbatch`
+   because `-A` is a submission-time flag the `#SBATCH` body cannot read.
+6. **Docs-first: `cluster/README.md` walkthrough + two transfer scripts** (`push_corpus.sh`,
+   `pull_checkpoint.sh`). One-time setup and submit/monitor are documented, not scripted (they run
+   rarely and vary); only the recurring rsync pair is scripted. The README doubles as the thesis
+   Implementation-chapter source.
+
+**Acceptance bar (smoke slice).** #20 closes on one end-to-end reduced-scale pass: a short sbatch job
+(`smoke_config.yaml`, 2 epochs, single GPU, `--time` well under the 24 h cap) on the real corpus →
+checkpoint pulled down → loads + predicts locally. This proves the packaging without waiting for a
+full run. `auto_requeue` on SIGTERM is treated as an untested safety net, not verified here. The full
+run reuses `train.sbatch` with a fuller config and a larger `--time`.
+
+---
+
 ## OPEN
 
 ### D4 — Human preset source for the test set (deferred by user; importer built 2026-06-24)

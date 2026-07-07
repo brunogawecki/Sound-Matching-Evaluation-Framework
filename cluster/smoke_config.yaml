@@ -1,0 +1,25 @@
+# Reduced-scale training config for the issue #20 acceptance ("smoke") run: prove
+# the end-to-end cluster path (submit -> train on GPU -> export checkpoint) on the
+# real corpus without waiting for a full run. Two epochs on one A100 with a small
+# seeded validation split. Parsed by TrainingConfig.from_yaml; unknown keys error.
+#
+# The full training run reuses train.sbatch with a fuller config (more epochs, no
+# val_fraction cap, etc.); this file is only the acceptance slice.
+seed: 0
+
+data:
+  batch_size: 64
+  num_workers: 8          # matches #SBATCH --cpus-per-task=8
+  pin_memory: true
+  persistent_workers: true
+  val_fraction: 0.1       # seeded sample-level split from the train corpus
+
+trainer:
+  max_epochs: 2
+  precision: bf16-mixed   # A100
+  accelerator: gpu        # fail loud if no GPU is visible (we requested --gres=gpu:1)
+  devices: 1
+  strategy: auto
+  log_every_n_steps: 10
+  deterministic: false    # AdaptiveMaxPool2d has no deterministic CUDA backward;
+                          # seed still fixes RNG. Full run: revisit (warn-only vs avg-pool).
