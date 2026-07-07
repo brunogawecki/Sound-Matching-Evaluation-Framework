@@ -177,3 +177,30 @@ def test_list_corpora_reads_run_summary(tmp_path, monkeypatch):
     assert corpora[0].name == "demo_train"
     assert corpora[0].num_samples == 5
     assert corpora[0].fresh_process is True
+
+
+def test_list_saved_audio_samples_empty_when_no_audio_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "RESULTS_DIR", tmp_path)
+    assert discovery.list_saved_audio_samples("demo_test", "MeanParameterBaseline") == []
+
+
+def test_list_saved_audio_samples_returns_sorted_stems(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "RESULTS_DIR", tmp_path)
+    audio_dir = tmp_path / "demo_test" / "MeanParameterBaseline" / "audio"
+    audio_dir.mkdir(parents=True)
+    for sample_id in ("sample_000002", "sample_000000", "sample_000001"):
+        (audio_dir / f"{sample_id}.wav").write_bytes(b"")
+    assert discovery.list_saved_audio_samples("demo_test", "MeanParameterBaseline") == [
+        "sample_000000", "sample_000001", "sample_000002",
+    ]
+
+
+def test_original_and_predicted_audio_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "DATASET_DIR", tmp_path / "dataset")
+    monkeypatch.setattr(discovery, "RESULTS_DIR", tmp_path / "results")
+    assert discovery.original_audio_path("demo_test", "sample_000000") == (
+        tmp_path / "dataset" / "demo_test" / "audio" / "sample_000000.wav"
+    )
+    assert discovery.predicted_audio_path("demo_test", "MeanParameterBaseline", "sample_000000") == (
+        tmp_path / "results" / "demo_test" / "MeanParameterBaseline" / "audio" / "sample_000000.wav"
+    )

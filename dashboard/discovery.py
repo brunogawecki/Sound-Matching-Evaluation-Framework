@@ -98,3 +98,25 @@ def list_result_runs() -> List[ResultRun]:
 def load_summary(path: Path) -> Dict:
     """Read an eval_summary.json / run_summary.json (``{}`` on failure)."""
     return _read_json(path)
+
+
+def list_saved_audio_samples(corpus: str, model: str) -> List[str]:
+    """Sample ids with a saved prediction WAV for one eval run (``--save-audio``).
+
+    Sorted stems of ``results/<corpus>/<model>/audio/*.wav`` -- empty if the run
+    predates ``--save-audio`` or was evaluated without it (D-EVAL update).
+    """
+    audio_dir = RESULTS_DIR / corpus / model / "audio"
+    if not audio_dir.exists():
+        return []
+    return sorted(path.stem for path in audio_dir.glob("*.wav"))
+
+
+def original_audio_path(corpus: str, sample_id: str) -> Path:
+    """Where a corpus sample's target WAV lives (``dataset/<corpus>/audio/<id>.wav``)."""
+    return DATASET_DIR / corpus / "audio" / f"{sample_id}.wav"
+
+
+def predicted_audio_path(corpus: str, model: str, sample_id: str) -> Path:
+    """Where an eval run's saved prediction WAV lives, if ``--save-audio`` wrote one."""
+    return RESULTS_DIR / corpus / model / "audio" / f"{sample_id}.wav"
