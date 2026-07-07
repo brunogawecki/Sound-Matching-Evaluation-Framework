@@ -25,6 +25,12 @@ set -euo pipefail
 # Resolve machine-specific paths / env name (gitignored; see cluster.env.example).
 source cluster/cluster.env
 
+# Export wandb settings so the python process inherits them. Defaults keep
+# `set -u` happy when cluster.env omits them.
+export WANDB_API_KEY="${WANDB_API_KEY:-}"
+export WANDB_ENTITY="${WANDB_ENTITY:-}"
+export WANDB_MODE="${WANDB_MODE:-online}"
+
 cd "$REMOTE_REPO_DIR"
 
 # Activate the conda env non-interactively (a batch shell has no `conda init`).
