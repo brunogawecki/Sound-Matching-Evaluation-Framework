@@ -90,14 +90,14 @@ class DataConfig:
 class LoggerConfig:
     """Experiment-tracking settings.
 
-    ``CSVLogger`` is always attached (offline-safe local metrics). Setting
-    ``wandb`` to ``True`` additionally attaches a ``WandbLogger``. ``project`` and
-    ``entity`` fall back to the ``WANDB_PROJECT`` / ``WANDB_ENTITY`` environment
-    variables when ``None``; the API key and online/offline mode come from
-    ``WANDB_API_KEY`` / ``WANDB_MODE`` (see ``cluster/cluster.env.example``).
+    ``CSVLogger`` is always attached; setting ``wandb`` to ``True`` additionally
+    attaches a ``WandbLogger``. ``entity`` is the wandb user/team namespace a run
+    is logged under (wandb.ai/<entity>/<project>); ``None`` uses the API key's
+    default entity. The API key and online/offline mode are read from the
+    environment (``WANDB_API_KEY`` / ``WANDB_MODE``, see ``cluster/cluster.env.example``).
     """
     wandb: bool = False
-    project: Optional[str] = None
+    project: str = "Sound-Matching-Evaluation-Framework"
     entity: Optional[str] = None
     run_name: Optional[str] = None
 
