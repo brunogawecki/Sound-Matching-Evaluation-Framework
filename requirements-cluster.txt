@@ -23,3 +23,7 @@ torch==2.12.1
 # Training-only (models/training/): Lightning harness + YAML config parsing.
 lightning==2.6.5
 pyyaml==6.0.3
+
+# Experiment tracking (opt-in via `logger.wandb: true`; models/training/trainer_factory).
+# API key + online/offline mode come from the WANDB_* env (see cluster/cluster.env.example).
+wandb==0.28.0

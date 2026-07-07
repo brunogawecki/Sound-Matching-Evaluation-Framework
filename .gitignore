@@ -34,3 +34,7 @@ docs/walkthroughs/
 # SLURM's default per-job stdout capture (sbatch writes slurm-<JOBID>.out in
 # the submission dir). Regenerable, same rationale as above.
 slurm-*.out
+
+# wandb writes its run dir under the trainer's default_root_dir (lightning_logs,
+# already ignored above); this defensive entry covers a run started from another cwd.
+wandb/
