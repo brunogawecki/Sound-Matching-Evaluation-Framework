@@ -16,8 +16,8 @@ cluster; everything else stays on the laptop.
 | `../requirements-cluster.txt` | cluster | The complete VST-free dependency set (pinned). |
 | `cluster.env.example` | both | Template for the gitignored `cluster.env` (paths, SSH target, account). |
 | `train.sbatch` | cluster | SLURM job: activates the conda env and runs `scripts/fit_model.py`. |
-| `smoke_config.yaml` | cluster | Reduced-scale config for the acceptance run (2 epochs). |
-| `full_config.yaml` | cluster | Full training run (30 epochs, Sound2Synth paper hyperparameters). |
+| `training_configs/smoke_config.yaml` | cluster | Reduced-scale config for the acceptance run (2 epochs). |
+| `training_configs/full_config.yaml` | cluster | Full training run (30 epochs, Sound2Synth paper hyperparameters). |
 | `push_corpus.sh` | laptop | `rsync` a corpus dir up to the cluster. |
 | `pull_checkpoint.sh` | laptop | `rsync` the trained checkpoint (+ logs) back down. |
 
@@ -159,12 +159,12 @@ above) — the transfer scripts read it from wherever you run them.
 
 ## The full run
 
-`train.sbatch` + `smoke_config.yaml` is the reduced-scale acceptance slice; `full_config.yaml`
-is the real run (30 epochs, `val_fraction: 0.1`, hyperparameters carried over from the
-Sound2Synth paper's own `train.py`/`sound2synth.py` defaults where `models/training/` supports
-them — see `docs/PAPER_CANDIDATES.md`). Point `TRAINING_CONFIG=cluster/full_config.yaml` in
-`cluster.env` to use it; `train.sbatch`'s `--time=12:00:00` is already sized for it. Nothing
-else changes.
+`train.sbatch` + `training_configs/smoke_config.yaml` is the reduced-scale acceptance slice;
+`training_configs/full_config.yaml` is the real run (30 epochs, `val_fraction: 0.1`,
+hyperparameters carried over from the Sound2Synth paper's own `train.py`/`sound2synth.py`
+defaults where `models/training/` supports them — see `docs/PAPER_CANDIDATES.md`). Point
+`TRAINING_CONFIG=cluster/training_configs/full_config.yaml` in `cluster.env` to use it;
+`train.sbatch`'s `--time=12:00:00` is already sized for it. Nothing else changes.
 
 ## Experiment tracking (wandb)
 

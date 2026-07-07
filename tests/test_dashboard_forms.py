@@ -102,14 +102,14 @@ def test_fit_model_full_command():
     argv = build_command(
         FIT_MODEL,
         {"model": "Sound2SynthSpectrogramRegressor", "corpus": "dataset/run_A_train",
-         "out": "checkpoints/spectrogram_cnn.pt", "config": "cluster/smoke_config.yaml"},
+         "out": "checkpoints/spectrogram_cnn.pt", "config": "cluster/training_configs/smoke_config.yaml"},
     )
     assert argv == [
         sys.executable, "scripts/fit_model.py",
         "--model", "Sound2SynthSpectrogramRegressor",
         "--corpus", "dataset/run_A_train",
         "--out", "checkpoints/spectrogram_cnn.pt",
-        "--config", "cluster/smoke_config.yaml",
+        "--config", "cluster/training_configs/smoke_config.yaml",
     ]
 
 
