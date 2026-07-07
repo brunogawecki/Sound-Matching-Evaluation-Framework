@@ -164,3 +164,31 @@ def test_fit_export_load_predict_end_to_end(tmp_path):
     assert set(prediction) == set(space.names)              # all parameters present
     assert prediction["CAT"] in (0.0, 0.5, 1.0)             # categorical snapped to a grid option
     assert 0.0 <= prediction["AMP"] <= 1.0                  # continuous clipped into bounds
+
+
+def test_fit_defaults_wandb_run_name_to_model_and_corpus(tmp_path, monkeypatch):
+    pytest.importorskip("wandb")
+    # Offline so no network / API key is needed; wandb.init is deferred until the
+    # experiment is accessed, so building the trainer stays offline regardless.
+    monkeypatch.setenv("WANDB_MODE", "offline")
+
+    from models.training import trainer_factory
+
+    captured = {}
+    real_build_trainer = trainer_factory.build_trainer
+
+    def spy_build_trainer(training_config, **kwargs):
+        captured["training_config"] = training_config
+        return real_build_trainer(training_config, **kwargs)
+
+    monkeypatch.setattr(trainer_factory, "build_trainer", spy_build_trainer)
+
+    train_dataset = build_corpus(tmp_path, "train", count=8, seed=0)
+    config = training_config()
+    config["trainer"]["max_epochs"] = 1
+    config["logger"] = {"wandb": True}
+
+    model = Sound2SynthSpectrogramRegressor(default_root_dir=str(tmp_path / "logs"), **TINY_KWARGS)
+    model.fit(train_dataset, config=config)
+
+    assert captured["training_config"].logger.run_name == "Sound2SynthSpectrogramRegressor-train"

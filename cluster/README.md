@@ -167,7 +167,10 @@ Off by default. A `CSVLogger` always writes `lightning_logs/`. To also stream me
 Weights & Biases (deep families only; `MeanParameterBaseline` ignores the training config):
 
 1. Add a `logger` block to the training config (`project`/`entity`/`run_name` are
-   optional overrides; the project defaults to `Sound-Matching-Evaluation-Framework`):
+   optional overrides; the project defaults to `Sound-Matching-Evaluation-Framework`).
+   `run_name` defaults to `<model class>-<corpus dir name>` (e.g.
+   `Sound2SynthSpectrogramRegressor-full_preset-gen-vae`) so runs are identifiable
+   in the wandb UI without opening the config; set it explicitly to override:
    ```yaml
    logger:
      wandb: true
