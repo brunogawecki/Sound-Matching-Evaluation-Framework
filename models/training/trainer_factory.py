@@ -2,8 +2,9 @@
 
 Builds a Trainer from a :class:`~models.training.config.TrainingConfig`: a
 ``ModelCheckpoint`` (best + last) and ``LearningRateMonitor``, optional
-``EarlyStopping``, a ``CSVLogger``, precision/scale straight from config, and a
-``SLURMEnvironment(auto_requeue=True)`` plugin when running under SLURM.
+``EarlyStopping``, a ``CSVLogger`` (plus an opt-in ``WandbLogger``),
+precision/scale straight from config, and a ``SLURMEnvironment(auto_requeue=True)``
+plugin when running under SLURM.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from lightning.pytorch.loggers import CSVLogger
+from lightning.pytorch.loggers import CSVLogger, Logger, WandbLogger
 from lightning.pytorch.plugins.environments import SLURMEnvironment
 
 from models.training.config import TrainingConfig
@@ -67,8 +68,18 @@ def build_trainer(
     if SLURMEnvironment.detect():
         plugins.append(SLURMEnvironment(auto_requeue=True))
 
-    # CSVLogger only (offline-safe on compute nodes). TODO(later): make config-driven.
-    logger = CSVLogger(save_dir=str(default_root_dir))
+    # CSVLogger always runs; WandbLogger is opt-in via logger.wandb (config.py).
+    loggers: List[Logger] = [CSVLogger(save_dir=str(default_root_dir))]
+    logger_config = training_config.logger
+    if logger_config.wandb:
+        loggers.append(
+            WandbLogger(
+                project=logger_config.project,
+                entity=logger_config.entity,
+                name=logger_config.run_name,
+                save_dir=str(default_root_dir),
+            )
+        )
 
     return pl.Trainer(
         max_epochs=trainer_config.max_epochs,
@@ -81,7 +92,7 @@ def build_trainer(
         log_every_n_steps=trainer_config.log_every_n_steps,
         default_root_dir=str(default_root_dir),
         callbacks=callbacks,
-        logger=logger,
+        logger=loggers,
         plugins=plugins or None,
         # No validation loop when the DataModule has no validation source.
         limit_val_batches=1.0 if run_validation else 0,
