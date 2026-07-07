@@ -5,15 +5,15 @@ Loads a model from its checkpoint and a corpus from disk, runs the
 process at position 0 -- D-REPRO -- so it needs the Dexed VST locally), and writes
 ``results/<corpus_name>/<model_name>/{per_sample.csv, eval_summary.json}``.
 
-Pair with ``scripts/fit_baseline.py``, which produces the checkpoint::
+Pair with ``scripts/fit_model.py``, which produces the checkpoint::
 
-    python scripts/fit_baseline.py --corpus dataset/run_A_train
+    python scripts/fit_model.py --model MeanParameterBaseline --corpus dataset/run_A_train
     python scripts/evaluate.py --checkpoint checkpoints/mean_parameter_baseline.json \
-        --corpus dataset/run_A_test
+        --corpus dataset/run_A_test --model MeanParameterBaseline
 
     --checkpoint  the saved model file to load and fingerprint        [REQUIRED]
     --corpus      the eval corpus directory (must be fresh-process)    [REQUIRED]
-    --model       model class to load the checkpoint into  [default: MeanParameterBaseline]
+    --model       model class to load the checkpoint into              [REQUIRED]
     --out         results root                                  [default: <project>/results]
 """
 import argparse
@@ -28,14 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
 from dataset.torch_dataset import RenderedCorpusDataset
 from evaluation.evaluator import EvaluationResult, Evaluator
-from models.mean_parameter_baseline import MeanParameterBaseline
-from models.sound2synth import Sound2SynthSpectrogramRegressor
-
-# The model classes a checkpoint can be loaded into. One per family as they land.
-MODELS = {
-    "MeanParameterBaseline": MeanParameterBaseline,
-    "Sound2SynthSpectrogramRegressor": Sound2SynthSpectrogramRegressor,
-}
+from models.registry import MODEL_REGISTRY
 
 
 def _require_dexed() -> None:
@@ -64,7 +57,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True, help="saved model file to load and fingerprint")
     parser.add_argument("--corpus", required=True, help="eval corpus directory (fresh-process)")
     parser.add_argument(
-        "--model", default="MeanParameterBaseline", choices=sorted(MODELS),
+        "--model", required=True, choices=sorted(MODEL_REGISTRY),
         help="model class to load the checkpoint into",
     )
     parser.add_argument("--out", default=None, help="results root (default: <project>/results)")
@@ -77,7 +70,7 @@ def main() -> None:
         print(f"Checkpoint not found: {checkpoint_path}")
         sys.exit(1)
 
-    model = MODELS[args.model]()
+    model = MODEL_REGISTRY[args.model].model_class()
     model.load(checkpoint_path)
     corpus = RenderedCorpusDataset.load(args.corpus)
 
