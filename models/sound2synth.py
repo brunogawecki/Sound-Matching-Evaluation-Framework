@@ -13,7 +13,6 @@ imported lazily in ``fit`` so the eval path (load/predict) needs no training dep
 """
 from __future__ import annotations
 
-import dataclasses
 from typing import Any, Dict, Optional
 
 import torch
@@ -168,13 +167,8 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
         from models.training.trainer_factory import build_trainer
 
         training_config = TrainingConfig.from_dict(config)
-        # Default the wandb run name to "<model>-<corpus>" so runs are identifiable
-        logger_config = training_config.logger
-        if logger_config.wandb and logger_config.run_name is None:
-            default_run_name = f"{type(self).__name__}-{train_dataset.corpus_dir.name}"
-            training_config = dataclasses.replace(
-                training_config, logger=dataclasses.replace(logger_config, run_name=default_run_name)
-            )
+        architecture = type(self).__name__
+        dataset = train_dataset.corpus_dir.name
         pl.seed_everything(training_config.seed, workers=True)
 
         parameter_space = train_dataset.parameter_space
@@ -202,8 +196,9 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
             run_validation=will_validate,
         )
 
+        run_metadata = {"architecture": architecture, "dataset": dataset}
         for logger in trainer.loggers:
-            logger.log_hyperparams(training_config.to_dict())
+            logger.log_hyperparams({**run_metadata, **training_config.to_dict()})
         trainer.fit(lightning_regressor, datamodule=data_module)
 
         # Load the best checkpoint's weights, then register the trained network.

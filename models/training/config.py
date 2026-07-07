@@ -95,9 +95,9 @@ class LoggerConfig:
     is logged under (wandb.ai/<entity>/<project>); ``None`` uses the API key's
     default entity. The API key and online/offline mode are read from the
     environment (``WANDB_API_KEY`` / ``WANDB_MODE``, see ``cluster/cluster.env.example``).
-    Leaving ``run_name`` unset does not mean "no name": each ``fit`` call defaults it
-    to ``"<model class>-<corpus dir name>"`` (see ``Sound2SynthSpectrogramRegressor.fit``)
-    so runs stay identifiable in the wandb UI; set it explicitly to override.
+    Leaving ``run_name`` unset lets wandb auto-name the run (a unique memorable label);
+    ``fit`` logs ``architecture``/``dataset`` as groupable config columns for identifying
+    runs (see ``Sound2SynthSpectrogramRegressor.fit``). Set ``run_name`` to override.
     """
     wandb: bool = False
     project: str = "Sound-Matching-Evaluation-Framework"

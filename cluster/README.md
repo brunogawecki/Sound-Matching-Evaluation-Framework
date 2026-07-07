@@ -173,9 +173,9 @@ Weights & Biases (deep families only; `MeanParameterBaseline` ignores the traini
 
 1. Add a `logger` block to the training config (`project`/`entity`/`run_name` are
    optional overrides; the project defaults to `Sound-Matching-Evaluation-Framework`).
-   `run_name` defaults to `<model class>-<corpus dir name>` (e.g.
-   `Sound2SynthSpectrogramRegressor-full_preset-gen-vae`) so runs are identifiable
-   in the wandb UI without opening the config; set it explicitly to override:
+   `run_name` is left unset by default, so wandb auto-names each run with a unique
+   memorable label; runs are identified by the `architecture`/`dataset` config columns
+   (below) rather than the name. Set `run_name` explicitly to override:
    ```yaml
    logger:
      wandb: true
@@ -183,6 +183,10 @@ Weights & Biases (deep families only; `MeanParameterBaseline` ignores the traini
 2. Set `WANDB_API_KEY` in `cluster.env` (from <https://wandb.ai/authorize>; exported by
    `train.sbatch`). `WANDB_MODE` defaults to `online`; `WANDB_ENTITY` is optional (blank
    uses your account's default entity).
+
+Each run also logs `architecture` (model class) and `dataset` (corpus dir name) as top-level
+config columns, so the wandb Runs table can Group by / filter on either one directly rather than
+parsing the run name.
 
 If the compute node has no outbound internet, set `WANDB_MODE=offline` in `cluster.env`; the
 run writes to `lightning_logs/wandb/offline-run-*` and you sync it afterward from a networked
