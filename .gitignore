@@ -30,3 +30,7 @@ docs/walkthroughs/
 # PyTorch Lightning's default autolog output (metrics.csv + checkpoints per
 # run). Regenerable, same rationale as /checkpoints/ and /results/ above.
 /lightning_logs/
+
+# SLURM's default per-job stdout capture (sbatch writes slurm-<JOBID>.out in
+# the submission dir). Regenerable, same rationale as above.
+slurm-*.out
