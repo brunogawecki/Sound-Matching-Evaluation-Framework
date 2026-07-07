@@ -23,3 +23,6 @@ trainer:
   log_every_n_steps: 10
   deterministic: false    # AdaptiveMaxPool2d has no deterministic CUDA backward;
                           # seed still fixes RNG. Full run: revisit (warn-only vs avg-pool).
+
+logger:
+  wandb: true              # smoke-test the wandb wiring on a real cluster run
