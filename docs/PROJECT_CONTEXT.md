@@ -127,7 +127,7 @@ sound_matching_evaluation_framework/
 │   ├── benchmark_renderers.py # DawDreamer-vs-Pedalboard render speed + audio agreement
 │   ├── measure_context_leakage.py # Quantifies Dexed's hidden-voice-state leak (D-REPRO)
 │   ├── build_dataset.py       # Render a corpus from a preset source (Layer 2)
-│   ├── fit_baseline.py        # Fit + save the mean baseline checkpoint (Layer 3)
+│   ├── fit_model.py           # Fit + save any registered model family, --model (Layer 3)
 │   └── evaluate.py            # Run the Evaluator on a checkpoint + corpus (Layer 4)
 ├── synth/                     # Layer 1
 │   ├── base_synth.py          # BaseSynthesizer abstract class
@@ -145,6 +145,7 @@ sound_matching_evaluation_framework/
 │   ├── base_deep_model.py     # BaseDeepModel: shared save/load/predict for deep families
 │   ├── mean_parameter_baseline.py # MeanParameterBaseline (naive floor, issue #7)
 │   ├── sound2synth.py         # Sound2SynthSpectrogramRegressor (first real deep family, #19/#31)
+│   ├── registry.py            # MODEL_REGISTRY: name -> (class, default checkpoint filename)
 │   └── training/              # PyTorch-Lightning training harness (#28, D-FRAMEWORK)
 └── evaluation/                # Layer 4
     ├── registry.py            # METRIC_PANEL: MetricSpecification list across axes (issue #8)
