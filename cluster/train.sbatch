@@ -1,13 +1,15 @@
 #!/bin/bash
-# SLURM batch script — fit the Sound2Synth spectrogram regressor on the PUT hgx
-# partition (issue #20). Submit from the repo root on the cluster:
+# SLURM batch script — fit a sound-matching model on the PUT hgx partition
+# (issue #20). The model family is chosen with MODEL in cluster.env; there is no
+# default, so submission fails fast (set -u) if it is not set. Submit from the
+# repo root on the cluster:
 #
 #     sbatch -A "$SLURM_ACCOUNT" cluster/train.sbatch
 #
 # The billing account (-A) is a submission-time scheduling flag, so it cannot be
 # read from cluster.env inside the body — pass it on the command line (see README).
-# Everything else (paths, env name, config) is read from cluster/cluster.env at
-# run time.
+# Everything else (model, paths, env name, config) is read from cluster/cluster.env
+# at run time.
 #
 #SBATCH --job-name=smef-train
 #SBATCH --partition=hgx
@@ -33,6 +35,7 @@ echo "--- host $(hostname) | env $CONDA_ENV | corpus $REMOTE_CORPUS_DIR ---"
 nvidia-smi || true
 
 python scripts/fit_model.py \
+    --model "$MODEL" \
     --corpus "$REMOTE_CORPUS_DIR" \
     --config "$TRAINING_CONFIG" \
     --out "$CHECKPOINT_OUT"
