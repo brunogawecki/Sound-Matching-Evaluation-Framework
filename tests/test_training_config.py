@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.training.config import (
     DataConfig,
+    LoggerConfig,
     LossConfig,
     OptimizerConfig,
     TrainerConfig,
@@ -26,6 +27,8 @@ def test_defaults_match_the_decided_values():
     assert config.trainer.precision == "bf16-mixed"
     assert config.trainer.deterministic is True
     assert config.data.val_fraction is None
+    assert config.logger.wandb is False  # tracking is opt-in
+    assert config.logger.project == "Sound-Matching-Evaluation-Framework"
 
 
 def test_from_dict_none_is_all_defaults():
@@ -42,6 +45,7 @@ def test_nested_keys_are_parsed_into_sub_configs():
             "loss": {"continuous_loss": "mae", "categorical_loss_weight": 0.5},
             "data": {"batch_size": 32, "val_fraction": 0.1},
             "trainer": {"max_epochs": 5, "precision": "32-true", "devices": 1},
+            "logger": {"wandb": True, "project": "p", "entity": "e"},
         }
     )
     assert config.seed == 7
@@ -50,6 +54,8 @@ def test_nested_keys_are_parsed_into_sub_configs():
     assert config.loss.continuous_loss == "mae"
     assert config.data.batch_size == 32 and config.data.val_fraction == pytest.approx(0.1)
     assert config.trainer.max_epochs == 5 and config.trainer.devices == 1
+    assert config.logger.wandb is True and config.logger.project == "p"
+    assert config.logger.entity == "e"
 
 
 # -- round trip --------------------------------------------------------------
@@ -73,7 +79,7 @@ def test_unknown_nested_key_is_rejected():
         OptimizerConfig.from_dict({"lr": 1e-3})  # wrong name; should be learning_rate
 
 
-@pytest.mark.parametrize("sub_config", [DataConfig, LossConfig, TrainerConfig])
+@pytest.mark.parametrize("sub_config", [DataConfig, LossConfig, TrainerConfig, LoggerConfig])
 def test_each_sub_config_rejects_typos(sub_config):
     with pytest.raises(ValueError, match="unknown config key"):
         sub_config.from_dict({"definitely_not_a_real_knob": 1})
@@ -103,3 +109,36 @@ def test_from_yaml_rejects_non_mapping(tmp_path):
     config_path.write_text("- just\n- a\n- list\n")
     with pytest.raises(ValueError, match="must contain a YAML mapping"):
         TrainingConfig.from_yaml(config_path)
+
+
+# -- logger wiring in build_trainer ------------------------------------------
+
+def _logger_class_names(trainer):
+    return {type(logger).__name__ for logger in trainer.loggers}
+
+
+def test_build_trainer_attaches_csv_logger_only_by_default(tmp_path):
+    pytest.importorskip("lightning")
+    from models.training.trainer_factory import build_trainer
+
+    trainer = build_trainer(TrainingConfig.from_dict({}), default_root_dir=tmp_path)
+    assert _logger_class_names(trainer) == {"CSVLogger"}
+
+
+def test_build_trainer_adds_wandb_logger_when_enabled(tmp_path):
+    pytest.importorskip("lightning")
+    pytest.importorskip("wandb")  # constructing WandbLogger needs the package
+    from models.training.trainer_factory import build_trainer
+
+    # Offline so no network / API key is needed; wandb.init is deferred until the
+    # experiment is accessed, so building the trainer stays offline regardless.
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    try:
+        trainer = build_trainer(
+            TrainingConfig.from_dict({"logger": {"wandb": True, "project": "unit-test"}}),
+            default_root_dir=tmp_path,
+        )
+    finally:
+        monkeypatch.undo()
+    assert _logger_class_names(trainer) == {"CSVLogger", "WandbLogger"}

@@ -161,6 +161,25 @@ above) — the transfer scripts read it from wherever you run them.
 point `TRAINING_CONFIG` at a fuller config (more `max_epochs`, no `val_fraction` cap) and
 raise `#SBATCH --time`. Nothing else changes.
 
+## Experiment tracking (wandb)
+
+Off by default. A `CSVLogger` always writes `lightning_logs/`. To also stream metrics to
+Weights & Biases (deep families only; `MeanParameterBaseline` ignores the training config):
+
+1. Add a `logger` block to the training config (`project`/`entity`/`run_name` are
+   optional overrides; the project defaults to `Sound-Matching-Evaluation-Framework`):
+   ```yaml
+   logger:
+     wandb: true
+   ```
+2. Set `WANDB_API_KEY` in `cluster.env` (from <https://wandb.ai/authorize>; exported by
+   `train.sbatch`). `WANDB_MODE` defaults to `online`; `WANDB_ENTITY` is optional (blank
+   uses your account's default entity).
+
+If the compute node has no outbound internet, set `WANDB_MODE=offline` in `cluster.env`; the
+run writes to `lightning_logs/wandb/offline-run-*` and you sync it afterward from a networked
+machine with `wandb sync lightning_logs/wandb/offline-run-*`.
+
 ## Notes
 
 - **Job time limit.** The cluster sends SIGTERM at the wall-clock limit, then SIGKILL 60
