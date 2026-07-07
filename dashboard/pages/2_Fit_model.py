@@ -8,7 +8,7 @@ import streamlit as st
 import discovery
 import ui
 from forms import build_command
-from script_specs import FIT_MODELS
+from script_specs import FIT_MODEL, MODEL_CHOICES
 
 st.set_page_config(page_title="Fit model", layout="wide")
 st.title("Fit model")
@@ -18,10 +18,9 @@ if not corpora:
     st.info("No corpora yet. Build one on the **Build dataset** page first.")
     st.stop()
 
-model_name = st.selectbox("Model", list(FIT_MODELS.keys()))
-spec = FIT_MODELS[model_name]
-st.caption(spec.description)
+st.caption(FIT_MODEL.description)
 
+model_name = st.selectbox("Model", list(MODEL_CHOICES))
 corpus = st.selectbox(
     "Training corpus",
     corpora,
@@ -30,11 +29,13 @@ corpus = st.selectbox(
 out = st.text_input(
     "Checkpoint output path (optional)",
     value="",
-    help="Blank uses the script default (checkpoints/mean_parameter_baseline.json).",
+    help="Blank uses the script default (checkpoints/<model default filename>).",
 )
 
 try:
-    argv = build_command(spec, {"corpus": str(corpus.path), "out": out})
+    argv = build_command(
+        FIT_MODEL, {"model": model_name, "corpus": str(corpus.path), "out": out}
+    )
 except ValueError as exc:
     argv = None
     st.info(f"Fill required field(s): {exc}")

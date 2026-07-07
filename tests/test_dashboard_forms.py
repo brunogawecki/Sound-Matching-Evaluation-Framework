@@ -20,8 +20,20 @@ from script_specs import (  # noqa: E402
     BUILD_HUMAN,
     BUILD_SYNTHETIC,
     EVALUATE,
-    FIT_BASELINE,
+    FIT_MODEL,
+    MODEL_CHOICES,
 )
+
+from models.registry import MODEL_REGISTRY  # noqa: E402
+
+
+def test_model_choices_match_registry():
+    # script_specs.MODEL_CHOICES is a hand-kept mirror of MODEL_REGISTRY's keys (the
+    # dashboard never imports the torch-heavy pipeline library -- see
+    # dashboard/__init__.py). This test is the tripwire that catches drift between
+    # the two: it's a plain test file, so it can import both without breaking that
+    # boundary.
+    assert set(MODEL_CHOICES) == set(MODEL_REGISTRY)
 
 
 # --- build_command: argv is exactly what the CLI would take -----------------
@@ -65,11 +77,39 @@ def test_required_missing_raises():
         build_command(EVALUATE, {"checkpoint": "", "corpus": "c", "model": "MeanParameterBaseline"})
 
 
+def test_model_choice_required_raises_when_blank():
+    with pytest.raises(ValueError):
+        build_command(FIT_MODEL, {"model": "", "corpus": "dataset/run_A_train", "out": ""})
+    with pytest.raises(ValueError):
+        build_command(
+            EVALUATE, {"checkpoint": "checkpoints/m.json", "corpus": "c", "model": ""}
+        )
+
+
 def test_optional_blank_out_is_omitted():
-    argv = build_command(FIT_BASELINE, {"corpus": "dataset/run_A_train", "out": ""})
+    argv = build_command(
+        FIT_MODEL,
+        {"model": "MeanParameterBaseline", "corpus": "dataset/run_A_train", "out": ""},
+    )
     assert argv == [
-        sys.executable, "scripts/fit_baseline.py",
+        sys.executable, "scripts/fit_model.py",
+        "--model", "MeanParameterBaseline",
         "--corpus", "dataset/run_A_train",
+    ]
+
+
+def test_fit_model_full_command():
+    argv = build_command(
+        FIT_MODEL,
+        {"model": "Sound2SynthSpectrogramRegressor", "corpus": "dataset/run_A_train",
+         "out": "checkpoints/spectrogram_cnn.pt", "config": "cluster/training_configs/smoke_config.yaml"},
+    )
+    assert argv == [
+        sys.executable, "scripts/fit_model.py",
+        "--model", "Sound2SynthSpectrogramRegressor",
+        "--corpus", "dataset/run_A_train",
+        "--out", "checkpoints/spectrogram_cnn.pt",
+        "--config", "cluster/training_configs/smoke_config.yaml",
     ]
 
 

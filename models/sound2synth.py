@@ -193,6 +193,13 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
             monitor=monitor,
             run_validation=will_validate,
         )
+
+        run_metadata = {
+            "architecture": type(self).__name__,
+            "dataset": train_dataset.corpus_dir.name,
+        }
+        for logger in trainer.loggers:
+            logger.log_hyperparams({**run_metadata, **training_config.to_dict()})
         trainer.fit(lightning_regressor, datamodule=data_module)
 
         # Load the best checkpoint's weights, then register the trained network.

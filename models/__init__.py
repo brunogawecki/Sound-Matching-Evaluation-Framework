@@ -9,6 +9,7 @@ family (issue #19, Sound2Synth lineage).
 from models.base_deep_model import BaseDeepModel
 from models.base_model import BaseModel
 from models.mean_parameter_baseline import MeanParameterBaseline
+from models.registry import MODEL_REGISTRY, ModelRegistration
 from models.sound2synth import Sound2SynthSpectrogramRegressor
 
 __all__ = [
@@ -16,4 +17,6 @@ __all__ = [
     "BaseDeepModel",
     "MeanParameterBaseline",
     "Sound2SynthSpectrogramRegressor",
+    "MODEL_REGISTRY",
+    "ModelRegistration",
 ]
