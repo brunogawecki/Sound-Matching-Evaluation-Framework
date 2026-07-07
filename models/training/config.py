@@ -87,6 +87,28 @@ class DataConfig:
 
 
 @dataclass(frozen=True)
+class LoggerConfig:
+    """Experiment-tracking settings.
+
+    ``CSVLogger`` is always attached (offline-safe local metrics). Setting
+    ``wandb`` to ``True`` additionally attaches a ``WandbLogger``. ``project`` and
+    ``entity`` fall back to the ``WANDB_PROJECT`` / ``WANDB_ENTITY`` environment
+    variables when ``None``; the API key and online/offline mode come from
+    ``WANDB_API_KEY`` / ``WANDB_MODE`` (see ``cluster/cluster.env.example``).
+    """
+    wandb: bool = False
+    project: Optional[str] = None
+    entity: Optional[str] = None
+    run_name: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "LoggerConfig":
+        if data is None:
+            return cls()
+        return cls(**_reject_unknown_keys(cls, data))
+
+
+@dataclass(frozen=True)
 class TrainerConfig:
     """``pl.Trainer`` + callback settings (precision / scale / SLURM survival).
 
@@ -124,13 +146,14 @@ class TrainingConfig:
     loss: LossConfig = field(default_factory=LossConfig)
     data: DataConfig = field(default_factory=DataConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
+    logger: LoggerConfig = field(default_factory=LoggerConfig)
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "TrainingConfig":
         """Build a config from a nested ``dict`` (the shape ``fit`` receives).
 
-        Top-level keys: ``seed``, ``optimizer``, ``loss``, ``data``, ``trainer``.
-        Unknown keys at any level raise ``ValueError``.
+        Top-level keys: ``seed``, ``optimizer``, ``loss``, ``data``, ``trainer``,
+        ``logger``. Unknown keys at any level raise ``ValueError``.
         """
         data = dict(data or {})
         _reject_unknown_keys(cls, data)
@@ -140,6 +163,7 @@ class TrainingConfig:
             loss=LossConfig.from_dict(data.get("loss")),
             data=DataConfig.from_dict(data.get("data")),
             trainer=TrainerConfig.from_dict(data.get("trainer")),
+            logger=LoggerConfig.from_dict(data.get("logger")),
         )
 
     @classmethod
