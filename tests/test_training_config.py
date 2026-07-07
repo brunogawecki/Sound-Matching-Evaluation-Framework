@@ -125,20 +125,16 @@ def test_build_trainer_attaches_csv_logger_only_by_default(tmp_path):
     assert _logger_class_names(trainer) == {"CSVLogger"}
 
 
-def test_build_trainer_adds_wandb_logger_when_enabled(tmp_path):
+def test_build_trainer_adds_wandb_logger_when_enabled(tmp_path, monkeypatch):
     pytest.importorskip("lightning")
     pytest.importorskip("wandb")  # constructing WandbLogger needs the package
     from models.training.trainer_factory import build_trainer
 
     # Offline so no network / API key is needed; wandb.init is deferred until the
     # experiment is accessed, so building the trainer stays offline regardless.
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setenv("WANDB_MODE", "offline")
-    try:
-        trainer = build_trainer(
-            TrainingConfig.from_dict({"logger": {"wandb": True, "project": "unit-test"}}),
-            default_root_dir=tmp_path,
-        )
-    finally:
-        monkeypatch.undo()
+    trainer = build_trainer(
+        TrainingConfig.from_dict({"logger": {"wandb": True, "project": "unit-test"}}),
+        default_root_dir=tmp_path,
+    )
     assert _logger_class_names(trainer) == {"CSVLogger", "WandbLogger"}

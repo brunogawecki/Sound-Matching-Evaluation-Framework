@@ -49,9 +49,8 @@ def main() -> None:
     args = parser.parse_args()
 
     registration = MODEL_REGISTRY[args.model]
-    out_path = Path(
-        args.out
-        if args.out
+    out_path = (
+        Path(args.out) if args.out
         else Path(config.BASE_DIR) / "checkpoints" / registration.default_checkpoint_filename
     )
 

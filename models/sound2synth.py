@@ -167,8 +167,6 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
         from models.training.trainer_factory import build_trainer
 
         training_config = TrainingConfig.from_dict(config)
-        architecture = type(self).__name__
-        dataset = train_dataset.corpus_dir.name
         pl.seed_everything(training_config.seed, workers=True)
 
         parameter_space = train_dataset.parameter_space
@@ -196,7 +194,10 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
             run_validation=will_validate,
         )
 
-        run_metadata = {"architecture": architecture, "dataset": dataset}
+        run_metadata = {
+            "architecture": type(self).__name__,
+            "dataset": train_dataset.corpus_dir.name,
+        }
         for logger in trainer.loggers:
             logger.log_hyperparams({**run_metadata, **training_config.to_dict()})
         trainer.fit(lightning_regressor, datamodule=data_module)

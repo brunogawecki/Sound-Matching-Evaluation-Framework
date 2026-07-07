@@ -90,14 +90,10 @@ class DataConfig:
 class LoggerConfig:
     """Experiment-tracking settings.
 
-    ``CSVLogger`` is always attached; setting ``wandb`` to ``True`` additionally
-    attaches a ``WandbLogger``. ``entity`` is the wandb user/team namespace a run
-    is logged under (wandb.ai/<entity>/<project>); ``None`` uses the API key's
-    default entity. The API key and online/offline mode are read from the
-    environment (``WANDB_API_KEY`` / ``WANDB_MODE``, see ``cluster/cluster.env.example``).
-    Leaving ``run_name`` unset lets wandb auto-name the run (a unique memorable label);
-    ``fit`` logs ``architecture``/``dataset`` as groupable config columns for identifying
-    runs (see ``Sound2SynthSpectrogramRegressor.fit``). Set ``run_name`` to override.
+    ``CSVLogger`` is always attached; ``wandb=True`` also attaches a ``WandbLogger``.
+    ``entity`` is the wandb namespace (``None`` uses the API key's default); the key
+    and online/offline mode come from the environment (``WANDB_API_KEY`` /
+    ``WANDB_MODE``). Blank ``run_name`` lets wandb auto-name the run.
     """
     wandb: bool = False
     project: str = "Sound-Matching-Evaluation-Framework"
