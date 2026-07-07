@@ -153,9 +153,19 @@ above) — the transfer scripts read it from wherever you run them.
    cluster/pull_checkpoint.sh
    ```
 
+   Each pull is saved under a timestamped name (`checkpoints/spectrogram_cnn-<timestamp>.pt`,
+   the timestamp being the checkpoint's remote mtime) and never overwrites a previous run's
+   file. A `checkpoints/spectrogram_cnn-latest.pt` symlink is refreshed to the newest pull,
+   so the eval command below stays the same across runs.
+
 6. **(On your laptop) Score it locally** with the Evaluator (`scripts/evaluate.py`), which
    needs only the base (VST) environment, not conda and not the cluster — the checkpoint is
-   self-describing (D-SELFDESC).
+   self-describing (D-SELFDESC). Point `--checkpoint` at the `-latest` symlink:
+
+   ```bash
+   python scripts/evaluate.py --model Sound2SynthSpectrogramRegressor \
+       --checkpoint checkpoints/spectrogram_cnn-latest.pt --corpus dataset/<test_corpus>
+   ```
 
 ## The full run
 
