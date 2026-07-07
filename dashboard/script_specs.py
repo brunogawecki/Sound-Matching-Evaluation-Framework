@@ -163,6 +163,10 @@ EVALUATE = ScriptSpec(
                 choices=MODEL_CHOICES, required=True,
                 help="Model class to load the checkpoint into."),
         ArgSpec("out", "--out", "path", "", help="Results root. Blank uses <project>/results."),
+        ArgSpec("save_audio", "--save-audio", "bool", False,
+                help="Persist prediction WAVs for a seeded random sample subset."),
+        ArgSpec("save_audio_n", "--save-audio-n", "int", 20,
+                help="Cap on how many samples get their prediction audio saved."),
     ),
 )
 

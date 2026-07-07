@@ -124,6 +124,23 @@ def test_evaluate_full_command():
         "--checkpoint", "checkpoints/m.json",
         "--corpus", "dataset/run_A_test",
         "--model", "MeanParameterBaseline",
+        "--save-audio-n", "20",
+    ]
+
+
+def test_evaluate_save_audio_flag_emitted_when_true():
+    argv = build_command(
+        EVALUATE,
+        {"checkpoint": "checkpoints/m.json", "corpus": "dataset/run_A_test",
+         "model": "MeanParameterBaseline", "out": "", "save_audio": True, "save_audio_n": 5},
+    )
+    assert argv == [
+        sys.executable, "scripts/evaluate.py",
+        "--checkpoint", "checkpoints/m.json",
+        "--corpus", "dataset/run_A_test",
+        "--model", "MeanParameterBaseline",
+        "--save-audio",
+        "--save-audio-n", "5",
     ]
 
 

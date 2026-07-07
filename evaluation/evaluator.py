@@ -149,15 +149,32 @@ class Evaluator:
 
         return EvaluationResult(per_sample_metrics, summary, per_sample_metrics_path, summary_path)
 
+    # -- audio-sample selection -----------------------------------------------
+    def _select_audio_sample_indices(self, save_audio_n: int, save_audio_seed: int) -> frozenset:
+        """A seeded random subset of corpus indices to persist prediction audio for.
+
+        Random rather than the first N to avoid corpus-ordering bias (D-EVAL update).
+        """
+        num_samples = len(self._corpus)
+        count = min(save_audio_n, num_samples)
+        rng = np.random.default_rng(save_audio_seed)
+        return frozenset(rng.choice(num_samples, size=count, replace=False).tolist())
+
     # -- per-sample scoring --------------------------------------------------
-    def _score_all_samples(self, model) -> List[Dict[str, object]]:
+    def _score_all_samples(
+        self, model, run_dir: Path, audio_sample_indices: frozenset
+    ) -> List[Dict[str, object]]:
         """Predict + re-render + run the panel for every corpus sample.
 
         The fresh-process backend is built here and always closed, even if a render
-        or metric raises midway.
+        or metric raises midway. Samples in ``audio_sample_indices`` also get their
+        re-rendered prediction written to ``<run_dir>/audio/<sample_id>.wav``.
         """
         target_matrix = self._corpus.targets.numpy()
         backend = FreshProcessRenderBackend(self._render_settings, renderer=self._renderer)
+        audio_dir = run_dir / "audio"
+        if audio_sample_indices:
+            audio_dir.mkdir(parents=True, exist_ok=True)
         rows: List[Dict[str, object]] = []
         try:
             for index in range(len(self._corpus)):
@@ -169,7 +186,15 @@ class Evaluator:
                 predicted_vector = self._corpus.parameter_space.synth_dict_to_ml_vector(predicted_dict)
                 prediction_waveform = backend.render({**self._default_params, **predicted_dict})
 
-                row: Dict[str, object] = {"sample_id": self._corpus.metadata.iloc[index]["sample_id"]}
+                sample_id = self._corpus.metadata.iloc[index]["sample_id"]
+                if index in audio_sample_indices:
+                    wavfile.write(
+                        str(audio_dir / f"{sample_id}.wav"),
+                        self._sample_rate,
+                        prediction_waveform.astype(np.float32),
+                    )
+
+                row: Dict[str, object] = {"sample_id": sample_id}
                 for spec in METRIC_PANEL:
                     if spec.input_type == "audio":
                         row[spec.name] = spec.compute(

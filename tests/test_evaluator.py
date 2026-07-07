@@ -171,6 +171,37 @@ def test_writes_both_files_under_corpus_and_model(corpus, tmp_path):
     assert list(reloaded.columns) == ["sample_id"] + metric_names()
 
 
+# -- prediction audio persistence (D-EVAL update) -----------------------------
+
+def test_save_audio_off_by_default_writes_no_audio_dir(corpus, tmp_path):
+    model = _FakeModel({"AMP": 0.6, "CAT": 1.0})
+    result = Evaluator(corpus).evaluate(model, out_dir=tmp_path / "results")
+    assert not (result.per_sample_metrics_path.parent / "audio").exists()
+
+
+def test_save_audio_writes_capped_seeded_random_subset(corpus, tmp_path):
+    model = _FakeModel({"AMP": 0.6, "CAT": 1.0})
+    result = Evaluator(corpus).evaluate(
+        model, out_dir=tmp_path / "results", save_audio=True, save_audio_n=2
+    )
+    audio_dir = result.per_sample_metrics_path.parent / "audio"
+    wav_files = sorted(audio_dir.glob("*.wav"))
+    assert len(wav_files) == 2
+    for wav_path in wav_files:
+        sample_rate, waveform = wavfile.read(wav_path)
+        assert sample_rate == SAMPLE_RATE
+        assert waveform.dtype == np.float32
+
+
+def test_save_audio_n_caps_at_corpus_size(corpus, tmp_path):
+    model = _FakeModel({"AMP": 0.6, "CAT": 1.0})
+    result = Evaluator(corpus).evaluate(
+        model, out_dir=tmp_path / "results", save_audio=True, save_audio_n=1000
+    )
+    audio_dir = result.per_sample_metrics_path.parent / "audio"
+    assert len(list(audio_dir.glob("*.wav"))) == 3
+
+
 # -- NaN handling + aggregation ----------------------------------------------
 
 def test_nan_valid_counts_reflect_silent_sample(corpus, tmp_path):
