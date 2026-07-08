@@ -79,6 +79,61 @@ def get_remote_branch() -> str:
     return output.strip()
 
 
+def build_sync_command(remote_repo_dir: str, checkout_branch: Optional[str] = None) -> str:
+    """The remote shell command that syncs the cluster checkout before an sbatch.
+
+    With ``checkout_branch`` set, hard-syncs to that pushed branch
+    (``git fetch`` + ``checkout -B``); otherwise a plain ``git pull``.
+    """
+    if checkout_branch:
+        remote_ref = shlex.quote(f"origin/{checkout_branch}")
+        return (
+            f"cd {shlex.quote(remote_repo_dir)} && git fetch origin && "
+            f"git checkout -B {shlex.quote(checkout_branch)} {remote_ref}"
+        )
+    return f"cd {shlex.quote(remote_repo_dir)} && git pull"
+
+
+def build_sbatch_command(
+    remote_repo_dir: str,
+    slurm_account: str,
+    corpus_name: str,
+    model_name: str,
+    config_arg: str,
+) -> str:
+    """The remote shell command that submits the training job via ``sbatch``."""
+    return (
+        f"cd {shlex.quote(remote_repo_dir)} && "
+        f"sbatch -A {shlex.quote(slurm_account)} cluster/train.sbatch "
+        f"{shlex.quote(corpus_name)} {shlex.quote(model_name)} {shlex.quote(config_arg)}"
+    )
+
+
+def preview_submit_commands(
+    corpus_name: str,
+    model_name: str,
+    config_arg: str,
+    checkout_branch: Optional[str] = None,
+) -> List[str]:
+    """The exact ``ssh`` commands :func:`submit_job` will run, for display only.
+
+    Built from the same helpers ``submit_job`` uses, so the preview can't drift
+    from what actually gets sent to the cluster. Does not touch the network.
+    """
+    cluster_env = load_cluster_env()
+    ssh_target = cluster_env["CLUSTER_SSH"]
+    slurm_account = cluster_env["SLURM_ACCOUNT"]
+    remote_repo_dir = cluster_env["REMOTE_REPO_DIR"]
+    sync_command = build_sync_command(remote_repo_dir, checkout_branch)
+    sbatch_command = build_sbatch_command(
+        remote_repo_dir, slurm_account, corpus_name, model_name, config_arg
+    )
+    return [
+        shlex.join(["ssh", ssh_target, sync_command]),
+        shlex.join(["ssh", ssh_target, sbatch_command]),
+    ]
+
+
 @dataclass(frozen=True)
 class Job:
     job_id: str
@@ -150,23 +205,14 @@ def submit_job(
             f"Corpus '{corpus_name}' is not on the cluster — push it first."
         )
 
-    if checkout_branch:
-        remote_ref = shlex.quote(f"origin/{checkout_branch}")
-        sync_command = (
-            f"cd {shlex.quote(remote_repo_dir)} && git fetch origin && "
-            f"git checkout -B {shlex.quote(checkout_branch)} {remote_ref}"
-        )
-    else:
-        sync_command = f"cd {shlex.quote(remote_repo_dir)} && git pull"
+    sync_command = build_sync_command(remote_repo_dir, checkout_branch)
     sync_code, sync_output = command_runner.run_capture(["ssh", ssh_target, sync_command])
     placeholder.code(sync_output or "(no output)")
     if sync_code != 0:
         raise RuntimeError(f"remote git sync exited {sync_code}:\n{sync_output}")
 
-    sbatch_command = (
-        f"cd {shlex.quote(remote_repo_dir)} && "
-        f"sbatch -A {shlex.quote(slurm_account)} cluster/train.sbatch "
-        f"{shlex.quote(corpus_name)} {shlex.quote(model_name)} {shlex.quote(config_arg)}"
+    sbatch_command = build_sbatch_command(
+        remote_repo_dir, slurm_account, corpus_name, model_name, config_arg
     )
     sbatch_code, sbatch_output = command_runner.run_capture(["ssh", ssh_target, sbatch_command])
     placeholder.code(sbatch_output or "(no output)")

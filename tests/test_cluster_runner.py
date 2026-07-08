@@ -126,6 +126,48 @@ def test_get_remote_branch_raises_when_unreachable(monkeypatch):
         cluster_runner.get_remote_branch()
 
 
+# --- command builders / preview ----------------------------------------------
+
+def test_build_sync_command_defaults_to_git_pull():
+    command = cluster_runner.build_sync_command("/home/me/repo")
+    assert command == "cd /home/me/repo && git pull"
+
+
+def test_build_sync_command_switch_branch_hard_checks_out():
+    command = cluster_runner.build_sync_command("/home/me/repo", checkout_branch="feature-x")
+    assert "git fetch origin" in command
+    assert "git checkout -B feature-x origin/feature-x" in command
+    assert "git pull" not in command
+
+
+def test_build_sbatch_command_shape():
+    command = cluster_runner.build_sbatch_command(
+        "/home/me/repo", "acct123", "corpus_a", "MeanParameterBaseline", "smoke"
+    )
+    assert command == (
+        "cd /home/me/repo && sbatch -A acct123 cluster/train.sbatch "
+        "corpus_a MeanParameterBaseline smoke"
+    )
+
+
+def test_preview_submit_commands_match_what_submit_runs(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    sync, sbatch = cluster_runner.preview_submit_commands(
+        "corpus_a", "MeanParameterBaseline", "smoke"
+    )
+    assert sync == "ssh me@login.example 'cd /home/me/repo && git pull'"
+    assert sbatch.startswith("ssh me@login.example 'cd /home/me/repo && sbatch -A acct123")
+    assert "cluster/train.sbatch corpus_a MeanParameterBaseline smoke" in sbatch
+
+
+def test_preview_submit_commands_reflects_branch_switch(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    sync, _ = cluster_runner.preview_submit_commands(
+        "corpus_a", "MeanParameterBaseline", "smoke", checkout_branch="feature-x"
+    )
+    assert "git checkout -B feature-x origin/feature-x" in sync
+
+
 # --- submit_job ------------------------------------------------------------
 
 def _stub_cluster_env(monkeypatch):

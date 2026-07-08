@@ -155,6 +155,14 @@ if remote_branch is not None:
         if choice == switch_label:
             checkout_branch = local_branch
 
+# Show the exact commands Submit will send over SSH (visual only — nothing runs here).
+if config_arg:
+    st.caption("Commands sent to the cluster on Train (visual only, not run here):")
+    for command in cluster_runner.preview_submit_commands(
+        corpus.name, model_name, config_arg, checkout_branch=checkout_branch
+    ):
+        st.code(command, language="bash")
+
 if st.button("Train", type="primary", disabled=(config_choice == "custom" and not config_arg)):
     placeholder = st.empty()
     with st.spinner("Submitting…"):
