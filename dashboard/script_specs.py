@@ -132,24 +132,6 @@ BUILD_PRESETGEN = ScriptSpec(
 # imported) so the dashboard never pulls in the torch-heavy pipeline library.
 MODEL_CHOICES = ("MeanParameterBaseline", "Sound2SynthSpectrogramRegressor")
 
-FIT_MODEL = ScriptSpec(
-    key="fit_model",
-    script="scripts/fit_model.py",
-    description="Fit a sound-matching model on a training corpus and save its checkpoint. "
-                "The baseline predicts the train-set mean (no VST); the spectrogram regressor "
-                "is a log-STFT VGG11-BN over the target audio (needs torch + lightning).",
-    args=(
-        ArgSpec("model", "--model", "choice", "Sound2SynthSpectrogramRegressor",
-                choices=MODEL_CHOICES, required=True, help="Model family to train."),
-        ArgSpec("corpus", "--corpus", "path", "", required=True, help="Training corpus directory."),
-        ArgSpec("out", "--out", "path", "",
-                help="Checkpoint path to write. Blank uses checkpoints/<model default filename>."),
-        ArgSpec("config", "--config", "path", "",
-                help="training_config.yaml with harness knobs. Blank uses defaults "
-                     "(ignored by the baseline)."),
-    ),
-)
-
 EVALUATE = ScriptSpec(
     key="evaluate",
     script="scripts/evaluate.py",

@@ -20,7 +20,6 @@ from script_specs import (  # noqa: E402
     BUILD_HUMAN,
     BUILD_SYNTHETIC,
     EVALUATE,
-    FIT_MODEL,
     MODEL_CHOICES,
 )
 
@@ -79,38 +78,9 @@ def test_required_missing_raises():
 
 def test_model_choice_required_raises_when_blank():
     with pytest.raises(ValueError):
-        build_command(FIT_MODEL, {"model": "", "corpus": "dataset/run_A_train", "out": ""})
-    with pytest.raises(ValueError):
         build_command(
             EVALUATE, {"checkpoint": "checkpoints/m.json", "corpus": "c", "model": ""}
         )
-
-
-def test_optional_blank_out_is_omitted():
-    argv = build_command(
-        FIT_MODEL,
-        {"model": "MeanParameterBaseline", "corpus": "dataset/run_A_train", "out": ""},
-    )
-    assert argv == [
-        sys.executable, "scripts/fit_model.py",
-        "--model", "MeanParameterBaseline",
-        "--corpus", "dataset/run_A_train",
-    ]
-
-
-def test_fit_model_full_command():
-    argv = build_command(
-        FIT_MODEL,
-        {"model": "Sound2SynthSpectrogramRegressor", "corpus": "dataset/run_A_train",
-         "out": "checkpoints/spectrogram_cnn.pt", "config": "cluster/training_configs/smoke_config.yaml"},
-    )
-    assert argv == [
-        sys.executable, "scripts/fit_model.py",
-        "--model", "Sound2SynthSpectrogramRegressor",
-        "--corpus", "dataset/run_A_train",
-        "--out", "checkpoints/spectrogram_cnn.pt",
-        "--config", "cluster/training_configs/smoke_config.yaml",
-    ]
 
 
 def test_evaluate_full_command():

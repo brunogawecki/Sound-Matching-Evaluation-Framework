@@ -26,7 +26,7 @@ if not os.path.exists(os.path.expanduser(config.DEXED_PATH)):
 checkpoints = discovery.list_checkpoints()
 corpora = discovery.list_corpora()
 if not checkpoints:
-    st.info("No checkpoints yet. Fit a model on the **Fit model** page first.")
+    st.info("No checkpoints yet. Train a model on the **Train on cluster** page first.")
     st.stop()
 if not corpora:
     st.info("No corpora yet. Build a (fresh-process) eval corpus on **Build dataset** first.")
