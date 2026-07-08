@@ -12,6 +12,18 @@ from typing import Any, Dict, List
 from script_specs import ArgSpec, ScriptSpec
 
 
+def _strip_quotes(text: str) -> str:
+    """Drop one matching pair of leading/trailing quote characters.
+
+    Paths with spaces are often pasted pre-quoted (e.g. copied out of a shell
+    command or Finder's "Copy as Pathname"), and the quotes aren't part of the
+    actual path.
+    """
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1]
+    return text
+
+
 def _tokens_for(arg: ArgSpec, value: Any) -> List[str]:
     """The argv fragment a single arg contributes (possibly empty)."""
     if arg.kind == "bool":
@@ -19,9 +31,9 @@ def _tokens_for(arg: ArgSpec, value: Any) -> List[str]:
 
     if arg.kind == "paths":
         if isinstance(value, str):
-            items = value.split()
+            items = [_strip_quotes(line.strip()) for line in value.splitlines() if line.strip()]
         else:
-            items = [str(item).strip() for item in (value or []) if str(item).strip()]
+            items = [_strip_quotes(str(item).strip()) for item in (value or []) if str(item).strip()]
         if not items:
             if arg.required:
                 raise ValueError(f"{arg.flag} is required")

@@ -10,7 +10,8 @@ Kinds:
     choice               one of ``choices``; emitted when non-empty
     bool                 store_true flag; emitted (bare) only when True
     path                 like str, but the UI renders a path field
-    paths                nargs="+"; whitespace/newline-separated -> ``--flag a b c``
+    paths                nargs="+"; one entry per line -> ``--flag a b c`` (a path may
+                         itself contain spaces, e.g. macOS "Application Support")
 
 An empty/None value for a non-required arg is omitted, so the script's own
 default applies (e.g. ``--run-name`` left blank -> the script picks the name).
