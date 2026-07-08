@@ -10,7 +10,7 @@ import re
 import shlex
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import dotenv
 
@@ -57,6 +57,28 @@ def git_guard_status() -> Tuple[bool, List[str]]:
     return not messages, messages
 
 
+def get_local_branch() -> str:
+    """The branch the laptop's checkout is on."""
+    _, output = command_runner.run_capture(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(PROJECT_ROOT)
+    )
+    return output.strip()
+
+
+def get_remote_branch() -> str:
+    """The cluster checkout's current branch. Fails fast and raises when unreachable."""
+    cluster_env = load_cluster_env()
+    ssh_target = cluster_env["CLUSTER_SSH"]
+    remote_repo_dir = cluster_env["REMOTE_REPO_DIR"]
+    code, output = command_runner.run_capture(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", ssh_target,
+         f"cd {shlex.quote(remote_repo_dir)} && git rev-parse --abbrev-ref HEAD"]
+    )
+    if code != 0:
+        raise RuntimeError(f"Could not read the cluster's branch:\n{output.strip()}")
+    return output.strip()
+
+
 @dataclass(frozen=True)
 class Job:
     job_id: str
@@ -84,12 +106,19 @@ def append_job(job: Job) -> None:
     JOBS_REGISTRY_PATH.write_text(json.dumps([asdict(j) for j in jobs], indent=2))
 
 
-def submit_job(corpus_name: str, model_name: str, config_arg: str, placeholder) -> Job:
+def submit_job(
+    corpus_name: str,
+    model_name: str,
+    config_arg: str,
+    placeholder,
+    checkout_branch: Optional[str] = None,
+) -> Job:
     """Push the corpus, sync the remote checkout, and ``sbatch`` a training job.
 
-    ``placeholder`` is an ``st.empty()`` (or anything with ``.code(str)``) that
-    the corpus push streams into live; the quick git-pull/sbatch steps just
-    write their final output there. Raises ``RuntimeError`` on any failing step.
+    ``placeholder`` (an ``st.empty()``) is streamed the corpus push live. With
+    ``checkout_branch`` set, hard-syncs the cluster to that pushed branch
+    (``git fetch`` + ``checkout -B``); otherwise leaves it and ``git pull``s.
+    Raises ``RuntimeError`` on any failing step.
     """
     cluster_env = load_cluster_env()
     ssh_target = cluster_env["CLUSTER_SSH"]
@@ -102,12 +131,18 @@ def submit_job(corpus_name: str, model_name: str, config_arg: str, placeholder) 
     if push_code != 0:
         raise RuntimeError(f"cluster/push_corpus.sh exited {push_code}; see log above.")
 
-    pull_code, pull_output = command_runner.run_capture(
-        ["ssh", ssh_target, f"cd {shlex.quote(remote_repo_dir)} && git pull"]
-    )
-    placeholder.code(pull_output or "(no output)")
-    if pull_code != 0:
-        raise RuntimeError(f"remote git pull exited {pull_code}:\n{pull_output}")
+    if checkout_branch:
+        remote_ref = shlex.quote(f"origin/{checkout_branch}")
+        sync_command = (
+            f"cd {shlex.quote(remote_repo_dir)} && git fetch origin && "
+            f"git checkout -B {shlex.quote(checkout_branch)} {remote_ref}"
+        )
+    else:
+        sync_command = f"cd {shlex.quote(remote_repo_dir)} && git pull"
+    sync_code, sync_output = command_runner.run_capture(["ssh", ssh_target, sync_command])
+    placeholder.code(sync_output or "(no output)")
+    if sync_code != 0:
+        raise RuntimeError(f"remote git sync exited {sync_code}:\n{sync_output}")
 
     sbatch_command = (
         f"cd {shlex.quote(remote_repo_dir)} && "

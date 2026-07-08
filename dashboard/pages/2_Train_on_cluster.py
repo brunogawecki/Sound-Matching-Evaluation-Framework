@@ -65,9 +65,9 @@ def _render_job_status(job: cluster_runner.Job) -> None:
 st.set_page_config(page_title="Train on cluster", layout="wide")
 st.title("Train on cluster")
 st.caption(
-    "Pushes the selected corpus, syncs the remote checkout (`git pull`), and submits "
-    "`cluster/train.sbatch` over SSH. Model/corpus choice happens here; training itself "
-    "runs on the cluster."
+    "Pushes the selected corpus, syncs the remote checkout (pull, or switch to your branch), "
+    "and submits `cluster/train.sbatch` over SSH. Model/corpus choice happens here; training "
+    "itself runs on the cluster."
 )
 
 try:
@@ -115,11 +115,38 @@ st.caption(
     f"· account `{cluster_env['SLURM_ACCOUNT']}`"
 )
 
+# Show the cluster's branch vs local; let the user hard-sync to theirs or leave it.
+local_branch = cluster_runner.get_local_branch()
+try:
+    remote_branch = cluster_runner.get_remote_branch()
+except (RuntimeError, KeyError) as exc:
+    remote_branch = None
+    st.caption(f"Could not read the cluster's branch (leaving it as-is): {exc}")
+
+checkout_branch = None  # None => leave the cluster on its current branch
+if remote_branch is not None:
+    if remote_branch == local_branch:
+        st.caption(f"Cluster is on `{remote_branch}` (matches local); it will `git pull` before submit.")
+    else:
+        st.caption(f"Cluster is on `{remote_branch}`, you're on `{local_branch}`.")
+        switch_label = f"Switch cluster to `{local_branch}`"
+        stay_label = f"Stay on `{remote_branch}`"
+        choice = st.radio(
+            "Sync the cluster before submitting:",
+            (switch_label, stay_label),
+            index=0,
+            help="Switching hard-syncs the cluster to your pushed branch (unpushed work won't be included).",
+        )
+        if choice == switch_label:
+            checkout_branch = local_branch
+
 if st.button("Push corpus & submit job", type="primary", disabled=(config_choice == "custom" and not config_arg)):
     placeholder = st.empty()
     with st.spinner("Pushing corpus and submitting…"):
         try:
-            job = cluster_runner.submit_job(corpus.name, model_name, config_arg, placeholder)
+            job = cluster_runner.submit_job(
+                corpus.name, model_name, config_arg, placeholder, checkout_branch=checkout_branch
+            )
         except (RuntimeError, KeyError) as exc:
             st.error(str(exc))
         else:

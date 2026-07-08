@@ -106,6 +106,26 @@ def test_git_guard_status_no_upstream_warns_not_blocks(monkeypatch):
     assert any("Could not check" in message for message in messages)
 
 
+# --- get_local_branch / get_remote_branch ------------------------------------
+
+def test_get_local_branch_strips_output(monkeypatch):
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv, cwd=None: (0, "handle-pipeline\n"))
+    assert cluster_runner.get_local_branch() == "handle-pipeline"
+
+
+def test_get_remote_branch_returns_branch(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (0, "main\n"))
+    assert cluster_runner.get_remote_branch() == "main"
+
+
+def test_get_remote_branch_raises_when_unreachable(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (255, "ssh: connect timeout"))
+    with pytest.raises(RuntimeError):
+        cluster_runner.get_remote_branch()
+
+
 # --- submit_job ------------------------------------------------------------
 
 def _stub_cluster_env(monkeypatch):
@@ -173,6 +193,35 @@ def test_submit_job_unparseable_sbatch_output_raises(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError):
         cluster_runner.submit_job("corpus_a", "MeanParameterBaseline", "smoke", _FakePlaceholder())
+
+
+def test_submit_job_switch_branch_hard_checks_out_on_cluster(tmp_path, monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(cluster_runner, "JOBS_REGISTRY_PATH", tmp_path / "jobs.json")
+    monkeypatch.setattr(command_runner, "run_streaming", lambda argv, placeholder: 0)
+
+    capture_calls = []
+
+    def fake_run_capture(argv):
+        capture_calls.append(argv)
+        remote_command = argv[-1]
+        if "git checkout -B" in remote_command:
+            return 0, "Reset branch 'feature-x'\n"
+        if "sbatch" in remote_command:
+            return 0, "Submitted batch job 55555\n"
+        raise AssertionError(f"unexpected argv: {argv}")
+
+    monkeypatch.setattr(command_runner, "run_capture", fake_run_capture)
+
+    job = cluster_runner.submit_job(
+        "corpus_a", "MeanParameterBaseline", "smoke", _FakePlaceholder(), checkout_branch="feature-x"
+    )
+
+    assert job.job_id == "55555"
+    sync_command = capture_calls[0][-1]
+    assert "git fetch origin" in sync_command
+    assert "git checkout -B feature-x origin/feature-x" in sync_command
+    assert "git pull" not in sync_command
 
 
 # --- get_slurm_job_state / get_remote_log_tail / cancel_job / pull_checkpoint --------------
