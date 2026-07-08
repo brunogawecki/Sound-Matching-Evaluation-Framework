@@ -40,6 +40,15 @@ def test_collapse_carriage_returns_idempotent_on_own_output():
     assert command_runner.collapse_carriage_returns(once) == once
 
 
+def test_collapse_carriage_returns_preserves_committed_line_boundary():
+    # A buffer ending in a committed (newline-terminated) line must keep that
+    # boundary, so feeding the next chunk back in starts a fresh line rather
+    # than gluing it onto the previous one (the run_streaming feed-back loop).
+    once = command_runner.collapse_carriage_returns("row0\n")
+    twice = command_runner.collapse_carriage_returns(once + "row1\n")
+    assert twice.splitlines() == ["row0", "row1"]
+
+
 class _FakePlaceholder:
     def __init__(self):
         self.calls = []
@@ -59,6 +68,22 @@ def test_run_streaming_collapses_carriage_returns_end_to_end():
     )
     assert code == 0
     assert placeholder.calls[-1] == "b\nd"
+
+
+def test_run_streaming_preserves_newlines_across_chunks():
+    # Lines emitted one flush at a time arrive as separate os.read() chunks, so
+    # each chunk ends on a \n. The feed-back buffer must not glue consecutive
+    # committed lines together (regression: 'row0row1row2' instead of 3 lines).
+    placeholder = _FakePlaceholder()
+    code = command_runner.run_streaming(
+        ["python", "-c",
+         "import sys, time\n"
+         "for i in range(3):\n"
+         "    sys.stdout.write('row%d\\n' % i); sys.stdout.flush(); time.sleep(0.05)"],
+        placeholder,
+    )
+    assert code == 0
+    assert placeholder.calls[-1].splitlines() == ["row0", "row1", "row2"]
 
 
 def test_run_streaming_reports_no_output():

@@ -1,8 +1,8 @@
 """Scan the framework's on-disk artefacts to populate dashboard dropdowns.
 
-All reads only -- these list what the scripts have already produced so the Fit /
-Evaluate / Results pages can reference real corpora, checkpoints, and result runs
-instead of asking the user to type paths.
+All reads only -- these list what the scripts have already produced so the
+Split corpus / Train on cluster / Evaluate / Results pages can reference real
+corpora, checkpoints, and result runs instead of asking the user to type paths.
 """
 import json
 from dataclasses import dataclass

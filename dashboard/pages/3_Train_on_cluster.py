@@ -14,16 +14,46 @@ _TERMINAL_STATES = ("COMPLETED",)
 _RUNNING_STATES = ("PENDING", "RUNNING", "UNKNOWN")
 
 
+def _cached_state_key(job_id: str) -> str:
+    return f"job_state_{job_id}"
+
+
+def _render_terminal_job(job: cluster_runner.Job, state: str) -> None:
+    """Static (non-polling) view for a job that has left the running states."""
+    if state in _TERMINAL_STATES:
+        st.success(f"State: **{state}**")
+        if st.button("Pull checkpoint", key=f"pull_{job.job_id}"):
+            placeholder = st.empty()
+            with st.spinner("Pulling checkpoint…"):
+                code = cluster_runner.pull_checkpoint(job.model, placeholder)
+            if code == 0:
+                st.success(f"Pulled checkpoint for {job.model}. See the Evaluate page.")
+            else:
+                st.error(f"cluster/pull_checkpoint.sh exited {code}; see log above.")
+    else:
+        st.error(f"State: **{state}**")
+        log_text = cluster_runner.get_remote_log_tail(job.job_id)
+        st.code(command_runner.collapse_carriage_returns(log_text) or "(no output)")
+
+
 @st.fragment(run_every="5s")
 def _live_job_fragment(job: cluster_runner.Job) -> None:
     """Polls state + tails the remote log every 5s; offers Cancel while running.
 
-    Once the job leaves a running state, triggers a full-app rerun so the outer
-    ``_render_job_status`` branch re-evaluates and swaps in the terminal-state
-    view (Pull checkpoint / error banner) instead of this polling fragment.
+    Sole owner of the SLURM-state query: ``_render_job_status`` reads the cached
+    terminal state instead of re-querying, so a running job costs one ``sacct``
+    poll per 5s tick rather than an extra one on every full-app render. Once the
+    job leaves a running state, caches that state and triggers a full-app rerun,
+    so ``_render_job_status`` swaps in the static terminal view (Pull checkpoint /
+    error banner) and this fragment stops polling.
     """
-    state = cluster_runner.get_slurm_job_state(job.job_id)
+    try:
+        state = cluster_runner.get_slurm_job_state(job.job_id)
+    except (RuntimeError, KeyError, FileNotFoundError) as exc:
+        st.error(f"Could not check status: {exc}")
+        return
     if state not in _RUNNING_STATES:
+        st.session_state[_cached_state_key(job.job_id)] = state
         st.rerun()
     st.caption(f"State: **{state}**")
     log_text = cluster_runner.get_remote_log_tail(job.job_id)
@@ -38,28 +68,14 @@ def _live_job_fragment(job: cluster_runner.Job) -> None:
 
 
 def _render_job_status(job: cluster_runner.Job) -> None:
-    try:
-        state = cluster_runner.get_slurm_job_state(job.job_id)
-    except (RuntimeError, KeyError) as exc:
-        st.error(f"Could not check status: {exc}")
-        return
-
-    if state in _RUNNING_STATES:
-        _live_job_fragment(job)
-    elif state in _TERMINAL_STATES:
-        st.success(f"State: **{state}**")
-        if st.button("Pull checkpoint", key=f"pull_{job.job_id}"):
-            placeholder = st.empty()
-            with st.spinner("Pulling checkpoint…"):
-                code = cluster_runner.pull_checkpoint(job.model, placeholder)
-            if code == 0:
-                st.success(f"Pulled checkpoint for {job.model}. See the Evaluate page.")
-            else:
-                st.error(f"cluster/pull_checkpoint.sh exited {code}; see log above.")
+    # Once the live fragment has cached a terminal state, serve the static
+    # terminal view straight from cache (no SSH); otherwise hand off to the
+    # fragment, which owns the state query and polls while the job runs.
+    cached_state = st.session_state.get(_cached_state_key(job.job_id))
+    if cached_state is not None and cached_state not in _RUNNING_STATES:
+        _render_terminal_job(job, cached_state)
     else:
-        st.error(f"State: **{state}**")
-        log_text = cluster_runner.get_remote_log_tail(job.job_id)
-        st.code(command_runner.collapse_carriage_returns(log_text) or "(no output)")
+        _live_job_fragment(job)
 
 
 st.set_page_config(page_title="Train on cluster", layout="wide")

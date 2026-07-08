@@ -44,6 +44,11 @@ def collapse_carriage_returns(text: str, tail_lines: int = _TAIL_LINES) -> str:
     no-op beyond the ``tail_lines`` cut), so :func:`run_streaming` can feed its
     result back in as the running buffer; callers rendering a one-shot snapshot
     of a polled remote log tail use it with no state carried between polls.
+
+    The final segment is always kept, even when empty. A trailing ``\\n`` leaves
+    an empty segment that preserves the newline boundary of the just-committed
+    line, so appending the next fed-back chunk starts a fresh line instead of
+    concatenating onto the previous one.
     """
     committed: List[str] = []
     current = ""
@@ -55,7 +60,7 @@ def collapse_carriage_returns(text: str, tail_lines: int = _TAIL_LINES) -> str:
             current = ""
         else:
             current += char
-    lines = committed + ([current] if current else [])
+    lines = committed + [current]
     return "\n".join(lines[-tail_lines:])
 
 
