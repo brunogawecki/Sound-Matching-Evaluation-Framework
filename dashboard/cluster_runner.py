@@ -132,3 +132,44 @@ def submit_job(corpus_name: str, model_name: str, config_arg: str, placeholder) 
     )
     append_job(job)
     return job
+
+
+def get_slurm_job_state(job_id: str) -> str:
+    """The job's current SLURM state (``PENDING``/``RUNNING``/``COMPLETED``/...).
+
+    Returns ``"UNKNOWN"`` if ``sacct`` fails or hasn't indexed the job yet.
+    """
+    ssh_target = load_cluster_env()["CLUSTER_SSH"]
+    code, output = command_runner.run_capture(
+        ["ssh", ssh_target, f"sacct -j {shlex.quote(job_id)} --format=State --noheader -X"]
+    )
+    if code != 0 or not output.strip():
+        return "UNKNOWN"
+    return output.strip().splitlines()[0].strip()
+
+
+def get_remote_log_tail(job_id: str, lines: int = 40) -> str:
+    """The last ``lines`` of ``slurm-<job_id>.out`` on the cluster, raw (uncollapsed)."""
+    cluster_env = load_cluster_env()
+    ssh_target = cluster_env["CLUSTER_SSH"]
+    remote_repo_dir = cluster_env["REMOTE_REPO_DIR"]
+    log_path = f"{remote_repo_dir}/slurm-{job_id}.out"
+    code, output = command_runner.run_capture(
+        ["ssh", ssh_target, f"tail -n {int(lines)} {shlex.quote(log_path)}"]
+    )
+    if code != 0:
+        return f"(could not read {log_path}: {output.strip()})"
+    return output
+
+
+def cancel_job(job_id: str) -> None:
+    """``scancel`` a job. Raises ``RuntimeError`` on failure."""
+    ssh_target = load_cluster_env()["CLUSTER_SSH"]
+    code, output = command_runner.run_capture(["ssh", ssh_target, f"scancel {shlex.quote(job_id)}"])
+    if code != 0:
+        raise RuntimeError(f"scancel exited {code}:\n{output}")
+
+
+def pull_checkpoint(model_name: str, placeholder) -> int:
+    """Run ``cluster/pull_checkpoint.sh <model_name>``, streaming into ``placeholder``."""
+    return command_runner.run_streaming(["cluster/pull_checkpoint.sh", model_name], placeholder)

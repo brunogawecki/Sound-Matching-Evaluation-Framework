@@ -6,8 +6,55 @@ bootstrap()
 import streamlit as st
 
 import cluster_runner
+import command_runner
 import discovery
 from script_specs import MODEL_CHOICES
+
+_TERMINAL_STATES = ("COMPLETED",)
+_RUNNING_STATES = ("PENDING", "RUNNING", "UNKNOWN")
+
+
+@st.fragment(run_every="5s")
+def _live_job_fragment(job: cluster_runner.Job) -> None:
+    """Polls state + tails the remote log every 5s; offers Cancel while running."""
+    state = cluster_runner.get_slurm_job_state(job.job_id)
+    st.caption(f"State: **{state}**")
+    log_text = cluster_runner.get_remote_log_tail(job.job_id)
+    st.code(command_runner.collapse_carriage_returns(log_text) or "(no output)")
+    if state in _RUNNING_STATES:
+        if st.button("Cancel job", key=f"cancel_{job.job_id}"):
+            try:
+                cluster_runner.cancel_job(job.job_id)
+            except RuntimeError as exc:
+                st.error(str(exc))
+            else:
+                st.success(f"Cancel requested for job {job.job_id}.")
+
+
+def _render_job_status(job: cluster_runner.Job) -> None:
+    try:
+        state = cluster_runner.get_slurm_job_state(job.job_id)
+    except (RuntimeError, KeyError) as exc:
+        st.error(f"Could not check status: {exc}")
+        return
+
+    if state in _RUNNING_STATES:
+        _live_job_fragment(job)
+    elif state in _TERMINAL_STATES:
+        st.success(f"State: **{state}**")
+        if st.button("Pull checkpoint", key=f"pull_{job.job_id}"):
+            placeholder = st.empty()
+            with st.spinner("Pulling checkpoint…"):
+                code = cluster_runner.pull_checkpoint(job.model, placeholder)
+            if code == 0:
+                st.success(f"Pulled checkpoint for {job.model}. See the Evaluate page.")
+            else:
+                st.error(f"cluster/pull_checkpoint.sh exited {code}; see log above.")
+    else:
+        st.error(f"State: **{state}**")
+        log_text = cluster_runner.get_remote_log_tail(job.job_id)
+        st.code(command_runner.collapse_carriage_returns(log_text) or "(no output)")
+
 
 st.set_page_config(page_title="Train on cluster", layout="wide")
 st.title("Train on cluster")
@@ -75,15 +122,11 @@ if st.button("Push corpus & submit job", type="primary", disabled=(config_choice
 st.subheader("Submitted jobs")
 jobs = cluster_runner.load_jobs()
 if jobs:
-    st.dataframe(
-        [
-            {"job_id": j.job_id, "corpus": j.corpus, "model": j.model,
-             "config": j.config, "submitted_at": j.submitted_at}
-            for j in reversed(jobs)
-        ],
-        width="stretch",
-        hide_index=True,
-    )
-    st.caption("Live status, log tailing, checkpoint pull, and cancel land in the next step.")
+    for job in reversed(jobs):
+        with st.expander(
+            f"Job {job.job_id} — {job.corpus} / {job.model} / {job.config} "
+            f"(submitted {job.submitted_at})"
+        ):
+            _render_job_status(job)
 else:
     st.caption("No jobs submitted yet from this dashboard.")

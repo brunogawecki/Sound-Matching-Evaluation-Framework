@@ -173,3 +173,64 @@ def test_submit_job_unparseable_sbatch_output_raises(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError):
         cluster_runner.submit_job("corpus_a", "MeanParameterBaseline", "smoke", _FakePlaceholder())
+
+
+# --- get_slurm_job_state / get_remote_log_tail / cancel_job / pull_checkpoint --------------
+
+def test_get_slurm_job_state_returns_stripped_state(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (0, "RUNNING     \n"))
+    assert cluster_runner.get_slurm_job_state("98765") == "RUNNING"
+
+
+def test_get_slurm_job_state_unknown_on_failure(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (1, ""))
+    assert cluster_runner.get_slurm_job_state("98765") == "UNKNOWN"
+
+
+def test_get_slurm_job_state_unknown_on_blank_output(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (0, "   \n"))
+    assert cluster_runner.get_slurm_job_state("98765") == "UNKNOWN"
+
+
+def test_get_remote_log_tail_returns_output(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (0, "epoch 1/10\nepoch 2/10\n"))
+    assert cluster_runner.get_remote_log_tail("98765") == "epoch 1/10\nepoch 2/10\n"
+
+
+def test_get_remote_log_tail_reports_failure(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (1, "No such file"))
+    result = cluster_runner.get_remote_log_tail("98765")
+    assert "could not read" in result
+    assert "No such file" in result
+
+
+def test_cancel_job_success(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    calls = []
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: calls.append(argv) or (0, ""))
+    cluster_runner.cancel_job("98765")
+    assert any("scancel 98765" in argv[-1] for argv in calls)
+
+
+def test_cancel_job_failure_raises(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (1, "Invalid job id"))
+    with pytest.raises(RuntimeError):
+        cluster_runner.cancel_job("98765")
+
+
+def test_pull_checkpoint_delegates_to_run_streaming(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        command_runner, "run_streaming",
+        lambda argv, placeholder: calls.append(argv) or 0,
+    )
+    placeholder = _FakePlaceholder()
+    code = cluster_runner.pull_checkpoint("MeanParameterBaseline", placeholder)
+    assert code == 0
+    assert calls == [["cluster/pull_checkpoint.sh", "MeanParameterBaseline"]]

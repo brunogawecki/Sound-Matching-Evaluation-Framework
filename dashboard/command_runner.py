@@ -34,17 +34,38 @@ def run_capture(argv: List[str], cwd: Optional[str] = None) -> Tuple[int, str]:
     return completed.returncode, completed.stdout
 
 
+def collapse_carriage_returns(text: str, tail_lines: int = _TAIL_LINES) -> str:
+    """Render ``text`` the way a terminal would, keeping only the last ``tail_lines`` lines.
+
+    A ``\\n`` commits the line being built to scrollback; a ``\\r`` rewinds to
+    the start of that line instead of starting a new one, so a ``tqdm``-style
+    progress bar collapses to one animating line rather than one line per
+    tick. Shared by :func:`run_streaming` (applied to its growing live buffer)
+    and callers rendering a one-shot snapshot of a polled remote log tail,
+    which has no state to carry between polls.
+    """
+    committed: List[str] = []
+    current = ""
+    for char in text:
+        if char == "\n":
+            committed.append(current)
+            current = ""
+        elif char == "\r":
+            current = ""
+        else:
+            current += char
+    lines = committed + ([current] if current else [])
+    return "\n".join(lines[-tail_lines:])
+
+
 def run_streaming(argv: List[str], placeholder) -> int:
     """Run ``argv``, tailing output into a Streamlit ``placeholder``; return code.
 
-    The raw byte stream is consumed so carriage returns are honoured the way a
-    terminal does: a ``\\r`` rewinds the current line, so a ``tqdm`` progress bar
-    stays a single line that updates in place instead of one line per tick. A
-    ``\\n`` commits the current line to the scrollback. ``placeholder`` is an
-    ``st.empty()`` (or any object with ``.code(str)``).
+    The raw byte stream is consumed and re-collapsed (:func:`collapse_carriage_returns`)
+    on every chunk so carriage returns are honoured the way a terminal does.
+    ``placeholder`` is an ``st.empty()`` (or any object with ``.code(str)``).
     """
-    committed: List[str] = []  # finished lines (ended with \n)
-    current = ""  # the line currently being (over)written
+    chunks: List[str] = []
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     process = subprocess.Popen(
@@ -57,29 +78,13 @@ def run_streaming(argv: List[str], placeholder) -> int:
     assert process.stdout is not None
     file_descriptor = process.stdout.fileno()
 
-    def render() -> None:
-        tail = committed[-_TAIL_LINES:]
-        text = "\n".join(tail + ([current] if current else []))
-        placeholder.code(text or "…")
-
     while True:
         chunk = os.read(file_descriptor, 4096)
         if not chunk:
             break
-        for char in decoder.decode(chunk):
-            if char == "\n":
-                committed.append(current)
-                current = ""
-            elif char == "\r":
-                current = ""  # carriage return: overwrite the current line
-            else:
-                current += char
-        render()
+        chunks.append(decoder.decode(chunk))
+        placeholder.code(collapse_carriage_returns("".join(chunks)) or "…")
 
-    if current:
-        committed.append(current)
-    render()
-    return_code = process.wait()
-    if not committed:
-        placeholder.code("(no output)")
-    return return_code
+    rendered = collapse_carriage_returns("".join(chunks))
+    placeholder.code(rendered or "(no output)")
+    return process.wait()
