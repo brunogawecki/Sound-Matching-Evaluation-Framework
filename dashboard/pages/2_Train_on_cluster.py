@@ -16,19 +16,25 @@ _RUNNING_STATES = ("PENDING", "RUNNING", "UNKNOWN")
 
 @st.fragment(run_every="5s")
 def _live_job_fragment(job: cluster_runner.Job) -> None:
-    """Polls state + tails the remote log every 5s; offers Cancel while running."""
+    """Polls state + tails the remote log every 5s; offers Cancel while running.
+
+    Once the job leaves a running state, triggers a full-app rerun so the outer
+    ``_render_job_status`` branch re-evaluates and swaps in the terminal-state
+    view (Pull checkpoint / error banner) instead of this polling fragment.
+    """
     state = cluster_runner.get_slurm_job_state(job.job_id)
+    if state not in _RUNNING_STATES:
+        st.rerun()
     st.caption(f"State: **{state}**")
     log_text = cluster_runner.get_remote_log_tail(job.job_id)
     st.code(command_runner.collapse_carriage_returns(log_text) or "(no output)")
-    if state in _RUNNING_STATES:
-        if st.button("Cancel job", key=f"cancel_{job.job_id}"):
-            try:
-                cluster_runner.cancel_job(job.job_id)
-            except RuntimeError as exc:
-                st.error(str(exc))
-            else:
-                st.success(f"Cancel requested for job {job.job_id}.")
+    if st.button("Cancel job", key=f"cancel_{job.job_id}"):
+        try:
+            cluster_runner.cancel_job(job.job_id)
+        except RuntimeError as exc:
+            st.error(str(exc))
+        else:
+            st.success(f"Cancel requested for job {job.job_id}.")
 
 
 def _render_job_status(job: cluster_runner.Job) -> None:

@@ -40,9 +40,10 @@ def collapse_carriage_returns(text: str, tail_lines: int = _TAIL_LINES) -> str:
     A ``\\n`` commits the line being built to scrollback; a ``\\r`` rewinds to
     the start of that line instead of starting a new one, so a ``tqdm``-style
     progress bar collapses to one animating line rather than one line per
-    tick. Shared by :func:`run_streaming` (applied to its growing live buffer)
-    and callers rendering a one-shot snapshot of a polled remote log tail,
-    which has no state to carry between polls.
+    tick. Idempotent on its own output (re-collapsing a collapsed string is a
+    no-op beyond the ``tail_lines`` cut), so :func:`run_streaming` can feed its
+    result back in as the running buffer; callers rendering a one-shot snapshot
+    of a polled remote log tail use it with no state carried between polls.
     """
     committed: List[str] = []
     current = ""
@@ -61,11 +62,14 @@ def collapse_carriage_returns(text: str, tail_lines: int = _TAIL_LINES) -> str:
 def run_streaming(argv: List[str], placeholder) -> int:
     """Run ``argv``, tailing output into a Streamlit ``placeholder``; return code.
 
-    The raw byte stream is consumed and re-collapsed (:func:`collapse_carriage_returns`)
-    on every chunk so carriage returns are honoured the way a terminal does.
+    The raw byte stream is collapsed (:func:`collapse_carriage_returns`) so
+    carriage returns are honoured the way a terminal does. The collapsed tail is
+    fed back in as the running buffer after each chunk, so memory stays bounded
+    to ``tail_lines`` and the per-chunk work stays proportional to that tail
+    rather than the whole (possibly huge, e.g. a per-file ``rsync -avP``) stream.
     ``placeholder`` is an ``st.empty()`` (or any object with ``.code(str)``).
     """
-    chunks: List[str] = []
+    buffer = ""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     process = subprocess.Popen(
@@ -82,9 +86,8 @@ def run_streaming(argv: List[str], placeholder) -> int:
         chunk = os.read(file_descriptor, 4096)
         if not chunk:
             break
-        chunks.append(decoder.decode(chunk))
-        placeholder.code(collapse_carriage_returns("".join(chunks)) or "…")
+        buffer = collapse_carriage_returns(buffer + decoder.decode(chunk))
+        placeholder.code(buffer or "…")
 
-    rendered = collapse_carriage_returns("".join(chunks))
-    placeholder.code(rendered or "(no output)")
+    placeholder.code(buffer or "(no output)")
     return process.wait()

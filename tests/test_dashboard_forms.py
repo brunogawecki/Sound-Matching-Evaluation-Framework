@@ -82,6 +82,19 @@ def test_paths_preserves_spaces_within_a_line():
     ]
 
 
+def test_paths_strips_surrounding_quotes():
+    # A path pasted pre-quoted (e.g. copied out of a shell command) shouldn't carry
+    # the quote characters into the actual path.
+    argv = build_command(
+        BUILD_HUMAN,
+        {"cartridges": "'/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges'"},
+    )
+    assert argv[:5] == [
+        sys.executable, "scripts/build_dataset.py", "human", "--cartridges",
+        "/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges",
+    ]
+
+
 def test_required_missing_raises():
     with pytest.raises(ValueError):
         build_command(BUILD_HUMAN, {"cartridges": ""})
