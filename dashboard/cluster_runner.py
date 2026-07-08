@@ -106,6 +106,26 @@ def append_job(job: Job) -> None:
     JOBS_REGISTRY_PATH.write_text(json.dumps([asdict(j) for j in jobs], indent=2))
 
 
+def push_corpus(corpus_name: str, placeholder) -> None:
+    """rsync a corpus to the cluster, streaming into ``placeholder``. Raises on failure."""
+    push_code = command_runner.run_streaming(
+        ["cluster/push_corpus.sh", corpus_name], placeholder
+    )
+    if push_code != 0:
+        raise RuntimeError(f"cluster/push_corpus.sh exited {push_code}; see log above.")
+
+
+def remote_corpus_exists(corpus_name: str) -> bool:
+    """True if ``REMOTE_CORPORA_DIR/<corpus>`` exists on the cluster (``ssh test -d``)."""
+    cluster_env = load_cluster_env()
+    ssh_target = cluster_env["CLUSTER_SSH"]
+    remote_corpora_dir = cluster_env["REMOTE_CORPORA_DIR"]
+    # Leave the dir unquoted so the remote shell expands it (may be $HOME/...).
+    remote_path = f"{remote_corpora_dir}/{shlex.quote(corpus_name)}"
+    code, _ = command_runner.run_capture(["ssh", ssh_target, f"test -d {remote_path}"])
+    return code == 0
+
+
 def submit_job(
     corpus_name: str,
     model_name: str,
@@ -113,11 +133,11 @@ def submit_job(
     placeholder,
     checkout_branch: Optional[str] = None,
 ) -> Job:
-    """Push the corpus, sync the remote checkout, and ``sbatch`` a training job.
+    """Sync the remote checkout and ``sbatch`` a training job for an already-pushed corpus.
 
-    ``placeholder`` (an ``st.empty()``) is streamed the corpus push live. With
-    ``checkout_branch`` set, hard-syncs the cluster to that pushed branch
-    (``git fetch`` + ``checkout -B``); otherwise leaves it and ``git pull``s.
+    Guards that the corpus is on the cluster (push it first with :func:`push_corpus`).
+    With ``checkout_branch`` set, hard-syncs to that pushed branch (``git fetch`` +
+    ``checkout -B``); otherwise ``git pull``s. Streams output into ``placeholder``.
     Raises ``RuntimeError`` on any failing step.
     """
     cluster_env = load_cluster_env()
@@ -125,11 +145,10 @@ def submit_job(
     slurm_account = cluster_env["SLURM_ACCOUNT"]
     remote_repo_dir = cluster_env["REMOTE_REPO_DIR"]
 
-    push_code = command_runner.run_streaming(
-        ["cluster/push_corpus.sh", corpus_name], placeholder
-    )
-    if push_code != 0:
-        raise RuntimeError(f"cluster/push_corpus.sh exited {push_code}; see log above.")
+    if not remote_corpus_exists(corpus_name):
+        raise RuntimeError(
+            f"Corpus '{corpus_name}' is not on the cluster — push it first."
+        )
 
     if checkout_branch:
         remote_ref = shlex.quote(f"origin/{checkout_branch}")

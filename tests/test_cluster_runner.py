@@ -132,19 +132,54 @@ def _stub_cluster_env(monkeypatch):
     monkeypatch.setattr(
         cluster_runner, "load_cluster_env",
         lambda: {"CLUSTER_SSH": "me@login.example", "SLURM_ACCOUNT": "acct123",
-                 "REMOTE_REPO_DIR": "/home/me/repo"},
+                 "REMOTE_REPO_DIR": "/home/me/repo", "REMOTE_CORPORA_DIR": "/home/me/corpora"},
     )
 
+
+# --- push_corpus / remote_corpus_exists --------------------------------------
+
+def test_push_corpus_streams_script_and_succeeds(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        command_runner, "run_streaming",
+        lambda argv, placeholder: calls.append(argv) or 0,
+    )
+    cluster_runner.push_corpus("corpus_a", _FakePlaceholder())
+    assert calls == [["cluster/push_corpus.sh", "corpus_a"]]
+
+
+def test_push_corpus_failure_raises(monkeypatch):
+    monkeypatch.setattr(command_runner, "run_streaming", lambda argv, placeholder: 1)
+    with pytest.raises(RuntimeError):
+        cluster_runner.push_corpus("corpus_a", _FakePlaceholder())
+
+
+def test_remote_corpus_exists_true_when_test_d_succeeds(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    calls = []
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: calls.append(argv) or (0, ""))
+    assert cluster_runner.remote_corpus_exists("corpus_a") is True
+    assert "test -d /home/me/corpora/corpus_a" in calls[0][-1]
+
+
+def test_remote_corpus_exists_false_when_test_d_fails(monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(command_runner, "run_capture", lambda argv: (1, ""))
+    assert cluster_runner.remote_corpus_exists("corpus_a") is False
+
+
+# --- submit_job ------------------------------------------------------------
 
 def test_submit_job_success_appends_and_returns_job(tmp_path, monkeypatch):
     _stub_cluster_env(monkeypatch)
     monkeypatch.setattr(cluster_runner, "JOBS_REGISTRY_PATH", tmp_path / "jobs.json")
-    monkeypatch.setattr(command_runner, "run_streaming", lambda argv, placeholder: 0)
 
     capture_calls = []
 
     def fake_run_capture(argv):
         capture_calls.append(argv)
+        if "test -d" in argv[-1]:
+            return 0, ""
         if "git pull" in argv[-1]:
             return 0, "Already up to date.\n"
         if "sbatch" in argv[-1]:
@@ -161,18 +196,20 @@ def test_submit_job_success_appends_and_returns_job(tmp_path, monkeypatch):
     assert job.model == "MeanParameterBaseline"
     assert job.config == "smoke"
     assert cluster_runner.load_jobs() == [job]
-    assert len(capture_calls) == 2
+    assert len(capture_calls) == 3  # guard (test -d), git sync, sbatch
 
 
-def test_submit_job_push_failure_raises_and_does_not_register(tmp_path, monkeypatch):
+def test_submit_job_missing_corpus_raises_and_does_not_register(tmp_path, monkeypatch):
     _stub_cluster_env(monkeypatch)
     jobs_path = tmp_path / "jobs.json"
     monkeypatch.setattr(cluster_runner, "JOBS_REGISTRY_PATH", jobs_path)
-    monkeypatch.setattr(command_runner, "run_streaming", lambda argv, placeholder: 1)
-    monkeypatch.setattr(
-        command_runner, "run_capture",
-        lambda argv: (_ for _ in ()).throw(AssertionError("should not reach ssh"))
-    )
+
+    def fake_run_capture(argv):
+        if "test -d" in argv[-1]:
+            return 1, ""  # corpus not on the cluster
+        raise AssertionError("should not sync or sbatch when the corpus is missing")
+
+    monkeypatch.setattr(command_runner, "run_capture", fake_run_capture)
 
     with pytest.raises(RuntimeError):
         cluster_runner.submit_job("corpus_a", "MeanParameterBaseline", "smoke", _FakePlaceholder())
@@ -182,9 +219,10 @@ def test_submit_job_push_failure_raises_and_does_not_register(tmp_path, monkeypa
 def test_submit_job_unparseable_sbatch_output_raises(tmp_path, monkeypatch):
     _stub_cluster_env(monkeypatch)
     monkeypatch.setattr(cluster_runner, "JOBS_REGISTRY_PATH", tmp_path / "jobs.json")
-    monkeypatch.setattr(command_runner, "run_streaming", lambda argv, placeholder: 0)
 
     def fake_run_capture(argv):
+        if "test -d" in argv[-1]:
+            return 0, ""
         if "git pull" in argv[-1]:
             return 0, "Already up to date.\n"
         return 0, "no job id in here\n"
@@ -198,13 +236,14 @@ def test_submit_job_unparseable_sbatch_output_raises(tmp_path, monkeypatch):
 def test_submit_job_switch_branch_hard_checks_out_on_cluster(tmp_path, monkeypatch):
     _stub_cluster_env(monkeypatch)
     monkeypatch.setattr(cluster_runner, "JOBS_REGISTRY_PATH", tmp_path / "jobs.json")
-    monkeypatch.setattr(command_runner, "run_streaming", lambda argv, placeholder: 0)
 
     capture_calls = []
 
     def fake_run_capture(argv):
         capture_calls.append(argv)
         remote_command = argv[-1]
+        if "test -d" in remote_command:
+            return 0, ""
         if "git checkout -B" in remote_command:
             return 0, "Reset branch 'feature-x'\n"
         if "sbatch" in remote_command:
@@ -218,7 +257,7 @@ def test_submit_job_switch_branch_hard_checks_out_on_cluster(tmp_path, monkeypat
     )
 
     assert job.job_id == "55555"
-    sync_command = capture_calls[0][-1]
+    sync_command = capture_calls[1][-1]  # capture_calls[0] is the guard (test -d)
     assert "git fetch origin" in sync_command
     assert "git checkout -B feature-x origin/feature-x" in sync_command
     assert "git pull" not in sync_command

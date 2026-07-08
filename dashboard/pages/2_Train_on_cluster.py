@@ -65,9 +65,9 @@ def _render_job_status(job: cluster_runner.Job) -> None:
 st.set_page_config(page_title="Train on cluster", layout="wide")
 st.title("Train on cluster")
 st.caption(
-    "Pushes the selected corpus, syncs the remote checkout (pull, or switch to your branch), "
-    "and submits `cluster/train.sbatch` over SSH. Model/corpus choice happens here; training "
-    "itself runs on the cluster."
+    "Push a corpus to the cluster once, then submit training jobs against it. Submitting syncs "
+    "the remote checkout (pull, or switch to your branch) and runs `cluster/train.sbatch` over "
+    "SSH. Model/corpus choice happens here; training itself runs on the cluster."
 )
 
 try:
@@ -76,7 +76,11 @@ except FileNotFoundError as exc:
     st.error(str(exc))
     st.stop()
 
-missing = [key for key in ("CLUSTER_SSH", "SLURM_ACCOUNT", "REMOTE_REPO_DIR") if not cluster_env.get(key)]
+missing = [
+    key
+    for key in ("CLUSTER_SSH", "SLURM_ACCOUNT", "REMOTE_REPO_DIR", "REMOTE_CORPORA_DIR")
+    if not cluster_env.get(key)
+]
 if missing:
     st.error(f"cluster/cluster.env is missing a value for: {', '.join(missing)}.")
     st.stop()
@@ -98,6 +102,17 @@ corpus = st.selectbox(
     corpora,
     format_func=lambda c: f"{c.name}  ({c.num_samples} samples)",
 )
+
+if st.button("Push corpus"):
+    placeholder = st.empty()
+    with st.spinner(f"Pushing {corpus.name}…"):
+        try:
+            cluster_runner.push_corpus(corpus.name, placeholder)
+        except RuntimeError as exc:
+            st.error(str(exc))
+        else:
+            st.success(f"Pushed {corpus.name} to the cluster.")
+
 model_name = st.selectbox("Model", list(MODEL_CHOICES))
 
 config_choice = st.selectbox("Training config", ("full", "smoke", "custom"))
@@ -140,9 +155,9 @@ if remote_branch is not None:
         if choice == switch_label:
             checkout_branch = local_branch
 
-if st.button("Push corpus & submit job", type="primary", disabled=(config_choice == "custom" and not config_arg)):
+if st.button("Train", type="primary", disabled=(config_choice == "custom" and not config_arg)):
     placeholder = st.empty()
-    with st.spinner("Pushing corpus and submitting…"):
+    with st.spinner("Submitting…"):
         try:
             job = cluster_runner.submit_job(
                 corpus.name, model_name, config_arg, placeholder, checkout_branch=checkout_branch
