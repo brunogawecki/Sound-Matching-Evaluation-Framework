@@ -248,8 +248,13 @@ def get_slurm_job_state(job_id: str) -> str:
     return output.strip().splitlines()[0].strip()
 
 
-def get_remote_log_tail(job_id: str, lines: int = 40) -> str:
-    """The last ``lines`` of ``slurm-<job_id>.out`` on the cluster, raw (uncollapsed)."""
+def get_remote_log_tail(job_id: str, lines: int = 40) -> Optional[str]:
+    """Last ``lines`` of ``slurm-<job_id>.out``, raw; ``None`` if it can't be read.
+
+    A missing log is normal (SLURM only writes it once the job starts, and a job
+    cancelled while pending never writes one), so failure is signalled as ``None``
+    for the caller to phrase, not an error string.
+    """
     cluster_env = load_cluster_env()
     ssh_target = cluster_env["CLUSTER_SSH"]
     remote_repo_dir = cluster_env["REMOTE_REPO_DIR"]
@@ -257,9 +262,7 @@ def get_remote_log_tail(job_id: str, lines: int = 40) -> str:
     code, output = command_runner.run_capture(
         ["ssh", ssh_target, f"tail -n {int(lines)} {shlex.quote(log_path)}"]
     )
-    if code != 0:
-        return f"(could not read {log_path}: {output.strip()})"
-    return output
+    return output if code == 0 else None
 
 
 def cancel_job(job_id: str) -> None:

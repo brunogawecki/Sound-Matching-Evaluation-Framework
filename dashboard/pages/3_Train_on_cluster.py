@@ -32,20 +32,25 @@ def _render_terminal_job(job: cluster_runner.Job, state: str) -> None:
                 st.error(f"cluster/pull_checkpoint.sh exited {code}; see log above.")
     else:
         st.error(f"State: **{state}**")
-        log_text = cluster_runner.get_remote_log_tail(job.job_id)
+        _render_log_tail(job)
+
+
+def _render_log_tail(job: cluster_runner.Job) -> None:
+    """Show the job's remote log tail, or a note when there's no log to read."""
+    log_text = cluster_runner.get_remote_log_tail(job.job_id)
+    if log_text is None:
+        st.caption("No log — the job produced no output (cancelled before it ran?).")
+    else:
         st.code(command_runner.collapse_carriage_returns(log_text) or "(no output)")
 
 
 @st.fragment(run_every="5s")
 def _live_job_fragment(job: cluster_runner.Job) -> None:
-    """Polls state + tails the remote log every 5s; offers Cancel while running.
+    """Poll state + tail the log every 5s; offer Cancel while running.
 
-    Sole owner of the SLURM-state query: ``_render_job_status`` reads the cached
-    terminal state instead of re-querying, so a running job costs one ``sacct``
-    poll per 5s tick rather than an extra one on every full-app render. Once the
-    job leaves a running state, caches that state and triggers a full-app rerun,
-    so ``_render_job_status`` swaps in the static terminal view (Pull checkpoint /
-    error banner) and this fragment stops polling.
+    Sole owner of the state query, so ``_render_job_status`` reads the cached
+    terminal state instead of re-querying. On leaving a running state, caches it
+    and reruns so the static terminal view takes over and polling stops.
     """
     try:
         state = cluster_runner.get_slurm_job_state(job.job_id)
@@ -56,8 +61,11 @@ def _live_job_fragment(job: cluster_runner.Job) -> None:
         st.session_state[_cached_state_key(job.job_id)] = state
         st.rerun()
     st.caption(f"State: **{state}**")
-    log_text = cluster_runner.get_remote_log_tail(job.job_id)
-    st.code(command_runner.collapse_carriage_returns(log_text) or "(no output)")
+    # No log exists until the job leaves the queue, so don't tail while pending.
+    if state == "RUNNING":
+        _render_log_tail(job)
+    else:
+        st.caption("Queued — the log tail appears once the job starts running.")
     if st.button("Cancel job", key=f"cancel_{job.job_id}"):
         try:
             cluster_runner.cancel_job(job.job_id)
@@ -68,9 +76,7 @@ def _live_job_fragment(job: cluster_runner.Job) -> None:
 
 
 def _render_job_status(job: cluster_runner.Job) -> None:
-    # Once the live fragment has cached a terminal state, serve the static
-    # terminal view straight from cache (no SSH); otherwise hand off to the
-    # fragment, which owns the state query and polls while the job runs.
+    # Serve a cached terminal state statically (no SSH); else poll via the fragment.
     cached_state = st.session_state.get(_cached_state_key(job.job_id))
     if cached_state is not None and cached_state not in _RUNNING_STATES:
         _render_terminal_job(job, cached_state)

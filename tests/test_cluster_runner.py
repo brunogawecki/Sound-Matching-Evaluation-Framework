@@ -331,12 +331,10 @@ def test_get_remote_log_tail_returns_output(monkeypatch):
     assert cluster_runner.get_remote_log_tail("98765") == "epoch 1/10\nepoch 2/10\n"
 
 
-def test_get_remote_log_tail_reports_failure(monkeypatch):
+def test_get_remote_log_tail_none_when_unreadable(monkeypatch):
     _stub_cluster_env(monkeypatch)
     monkeypatch.setattr(command_runner, "run_capture", lambda argv: (1, "No such file"))
-    result = cluster_runner.get_remote_log_tail("98765")
-    assert "could not read" in result
-    assert "No such file" in result
+    assert cluster_runner.get_remote_log_tail("98765") is None
 
 
 def test_cancel_job_success(monkeypatch):
