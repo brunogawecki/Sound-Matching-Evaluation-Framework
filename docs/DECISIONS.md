@@ -793,6 +793,49 @@ justifies; the shell-out + polling design reuses everything the dashboard and `c
 
 ---
 
+### D-SPLIT — Post-render corpus splitting (LOCKED 2026-07-08)
+
+**Decision**: a corpus that has already been rendered can be split into a **train** corpus and a
+**test** corpus (`scripts/split_corpus.py`, `dataset/corpus_splitter.py`, and the dashboard's *Split
+corpus* page). This is distinct from build-time splitting (`DexedPresetLoader`, D4), which splits
+*presets before rendering*. It exists so a held-out test set can be carved out of an existing corpus
+without re-rendering all of it — e.g. the ~30k-sample preset-gen corpus, built all-train in-process.
+
+1. **Train audio is copied; the test partition is re-rendered fresh-process at position 0.** A
+   copy-only split of an in-process corpus would produce test targets that carry context leakage and so
+   violate the eval render contract (D-REPRO / D-EVAL: the Evaluator re-renders each prediction fresh
+   at pos 0 and compares it to the target). Re-rendering only the test fraction is cheap and restores
+   the contract; train render context is irrelevant to training, so those WAVs are copied verbatim.
+   This mirrors exactly what `build_dataset.py human` already does (test fresh, train in-process). The
+   test partition's presets are replayed from the source `metadata.csv` via `CorpusPresetSource` (the
+   103 subset params are stored per row; dropped params fall back to the synth defaults as at build).
+2. **Seeded row-partition, reusing the build-time algorithm.** `split_indices` (factored out of
+   `split_presets`) is the single source of truth: permute positions with `split_seed`, take the first
+   `round(n · test_fraction)` as test. So a corpus split and a build-time split shuffle identically.
+3. **No deduplication at split time.** Human / preset-gen corpora were already deduplicated by the
+   loader before rendering, and a deduplicated set stays deduplicated when partitioned; synthetic draws
+   never near-collide. Re-running the O(n²) dedup scan would be redundant. (Dedup is still the build-time
+   guard — see **Deduplication** in `CONTEXT.md`.)
+4. **Hybrid corpora are refused.** Their augmented children (and repeated blend parents) derive from
+   shared human parents, so a row-level split would scatter a parent and its derivatives across train
+   and test — **train/test leakage** (see `CONTEXT.md`). Enforced in the script and surfaced in the UI
+   (the corpus is shown but blocked with the reason). To get a held-out human test set, split the human
+   source cartridges at build time instead. Synthetic and human corpora are leakage-free under a row
+   split (each row is an independent draw or a unique already-deduplicated voice).
+
+Both output corpora stay self-describing (D-SELFDESC): each carries the source's `parameter_space`,
+`render_settings`, `subset_names`, and `default_params` unchanged, with a `source` block recording the
+split provenance (`split_from`, `split_test_fraction`, `split_seed`, and the original construction
+`method`). The test corpus records `render_process: fresh` (so discovery flags it eval-ready); the
+train corpus keeps the source's render process.
+
+**Why**: the framework's discipline is that eval targets are rendered fresh at pos 0 (D-REPRO), so a
+useful post-render split cannot be a pure file copy — it has to re-render the held-out half. Doing that
+for only the test fraction keeps the operation cheap while producing a contract-correct test corpus,
+which is the whole point of holding data out.
+
+---
+
 ## OPEN
 
 ### D4 — Human preset source for the test set (deferred by user; importer built 2026-06-24)

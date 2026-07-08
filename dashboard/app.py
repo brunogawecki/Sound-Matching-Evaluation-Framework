@@ -26,7 +26,7 @@ st.set_page_config(page_title="Sound-matching control panel", layout="wide")
 st.title("Sound-matching control panel")
 st.caption(
     "A local front-end over the pipeline scripts. Pick a page in the sidebar: "
-    "**Build dataset → Train on cluster → Evaluate → Results**."
+    "**Build dataset → Split corpus → Train on cluster → Evaluate → Results**."
 )
 
 dexed_ok = os.path.exists(os.path.expanduser(config.DEXED_PATH))

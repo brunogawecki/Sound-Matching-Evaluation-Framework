@@ -129,6 +129,22 @@ BUILD_PRESETGEN = ScriptSpec(
     ),
 )
 
+SPLIT_CORPUS = ScriptSpec(
+    key="split",
+    script="scripts/split_corpus.py",
+    description="Split an already-built corpus into a train corpus (audio copied) and a "
+                "test corpus (re-rendered fresh-process; D-REPRO). Not for hybrid corpora.",
+    args=(
+        ArgSpec("corpus", "--corpus", "path", "", required=True,
+                help="Source corpus directory (picked from the dropdown below)."),
+        ArgSpec("test_fraction", "--test-fraction", "float", 0.2,
+                help="Share of samples held out as the test set."),
+        ArgSpec("split_seed", "--split-seed", "int", 0, help="Seed for the train/test row shuffle."),
+        ArgSpec("run_name", "--run-name", "str", "",
+                help="Output base name; _train/_test are appended. Blank uses the source name."),
+    ),
+)
+
 # Mirror of models.registry.MODEL_REGISTRY keys. Kept as plain strings (not
 # imported) so the dashboard never pulls in the torch-heavy pipeline library.
 MODEL_CHOICES = ("MeanParameterBaseline", "Sound2SynthSpectrogramRegressor")

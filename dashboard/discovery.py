@@ -22,6 +22,7 @@ class Corpus:
     path: Path
     num_samples: Optional[int]
     fresh_process: bool  # True if any partition rendered fresh-process (eval-ready)
+    method: Optional[str]  # construction method ("synthetic" | "human" | "hybrid" | ...)
 
 
 @dataclass(frozen=True)
@@ -52,12 +53,15 @@ def list_corpora() -> List[Corpus]:
         # run_summary.json records how it was rendered ("in-process" | "fresh").
         # Fresh-process corpora are the eval-ready ones (D-REPRO).
         fresh = str(summary.get("render_process", "")).lower().startswith("fresh")
+        source = summary.get("source") or {}
+        method = source.get("method") if isinstance(source, dict) else None
         corpora.append(
             Corpus(
                 name=entry.name,
                 path=entry,
                 num_samples=summary.get("num_samples"),
                 fresh_process=fresh,
+                method=method,
             )
         )
     return corpora

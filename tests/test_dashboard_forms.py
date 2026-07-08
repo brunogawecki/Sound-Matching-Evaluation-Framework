@@ -21,6 +21,7 @@ from script_specs import (  # noqa: E402
     BUILD_SYNTHETIC,
     EVALUATE,
     MODEL_CHOICES,
+    SPLIT_CORPUS,
 )
 
 from models.registry import MODEL_REGISTRY  # noqa: E402
@@ -140,6 +141,34 @@ def test_evaluate_save_audio_flag_emitted_when_true():
     ]
 
 
+def test_split_corpus_command_is_exact():
+    argv = build_command(
+        SPLIT_CORPUS,
+        {"corpus": "dataset/full_preset-gen-vae", "test_fraction": 0.2,
+         "split_seed": 0, "run_name": ""},
+    )
+    assert argv == [
+        sys.executable, "scripts/split_corpus.py",
+        "--corpus", "dataset/full_preset-gen-vae",
+        "--test-fraction", "0.2",
+        "--split-seed", "0",
+    ]
+
+
+def test_split_corpus_run_name_emitted_when_set():
+    argv = build_command(
+        SPLIT_CORPUS,
+        {"corpus": "dataset/demo", "test_fraction": 0.25, "split_seed": 7, "run_name": "bench"},
+    )
+    assert argv == [
+        sys.executable, "scripts/split_corpus.py",
+        "--corpus", "dataset/demo",
+        "--test-fraction", "0.25",
+        "--split-seed", "7",
+        "--run-name", "bench",
+    ]
+
+
 # --- run_capture: returncode + combined output ------------------------------
 
 def test_run_capture_success():
@@ -173,6 +202,18 @@ def test_list_corpora_reads_run_summary(tmp_path, monkeypatch):
     assert corpora[0].name == "demo_train"
     assert corpora[0].num_samples == 5
     assert corpora[0].fresh_process is True
+    assert corpora[0].method is None
+
+
+def test_list_corpora_reads_construction_method(tmp_path, monkeypatch):
+    corpus = tmp_path / "demo_hybrid"
+    (corpus / "audio").mkdir(parents=True)
+    (corpus / "run_summary.json").write_text(
+        '{"run_name": "demo_hybrid", "num_samples": 5, "render_process": "in-process", '
+        '"source": {"method": "hybrid"}}'
+    )
+    monkeypatch.setattr(discovery, "DATASET_DIR", tmp_path)
+    assert discovery.list_corpora()[0].method == "hybrid"
 
 
 def test_list_saved_audio_samples_empty_when_no_audio_dir(tmp_path, monkeypatch):
