@@ -19,11 +19,18 @@ does. ``ParameterLoss`` applies softmax/cross-entropy to categorical blocks itse
 """
 from __future__ import annotations
 
-from typing import List, Tuple
+import json
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
 from torch import nn
+
+from dataset.torch_dataset import RenderedCorpusDataset
+from models.base_deep_model import BaseDeepModel
+from models.training.checkpoint import network_state_dict_from_lightning_checkpoint
+from models.training.config import TrainingConfig
+from models.training.loss import ParameterLoss
 
 # Fixed architecture constants, faithful to the paper's speccnn8l1_bn encoder.
 _NEGATIVE_SLOPE = 0.1  # LeakyReLU slope used throughout the paper's CNN
@@ -198,3 +205,146 @@ class PresetGenVaeNetwork(nn.Module):
         flattened = torch.flatten(features, start_dim=1)
         latent = self.encoder_mlp(flattened)
         return self.regressor(latent)
+
+
+class PresetGenVaeRegressor(BaseDeepModel):
+    """The :class:`BaseDeepModel` family wrapping :class:`PresetGenVaeNetwork` (Stage 1).
+
+    Only ``_build_network`` and ``fit`` are family-specific (save/load/predict are inherited).
+    The mel/STFT/encoder/regressor knobs are constructor arguments (paper ``speccnn8l1_bn`` +
+    ``3l1024`` defaults); ``ml_dimension``, ``num_audio_samples`` and ``sample_rate`` are read
+    from the corpus at ``fit`` time and folded into ``architecture_hparams`` so ``load`` can
+    rebuild the exact network before restoring weights (no VST, no Lightning). Reading the
+    render length + sample rate from the corpus (not the constructor) keeps the network aligned
+    with the self-describing corpus (D-SELFDESC) instead of a possibly-mismatched fixed value.
+
+    Stage 1 trains through the existing :class:`LightningRegressor` + :class:`ParameterLoss`,
+    exactly like :class:`Sound2SynthSpectrogramRegressor`; the VAE reconstruction/KL and the
+    latent flow arrive in Stages 2 and 3.
+    """
+
+    def __init__(
+        self,
+        n_fft: int = 1024,
+        hop_length: int = 256,
+        win_length: int = 1024,
+        n_mels: int = 257,
+        mel_fmin: float = 30.0,
+        mel_fmax: float = 11000.0,
+        spectrogram_min_db: float = -120.0,
+        spectrogram_max_db: float = 0.0,
+        dim_z: int = 256,
+        encoder_dropout: float = 0.3,
+        regressor_hidden_layers: int = 3,
+        regressor_hidden_width: int = 1024,
+        regressor_dropout: float = 0.4,
+        default_root_dir: str = "lightning_logs",
+    ) -> None:
+        super().__init__()
+        self._n_fft = n_fft
+        self._hop_length = hop_length
+        self._win_length = win_length
+        self._n_mels = n_mels
+        self._mel_fmin = mel_fmin
+        self._mel_fmax = mel_fmax
+        self._spectrogram_min_db = spectrogram_min_db
+        self._spectrogram_max_db = spectrogram_max_db
+        self._dim_z = dim_z
+        self._encoder_dropout = encoder_dropout
+        self._regressor_hidden_layers = regressor_hidden_layers
+        self._regressor_hidden_width = regressor_hidden_width
+        self._regressor_dropout = regressor_dropout
+        self._default_root_dir = default_root_dir
+
+    def _build_network(self, architecture_hparams: Dict[str, Any]) -> nn.Module:
+        return PresetGenVaeNetwork(
+            ml_dimension=architecture_hparams["ml_dimension"],
+            num_audio_samples=architecture_hparams["num_audio_samples"],
+            sample_rate=architecture_hparams["sample_rate"],
+            n_fft=architecture_hparams["n_fft"],
+            hop_length=architecture_hparams["hop_length"],
+            win_length=architecture_hparams["win_length"],
+            n_mels=architecture_hparams["n_mels"],
+            mel_fmin=architecture_hparams["mel_fmin"],
+            mel_fmax=architecture_hparams["mel_fmax"],
+            spectrogram_min_db=architecture_hparams["spectrogram_min_db"],
+            spectrogram_max_db=architecture_hparams["spectrogram_max_db"],
+            dim_z=architecture_hparams["dim_z"],
+            encoder_dropout=architecture_hparams["encoder_dropout"],
+            regressor_hidden_layers=architecture_hparams["regressor_hidden_layers"],
+            regressor_hidden_width=architecture_hparams["regressor_hidden_width"],
+            regressor_dropout=architecture_hparams["regressor_dropout"],
+        )
+
+    @staticmethod
+    def _corpus_sample_rate(train_dataset: RenderedCorpusDataset) -> int:
+        """Read the render sample rate from the corpus's ``run_summary.json``."""
+        with open(train_dataset.corpus_dir / "run_summary.json") as summary_file:
+            return int(json.load(summary_file)["sample_rate"])
+
+    def fit(
+        self,
+        train_dataset: RenderedCorpusDataset,
+        validation_dataset: Optional[RenderedCorpusDataset] = None,
+        config: Optional[Dict[str, object]] = None,
+    ) -> None:
+        # Lazy: the training-only Lightning stack (D-FRAMEWORK) stays off the eval path.
+        import lightning.pytorch as pl
+
+        from models.training.data_module import CorpusDataModule
+        from models.training.lightning_module import LightningRegressor
+        from models.training.trainer_factory import build_trainer
+
+        training_config = TrainingConfig.from_dict(config)
+        pl.seed_everything(training_config.seed, workers=True)
+
+        parameter_space = train_dataset.parameter_space
+        # Render length + sample rate come from the corpus, not the constructor (D-SELFDESC).
+        example_audio, _ = train_dataset[0]
+        architecture_hparams = {
+            "ml_dimension": parameter_space.ml_dimension,
+            "num_audio_samples": int(example_audio.shape[-1]),
+            "sample_rate": self._corpus_sample_rate(train_dataset),
+            "n_fft": self._n_fft,
+            "hop_length": self._hop_length,
+            "win_length": self._win_length,
+            "n_mels": self._n_mels,
+            "mel_fmin": self._mel_fmin,
+            "mel_fmax": self._mel_fmax,
+            "spectrogram_min_db": self._spectrogram_min_db,
+            "spectrogram_max_db": self._spectrogram_max_db,
+            "dim_z": self._dim_z,
+            "encoder_dropout": self._encoder_dropout,
+            "regressor_hidden_layers": self._regressor_hidden_layers,
+            "regressor_hidden_width": self._regressor_hidden_width,
+            "regressor_dropout": self._regressor_dropout,
+        }
+        network = self._build_network(architecture_hparams)
+        parameter_loss = ParameterLoss(parameter_space, training_config.loss)
+        lightning_regressor = LightningRegressor(network, parameter_loss, training_config.optimizer)
+        data_module = CorpusDataModule(
+            train_dataset, validation_dataset, training_config.data, seed=training_config.seed
+        )
+
+        will_validate = data_module.will_validate
+        monitor = "val_loss" if will_validate else "train_loss"
+        trainer = build_trainer(
+            training_config,
+            default_root_dir=self._default_root_dir,
+            monitor=monitor,
+            run_validation=will_validate,
+        )
+
+        run_metadata = {
+            "architecture": type(self).__name__,
+            "dataset": train_dataset.corpus_dir.name,
+        }
+        for logger in trainer.loggers:
+            logger.log_hyperparams({**run_metadata, **training_config.to_dict()})
+        trainer.fit(lightning_regressor, datamodule=data_module)
+
+        # Load the best checkpoint's weights, then register the trained network.
+        best_path = trainer.checkpoint_callback.best_model_path
+        if best_path:
+            network.load_state_dict(network_state_dict_from_lightning_checkpoint(best_path))
+        self._set_trained_network(network, architecture_hparams, parameter_space)

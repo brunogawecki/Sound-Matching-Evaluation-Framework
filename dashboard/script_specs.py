@@ -147,7 +147,11 @@ SPLIT_CORPUS = ScriptSpec(
 
 # Mirror of models.registry.MODEL_REGISTRY keys. Kept as plain strings (not
 # imported) so the dashboard never pulls in the torch-heavy pipeline library.
-MODEL_CHOICES = ("MeanParameterBaseline", "Sound2SynthSpectrogramRegressor")
+MODEL_CHOICES = (
+    "MeanParameterBaseline",
+    "Sound2SynthSpectrogramRegressor",
+    "PresetGenVaeRegressor",
+)
 
 EVALUATE = ScriptSpec(
     key="evaluate",

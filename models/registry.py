@@ -21,6 +21,7 @@ from typing import Dict, Type
 
 from models.base_model import BaseModel
 from models.mean_parameter_baseline import MeanParameterBaseline
+from models.presetgen_vae import PresetGenVaeRegressor
 from models.sound2synth import Sound2SynthSpectrogramRegressor
 
 
@@ -40,5 +41,8 @@ MODEL_REGISTRY: Dict[str, ModelRegistration] = {
     ),
     "Sound2SynthSpectrogramRegressor": ModelRegistration(
         Sound2SynthSpectrogramRegressor, "spectrogram_cnn.pt"
+    ),
+    "PresetGenVaeRegressor": ModelRegistration(
+        PresetGenVaeRegressor, "presetgen_vae.pt"
     ),
 }
