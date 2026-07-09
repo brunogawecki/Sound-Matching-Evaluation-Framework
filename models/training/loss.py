@@ -119,3 +119,20 @@ class ParameterLoss(nn.Module):
             target_class = targets[:, start:stop].argmax(dim=1)
             correct = correct + (predicted_class == target_class).float().mean()
         return correct / len(self._categorical_slices)
+
+
+def gaussian_kl_divergence(
+    mu: torch.Tensor, logvar: torch.Tensor, normalize: bool = True
+) -> torch.Tensor:
+    """Closed-form KL of the diagonal-Gaussian posterior from ``N(0, I)`` (VAE latent term).
+
+    Ports preset-gen-vae's ``GaussianDkl``: ``0.5 * sum(exp(logvar) + mu^2 - logvar - 1)``
+    summed over ``dim_z`` and averaged over the batch. ``normalize`` also divides by ``dim_z``
+    so the term stays comparable to a mean-reduced reconstruction MSE. ``mu``/``logvar`` are
+    ``[batch, dim_z]``.
+    """
+    per_sample = 0.5 * torch.sum(torch.exp(logvar) + mu.square() - logvar - 1.0, dim=1)
+    divergence = per_sample.mean()
+    if normalize:
+        divergence = divergence / mu.shape[1]
+    return divergence

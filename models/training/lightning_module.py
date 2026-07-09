@@ -16,6 +16,32 @@ from models.training.config import OptimizerConfig
 from models.training.loss import ParameterLoss
 
 
+def build_optimizers(network: nn.Module, config: OptimizerConfig) -> Dict[str, Any]:
+    """The optimizer (+ optional cosine scheduler) dict Lightning expects. Shared by every
+    training module so the recipe lives in one place."""
+    if config.name.lower() == "adamw":
+        optimizer: torch.optim.Optimizer = torch.optim.AdamW(
+            network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+        )
+    elif config.name.lower() == "adam":
+        optimizer = torch.optim.Adam(
+            network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer '{config.name}' (use 'adamw' or 'adam').")
+
+    if config.scheduler is None:
+        return {"optimizer": optimizer}
+    if config.scheduler.lower() == "cosine":
+        if not config.scheduler_max_epochs:
+            raise ValueError("scheduler='cosine' requires optimizer.scheduler_max_epochs.")
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=config.scheduler_max_epochs
+        )
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+    raise ValueError(f"Unsupported scheduler '{config.scheduler}' (use 'cosine' or null).")
+
+
 class LightningRegressor(pl.LightningModule):
     """Wraps a network + :class:`ParameterLoss` into a trainable module.
 
@@ -63,29 +89,4 @@ class LightningRegressor(pl.LightningModule):
         return losses["loss"]
 
     def configure_optimizers(self) -> Dict[str, Any]:
-        config = self._optimizer_config
-        if config.name.lower() == "adamw":
-            optimizer: torch.optim.Optimizer = torch.optim.AdamW(
-                self.network.parameters(),
-                lr=config.learning_rate,
-                weight_decay=config.weight_decay,
-            )
-        elif config.name.lower() == "adam":
-            optimizer = torch.optim.Adam(
-                self.network.parameters(),
-                lr=config.learning_rate,
-                weight_decay=config.weight_decay,
-            )
-        else:
-            raise ValueError(f"Unsupported optimizer '{config.name}' (use 'adamw' or 'adam').")
-
-        if config.scheduler is None:
-            return {"optimizer": optimizer}
-        if config.scheduler.lower() == "cosine":
-            if not config.scheduler_max_epochs:
-                raise ValueError("scheduler='cosine' requires optimizer.scheduler_max_epochs.")
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=config.scheduler_max_epochs
-            )
-            return {"optimizer": optimizer, "lr_scheduler": scheduler}
-        raise ValueError(f"Unsupported scheduler '{config.scheduler}' (use 'cosine' or null).")
+        return build_optimizers(self.network, self._optimizer_config)

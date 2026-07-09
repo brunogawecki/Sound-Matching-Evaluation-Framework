@@ -9,7 +9,7 @@ torch = pytest.importorskip("torch")
 import torch.nn.functional as F
 
 from models.training.config import LossConfig
-from models.training.loss import ParameterLoss
+from models.training.loss import ParameterLoss, gaussian_kl_divergence
 from synth.parameter_space import ParameterSpace, ParameterSpecification
 
 
@@ -131,3 +131,31 @@ def test_categorical_accuracy_is_nan_without_categoricals():
     predictions = torch.tensor([[0.2, 0.8]])
     targets = torch.tensor([[0.0, 1.0]])
     assert torch.isnan(loss.categorical_accuracy(predictions, targets))
+
+
+# -- Gaussian KL (VAE latent term) -------------------------------------------
+
+def test_kl_is_zero_for_standard_normal_posterior():
+    mu = torch.zeros(4, 8)
+    logvar = torch.zeros(4, 8)  # variance 1
+    assert gaussian_kl_divergence(mu, logvar).item() == pytest.approx(0.0)
+
+
+def test_kl_matches_closed_form():
+    torch.manual_seed(0)
+    mu = torch.randn(3, 5)
+    logvar = torch.randn(3, 5)
+    expected = 0.5 * torch.sum(torch.exp(logvar) + mu.square() - logvar - 1.0, dim=1).mean()
+    assert gaussian_kl_divergence(mu, logvar, normalize=False).item() == pytest.approx(
+        expected.item()
+    )
+    assert gaussian_kl_divergence(mu, logvar, normalize=True).item() == pytest.approx(
+        expected.item() / mu.shape[1]
+    )
+
+
+def test_kl_is_non_negative_and_grows_with_departure_from_prior():
+    small = gaussian_kl_divergence(torch.full((2, 4), 0.5), torch.zeros(2, 4))
+    large = gaussian_kl_divergence(torch.full((2, 4), 3.0), torch.zeros(2, 4))
+    assert small.item() >= 0.0
+    assert large.item() > small.item()

@@ -49,14 +49,19 @@ class OptimizerConfig:
 
 @dataclass(frozen=True)
 class LossConfig:
-    """Parameter-loss weighting (D2: MSE/MAE continuous + CE categorical).
+    """Controls-loss weighting, plus the VAE reconstruction/latent terms.
 
-    ``categorical_loss_weight`` defaults to ``0.2`` matching preset-gen-vae's
-    empirically-tuned ``categorical_loss_factor`` (cross-entropy is usually much
-    larger than MSE; see ``paper_repos/preset-gen-vae/model/loss.py``).
+    ``categorical_loss_weight`` defaults to ``0.2`` (preset-gen-vae's
+    ``categorical_loss_factor``). The ``beta*``/``reconstruction_loss``/``normalize_latent_loss``
+    fields are read only by VAE families; plain regressors ignore them.
     """
     continuous_loss: str = "mse"  # "mse" | "mae"
     categorical_loss_weight: float = 0.2
+    reconstruction_loss: str = "mse"
+    beta: float = 0.2  # KL weight reached after warmup
+    beta_start_value: float = 0.1
+    beta_warmup_epochs: int = 25
+    normalize_latent_loss: bool = True
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "LossConfig":
