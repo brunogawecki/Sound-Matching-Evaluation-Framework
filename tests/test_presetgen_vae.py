@@ -16,7 +16,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 torch = pytest.importorskip("torch")
 
-from models.presetgen_vae import PresetGenVaeNetwork, PresetGenVaeRegressor
+from models.presetgen_vae import (
+    PresetGenVaeAutoencoderNetwork,
+    PresetGenVaeNetwork,
+    PresetGenVaeRegressor,
+    VaeNetworkOutput,
+)
 
 SAMPLE_RATE = 8000
 NUM_AUDIO_SAMPLES = 4000  # 0.5 s
@@ -76,6 +81,61 @@ def test_encoder_cnn_has_no_batch_norm_on_first_and_last_layers():
     assert not any(isinstance(m, torch.nn.BatchNorm2d) for m in last_block)
     # An interior block does carry batch-norm.
     assert any(isinstance(m, torch.nn.BatchNorm2d) for m in network.spectrogram_cnn[1])
+
+
+# -- Stage 2 autoencoder network (VAE) ---------------------------------------------
+# Same tiny STFT/mel/latent as Stage 1; the encoder + regressor are shared, so only the
+# added VAE machinery (mu/logvar split, reparameterization, decoder) is exercised here.
+
+
+def test_autoencoder_forward_maps_audio_batch_to_ml_dimension():
+    ml_dimension = 137
+    network = PresetGenVaeAutoencoderNetwork(ml_dimension=ml_dimension, **TINY_KWARGS)
+    network.eval()
+    audio = torch.randn(3, NUM_AUDIO_SAMPLES)
+    output = network(audio)
+    assert output.shape == (3, ml_dimension)
+
+
+def test_autoencoder_forward_training_returns_all_terms_with_correct_shapes():
+    ml_dimension = 41
+    dim_z = TINY_KWARGS["dim_z"]
+    network = PresetGenVaeAutoencoderNetwork(ml_dimension=ml_dimension, **TINY_KWARGS)
+    audio = torch.randn(2, NUM_AUDIO_SAMPLES)
+    output = network.forward_training(audio)
+    assert isinstance(output, VaeNetworkOutput)
+    assert output.prediction.shape == (2, ml_dimension)
+    assert output.mu.shape == (2, dim_z)
+    assert output.logvar.shape == (2, dim_z)
+    # The decoder reconstructs exactly the encoder's input spectrogram (its training target).
+    assert output.reconstruction.shape == output.target_spectrogram.shape
+    assert output.reconstruction.shape[1] == 1  # single spectrogram channel
+    assert output.reconstruction.shape[2] == TINY_KWARGS["n_mels"]
+
+
+def test_autoencoder_reconstruction_is_bounded_to_normalized_range():
+    network = PresetGenVaeAutoencoderNetwork(ml_dimension=5, **TINY_KWARGS)
+    audio = torch.randn(2, NUM_AUDIO_SAMPLES)
+    reconstruction = network.forward_training(audio).reconstruction
+    # Hardtanh output must match the [-1, 1] range of the normalized mel-dB target.
+    assert torch.all(reconstruction >= -1.0) and torch.all(reconstruction <= 1.0)
+
+
+def test_autoencoder_eval_forward_is_deterministic():
+    network = PresetGenVaeAutoencoderNetwork(ml_dimension=7, **TINY_KWARGS)
+    network.eval()  # eval uses the posterior mean -> no sampling
+    audio = torch.randn(2, NUM_AUDIO_SAMPLES)
+    assert torch.allclose(network(audio), network(audio))
+
+
+def test_autoencoder_reparameterizes_only_in_training_mode():
+    torch.manual_seed(0)
+    network = PresetGenVaeAutoencoderNetwork(ml_dimension=7, **TINY_KWARGS)
+    audio = torch.randn(2, NUM_AUDIO_SAMPLES)
+    network.train()  # training samples z ~ N(mu, sigma) -> reconstructions differ across calls
+    first = network.forward_training(audio).reconstruction
+    second = network.forward_training(audio).reconstruction
+    assert not torch.allclose(first, second)
 
 
 # -- end-to-end family (fit -> save -> load -> predict) ----------------------------

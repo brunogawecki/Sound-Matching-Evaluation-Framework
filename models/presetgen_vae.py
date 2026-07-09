@@ -5,12 +5,18 @@ family that predicts this framework's D1 parameter space through ``ParameterSpac
 (not the paper's 144-param / ``all<=32`` scheme), so it stays comparable to the other
 model families and trains through the existing harness and ``ParameterLoss``.
 
-**Stage 1 (this module):** the audio->params path only -- a faithful mel-dB front-end
-and the paper's ``speccnn8l1_bn`` spectrogram encoder, feeding a deterministic latent
-and an MLP regressor head. This is a plain regressor (no autoencoding), the baseline the
-VAE must beat. Stage 2 adds the spectrogram decoder + reconstruction/KL loss; Stage 3
-adds the latent RealNVP flow. The network is deliberately structured
-(front-end -> CNN -> latent -> regressor) so those stages slot in without reshaping it.
+**Stage 1** (:class:`PresetGenVaeNetwork`): the audio->params path only -- a faithful
+mel-dB front-end and the paper's ``speccnn8l1_bn`` spectrogram encoder, feeding a
+deterministic latent and an MLP regressor head. This is a plain regressor (no
+autoencoding), the baseline the VAE must beat.
+
+**Stage 2** (:class:`PresetGenVaeAutoencoderNetwork`): adds the paper's ``BasicVAE`` --
+the encoder MLP now emits ``mu``/``logvar``, a reparameterized sample feeds both the
+mirror-image ``speccnn8l1_bn`` spectrogram decoder (reconstruction) and the regressor
+head (controls). The regression gradient flows into the encoder (joint training), exactly
+as the paper trains the VAE and regressor together. Stage 3 swaps the closed-form-KL
+latent for a RealNVP flow. Both stages share the identical encoder + regressor, so the
+only thing under test between them is the VAE machinery.
 
 The head emits **raw** outputs (continuous floats + categorical logits), matching the
 ``ParameterSpace`` / ``ParameterLoss`` contract -- the paper's ``PresetActivation``
@@ -20,10 +26,12 @@ does. ``ParameterLoss`` applies softmax/cross-entropy to categorical blocks itse
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from dataset.torch_dataset import RenderedCorpusDataset
@@ -35,6 +43,79 @@ from models.training.loss import ParameterLoss
 # Fixed architecture constants, faithful to the paper's speccnn8l1_bn encoder.
 _NEGATIVE_SLOPE = 0.1  # LeakyReLU slope used throughout the paper's CNN
 _LOG_EPSILON = 1e-7  # floor inside log10 before dB conversion
+
+
+def _build_mel_filterbank(
+    sample_rate: int, n_fft: int, n_mels: int, fmin: float, fmax: float
+) -> torch.Tensor:
+    """A ``[n_mels, 1 + n_fft // 2]`` mel filterbank (librosa, un-normalized)."""
+    import librosa  # heavy import kept off module load
+
+    filterbank = librosa.filters.mel(
+        sr=sample_rate, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax, norm=None
+    )
+    return torch.from_numpy(np.asarray(filterbank, dtype=np.float32))
+
+
+def _compute_mel_db_spectrogram(
+    audio: torch.Tensor,
+    window: torch.Tensor,
+    mel_filterbank: torch.Tensor,
+    n_fft: int,
+    hop_length: int,
+    win_length: int,
+    min_db: float,
+    max_db: float,
+) -> torch.Tensor:
+    """Audio ``[batch, num_samples]`` -> normalized mel-dB ``[batch, 1, n_mels, frames]``.
+
+    STFT -> mel filterbank -> dB -> min-max to [-1, 1] over the fixed dB range. Shared by
+    the Stage 1 encoder-only network and the Stage 2 autoencoder (whose decoder targets
+    exactly this normalized [-1, 1] spectrogram).
+    """
+    # torch.stft needs float32/64; under bf16-mixed autocast the input arrives bf16.
+    audio = audio.float()
+    complex_stft = torch.stft(
+        audio,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+        window=window,
+        center=True,
+        pad_mode="reflect",
+        return_complex=True,
+    )
+    magnitude = complex_stft.abs()  # [batch, freq, frames]
+    mel_magnitude = torch.matmul(mel_filterbank, magnitude)  # [batch, n_mels, frames]
+    decibels = 20.0 * torch.log10(mel_magnitude + _LOG_EPSILON)
+    decibels = torch.clamp(decibels, min=min_db, max=max_db)
+    normalized = 2.0 * (decibels - min_db) / (max_db - min_db) - 1.0
+    return normalized.unsqueeze(1)  # add the single input channel
+
+
+def _center_crop_or_pad(tensor: torch.Tensor, target_height: int, target_width: int) -> torch.Tensor:
+    """Center-crop (when bigger) or zero-pad (when smaller) the last two dims to the target.
+
+    The ported decoder's transposed-conv schedule lands within a few pixels of the encoder's
+    input spectrogram size (exactly ``(n_mels, frames + 2)`` at the paper's 257-mel / 345-frame
+    contract). This makes the reconstruction the exact ``(n_mels, frames)`` target for any
+    render length, so the reconstruction MSE is always well-defined.
+    """
+    height, width = tensor.shape[-2], tensor.shape[-1]
+    if height > target_height:
+        top = (height - target_height) // 2
+        tensor = tensor[:, :, top : top + target_height, :]
+    elif height < target_height:
+        pad_total = target_height - height
+        tensor = F.pad(tensor, (0, 0, pad_total // 2, pad_total - pad_total // 2))
+    width = tensor.shape[-1]
+    if width > target_width:
+        left = (width - target_width) // 2
+        tensor = tensor[:, :, :, left : left + target_width]
+    elif width < target_width:
+        pad_total = target_width - width
+        tensor = F.pad(tensor, (pad_total // 2, pad_total - pad_total // 2, 0, 0))
+    return tensor
 
 
 def _conv2d_block(
@@ -73,6 +154,54 @@ def _build_spectrogram_cnn() -> nn.Sequential:
         _conv2d_block(128, 256, (4, 4), (2, 2), 2, use_batch_norm=True),  # enc6
         _conv2d_block(256, 512, (4, 4), (2, 2), 2, use_batch_norm=True),  # enc7 (4x4conv)
         _conv2d_block(512, 1024, (1, 1), (1, 1), 0, use_batch_norm=False),  # enc8 (1x1conv)
+    )
+
+
+def _tconv2d_block(
+    in_channels: int,
+    out_channels: int,
+    kernel_size: Tuple[int, int],
+    stride: Tuple[int, int],
+    padding: int,
+    output_padding: Tuple[int, int],
+    use_batch_norm: bool,
+) -> nn.Sequential:
+    """One transposed-conv layer of the paper's ``layer.TConv2D``: tconv -> LeakyReLU -> (BN).
+
+    The decoder mirror of :func:`_conv2d_block`. Batch-norm is applied after the activation
+    (the paper's ``batch_norm='after'``); ``output_padding`` disambiguates the transposed-conv
+    output size where a strided conv would otherwise map several sizes to one.
+    """
+    block = nn.Sequential()
+    block.add_module(
+        "tconv",
+        nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding, output_padding),
+    )
+    block.add_module("act", nn.LeakyReLU(_NEGATIVE_SLOPE))
+    if use_batch_norm:
+        block.add_module("bn", nn.BatchNorm2d(out_channels))
+    return block
+
+
+def _build_decoder_cnn(unmixer_in_channels: int) -> nn.Sequential:
+    """The paper's ``speccnn8l1_bn`` single-channel spectrogram decoder (dec1..dec8).
+
+    A mirror of :func:`_build_spectrogram_cnn`: a 1x1 "un-mixer" transposed conv (dec1,
+    mirroring the encoder's 1x1 enc8) followed by six 4x4 up-convolutions and a final 5x5
+    transposed conv to one channel, ending in ``Hardtanh`` to bound the output to the
+    normalized mel-dB target's [-1, 1] range. ``unmixer_in_channels`` is the encoder's deepest
+    channel count (1024 here), so the decoder inverts the exact encoder feature map.
+    """
+    return nn.Sequential(
+        _tconv2d_block(unmixer_in_channels, 512, (1, 1), (1, 1), 0, (0, 0), use_batch_norm=True),  # dec1
+        _tconv2d_block(512, 256, (4, 4), (2, 2), 2, (1, 1), use_batch_norm=True),  # dec2
+        _tconv2d_block(256, 128, (4, 4), (2, 2), 2, (1, 0), use_batch_norm=True),  # dec3
+        _tconv2d_block(128, 64, (4, 4), (2, 2), 2, (1, 1), use_batch_norm=True),  # dec4
+        _tconv2d_block(64, 32, (4, 4), (2, 2), 2, (1, 1), use_batch_norm=True),  # dec5
+        _tconv2d_block(32, 16, (4, 4), (2, 2), 2, (1, 0), use_batch_norm=True),  # dec6
+        _tconv2d_block(16, 8, (4, 4), (2, 2), 2, (1, 0), use_batch_norm=True),  # dec7
+        nn.ConvTranspose2d(8, 1, (5, 5), (2, 2), 2),  # dec8 (final, no activation / BN)
+        nn.Hardtanh(),  # bound reconstruction to the normalized [-1, 1] mel-dB target range
     )
 
 
@@ -144,7 +273,7 @@ class PresetGenVaeNetwork(nn.Module):
 
         # Deterministic, non-persistent buffers (follow .to(device), out of state_dict).
         self.register_buffer("_window", torch.hann_window(win_length), persistent=False)
-        mel_filterbank = self._build_mel_filterbank(sample_rate, n_fft, n_mels, mel_fmin, mel_fmax)
+        mel_filterbank = _build_mel_filterbank(sample_rate, n_fft, n_mels, mel_fmin, mel_fmax)
         self.register_buffer("_mel_filterbank", mel_filterbank, persistent=False)
 
         self.spectrogram_cnn = _build_spectrogram_cnn()
@@ -158,39 +287,12 @@ class PresetGenVaeNetwork(nn.Module):
             dim_z, ml_dimension, regressor_hidden_layers, regressor_hidden_width, regressor_dropout
         )
 
-    @staticmethod
-    def _build_mel_filterbank(
-        sample_rate: int, n_fft: int, n_mels: int, fmin: float, fmax: float
-    ) -> torch.Tensor:
-        """A ``[n_mels, 1 + n_fft // 2]`` mel filterbank (librosa, un-normalized)."""
-        import librosa  # heavy import kept off module load
-
-        filterbank = librosa.filters.mel(
-            sr=sample_rate, n_fft=n_fft, n_mels=n_mels, fmin=fmin, fmax=fmax, norm=None
-        )
-        return torch.from_numpy(np.asarray(filterbank, dtype=np.float32))
-
     def _mel_db_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
         """Audio ``[batch, num_samples]`` -> normalized mel-dB ``[batch, 1, n_mels, frames]``."""
-        # torch.stft needs float32/64; under bf16-mixed autocast the input arrives bf16.
-        audio = audio.float()
-        complex_stft = torch.stft(
-            audio,
-            n_fft=self._n_fft,
-            hop_length=self._hop_length,
-            win_length=self._win_length,
-            window=self._window,
-            center=True,
-            pad_mode="reflect",
-            return_complex=True,
+        return _compute_mel_db_spectrogram(
+            audio, self._window, self._mel_filterbank,
+            self._n_fft, self._hop_length, self._win_length, self._min_db, self._max_db,
         )
-        magnitude = complex_stft.abs()  # [batch, freq, frames]
-        mel_magnitude = torch.matmul(self._mel_filterbank, magnitude)  # [batch, n_mels, frames]
-        decibels = 20.0 * torch.log10(mel_magnitude + _LOG_EPSILON)
-        decibels = torch.clamp(decibels, min=self._min_db, max=self._max_db)
-        # Min-max to [-1, 1] over the fixed dB range (Stage 2 may swap in corpus stats).
-        normalized = 2.0 * (decibels - self._min_db) / (self._max_db - self._min_db) - 1.0
-        return normalized.unsqueeze(1)  # add the single input channel
 
     def _infer_cnn_output_items(self, num_audio_samples: int) -> int:
         with torch.no_grad():
@@ -205,6 +307,146 @@ class PresetGenVaeNetwork(nn.Module):
         flattened = torch.flatten(features, start_dim=1)
         latent = self.encoder_mlp(flattened)
         return self.regressor(latent)
+
+
+@dataclass(frozen=True)
+class VaeNetworkOutput:
+    """Everything the Stage 2 training loss needs from one ``forward_training`` pass.
+
+    ``prediction`` and ``reconstruction`` both come from the same reparameterized latent
+    sample; ``target_spectrogram`` is the mel-dB input the decoder is trained to reconstruct;
+    ``mu``/``logvar`` parameterize the approximate posterior for the KL term.
+    """
+
+    prediction: torch.Tensor  # [batch, ml_dimension] raw floats + categorical logits
+    reconstruction: torch.Tensor  # [batch, 1, n_mels, frames] in [-1, 1]
+    target_spectrogram: torch.Tensor  # [batch, 1, n_mels, frames] in [-1, 1]
+    mu: torch.Tensor  # [batch, dim_z]
+    logvar: torch.Tensor  # [batch, dim_z]
+
+
+class PresetGenVaeAutoencoderNetwork(nn.Module):
+    """Stage 2: the paper's ``BasicVAE`` -- a Gaussian-latent spectrogram autoencoder with a
+    regressor head, predicting the ML-side vector ``[batch, ml_dimension]``.
+
+    The encoder (identical to :class:`PresetGenVaeNetwork`'s) now feeds an MLP emitting
+    ``2 * dim_z`` values (``mu`` and ``logvar``). A reparameterized sample ``z`` feeds both the
+    mirror-image ``speccnn8l1_bn`` decoder -- reconstructing the normalized mel-dB spectrogram --
+    and the MLP regressor. ``forward`` returns the regressor prediction only (from the posterior
+    mean, deterministic in eval), so the inherited ``BaseDeepModel.predict`` path is unchanged and
+    the decoder is skipped at inference. ``forward_training`` additionally runs the decoder and
+    returns the reconstruction, its target, and ``mu``/``logvar`` for the reconstruction + KL loss.
+    """
+
+    def __init__(
+        self,
+        ml_dimension: int,
+        num_audio_samples: int,
+        sample_rate: int = 22050,
+        n_fft: int = 1024,
+        hop_length: int = 256,
+        win_length: int = 1024,
+        n_mels: int = 257,
+        mel_fmin: float = 30.0,
+        mel_fmax: float = 11000.0,
+        spectrogram_min_db: float = -120.0,
+        spectrogram_max_db: float = 0.0,
+        dim_z: int = 256,
+        encoder_dropout: float = 0.3,
+        regressor_hidden_layers: int = 3,
+        regressor_hidden_width: int = 1024,
+        regressor_dropout: float = 0.4,
+    ) -> None:
+        super().__init__()
+        if spectrogram_max_db <= spectrogram_min_db:
+            raise ValueError("spectrogram_max_db must exceed spectrogram_min_db.")
+        self._n_fft = n_fft
+        self._hop_length = hop_length
+        self._win_length = win_length
+        self._n_mels = n_mels
+        self._min_db = float(spectrogram_min_db)
+        self._max_db = float(spectrogram_max_db)
+        self._dim_z = dim_z
+
+        # Deterministic, non-persistent buffers (follow .to(device), out of state_dict).
+        self.register_buffer("_window", torch.hann_window(win_length), persistent=False)
+        mel_filterbank = _build_mel_filterbank(sample_rate, n_fft, n_mels, mel_fmin, mel_fmax)
+        self.register_buffer("_mel_filterbank", mel_filterbank, persistent=False)
+
+        self.spectrogram_cnn = _build_spectrogram_cnn()
+        # Infer the encoder's deepest feature-map shape from a dummy render-length input, so the
+        # decoder MLP/un-mixer invert exactly that shape and the reconstruction target size is known.
+        cnn_output_shape, target_size = self._infer_cnn_output_shape(num_audio_samples)
+        self._cnn_output_shape = cnn_output_shape  # (channels, height, width)
+        self._target_spectrogram_size = target_size  # (n_mels, frames)
+        cnn_output_items = int(np.prod(cnn_output_shape))
+
+        # Encoder MLP now emits mu and logvar (2 * dim_z), reshaped to [batch, 2, dim_z].
+        self.encoder_mlp = nn.Sequential(
+            nn.Dropout(encoder_dropout), nn.Linear(cnn_output_items, 2 * dim_z)
+        )
+        # Decoder MLP mirrors it: latent -> flattened deepest feature map (paper drops the ReLU here).
+        self.decoder_mlp = nn.Sequential(
+            nn.Linear(dim_z, cnn_output_items), nn.Dropout(encoder_dropout)
+        )
+        self.decoder_cnn = _build_decoder_cnn(unmixer_in_channels=cnn_output_shape[0])
+        self.regressor = _build_regressor(
+            dim_z, ml_dimension, regressor_hidden_layers, regressor_hidden_width, regressor_dropout
+        )
+
+    def _mel_db_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
+        return _compute_mel_db_spectrogram(
+            audio, self._window, self._mel_filterbank,
+            self._n_fft, self._hop_length, self._win_length, self._min_db, self._max_db,
+        )
+
+    def _infer_cnn_output_shape(
+        self, num_audio_samples: int
+    ) -> Tuple[Tuple[int, int, int], Tuple[int, int]]:
+        with torch.no_grad():
+            dummy_audio = torch.zeros(1, num_audio_samples)
+            dummy_spectrogram = self._mel_db_spectrogram(dummy_audio)
+            cnn_output = self.spectrogram_cnn(dummy_spectrogram)
+        channels, height, width = cnn_output.shape[1:]
+        target_size = (int(dummy_spectrogram.shape[-2]), int(dummy_spectrogram.shape[-1]))
+        return (int(channels), int(height), int(width)), target_size
+
+    def _encode(self, spectrogram: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        features = self.spectrogram_cnn(spectrogram)
+        flattened = torch.flatten(features, start_dim=1)
+        mu_logvar = self.encoder_mlp(flattened).view(-1, 2, self._dim_z)
+        return mu_logvar[:, 0, :], mu_logvar[:, 1, :]
+
+    def _reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        # Sample only while training; eval uses the posterior mean (no randomness), as the paper does.
+        if self.training:
+            standard_deviation = torch.exp(0.5 * logvar)
+            return mu + standard_deviation * torch.randn_like(standard_deviation)
+        return mu
+
+    def _decode(self, latent: torch.Tensor) -> torch.Tensor:
+        mixed_features = self.decoder_mlp(latent).view(-1, *self._cnn_output_shape)
+        reconstruction = self.decoder_cnn(mixed_features)
+        return _center_crop_or_pad(reconstruction, *self._target_spectrogram_size)
+
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+        """Predict path: regress from the posterior mean (deterministic in eval); no decoder."""
+        spectrogram = self._mel_db_spectrogram(audio)
+        mu, _ = self._encode(spectrogram)
+        return self.regressor(mu)
+
+    def forward_training(self, audio: torch.Tensor) -> VaeNetworkOutput:
+        """Full VAE pass for the training loss: prediction + reconstruction + latent params."""
+        spectrogram = self._mel_db_spectrogram(audio)
+        mu, logvar = self._encode(spectrogram)
+        latent = self._reparameterize(mu, logvar)
+        return VaeNetworkOutput(
+            prediction=self.regressor(latent),
+            reconstruction=self._decode(latent),
+            target_spectrogram=spectrogram,
+            mu=mu,
+            logvar=logvar,
+        )
 
 
 class PresetGenVaeRegressor(BaseDeepModel):
