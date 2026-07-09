@@ -71,3 +71,33 @@ if metric:
 
 st.caption("Full per-sample matrix (sortable):")
 st.dataframe(per_sample, width="stretch", hide_index=True)
+
+# --- Listen: A/B target vs. prediction for one run's saved samples -------------
+st.subheader("Listen")
+audio_run = st.selectbox(
+    "Run", runs, format_func=lambda r: f"{r.corpus} / {r.model}", key="listen_run"
+)
+sample_ids = discovery.list_saved_audio_samples(audio_run.corpus, audio_run.model)
+if not sample_ids:
+    st.caption(
+        "No saved prediction audio for this run. Re-run **Evaluate** with "
+        "'Prediction samples to save for listening' set above 0."
+    )
+else:
+    sample_id = st.selectbox("Sample", sample_ids, key="listen_sample")
+    original_path = discovery.original_audio_path(audio_run.corpus, sample_id)
+    predicted_path = discovery.predicted_audio_path(audio_run.corpus, audio_run.model, sample_id)
+
+    left, right = st.columns(2)
+    with left:
+        st.caption("Original (target)")
+        if original_path.exists():
+            st.audio(original_path.read_bytes(), format="audio/wav")
+        else:
+            st.warning(f"Target WAV missing: {original_path}")
+    with right:
+        st.caption("Predicted (re-rendered)")
+        if predicted_path.exists():
+            st.audio(predicted_path.read_bytes(), format="audio/wav")
+        else:
+            st.warning(f"Predicted WAV missing: {predicted_path}")

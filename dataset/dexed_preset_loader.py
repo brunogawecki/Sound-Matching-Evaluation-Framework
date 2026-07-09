@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -70,6 +70,23 @@ def deduplicate_presets(
     return kept
 
 
+def split_indices(
+    count: int,
+    test_fraction: float,
+    split_seed: int = 0,
+) -> Tuple[List[int], List[int]]:
+    """Seeded train/test partition of ``range(count)`` positions; the two lists are
+    disjoint by construction (a position is in exactly one) and each stays in
+    ascending order. The single source of truth for how a set is split into
+    train/test, shared by :func:`split_presets` and the post-render corpus split."""
+    order = np.random.default_rng(split_seed).permutation(count)
+    num_test = int(round(count * test_fraction))
+    test_positions = set(order[:num_test].tolist())
+    train = [index for index in range(count) if index not in test_positions]
+    test = [index for index in range(count) if index in test_positions]
+    return train, test
+
+
 def split_presets(
     presets: List[LoadedPreset],
     test_fraction: float,
@@ -77,11 +94,9 @@ def split_presets(
 ) -> PresetSplit:
     """Seeded voice-level train/test split; the two partitions are disjoint by
     construction (a preset is in exactly one)."""
-    order = np.random.default_rng(split_seed).permutation(len(presets))
-    num_test = int(round(len(presets) * test_fraction))
-    test_positions = set(order[:num_test].tolist())
-    train = [preset for index, preset in enumerate(presets) if index not in test_positions]
-    test = [preset for index, preset in enumerate(presets) if index in test_positions]
+    train_positions, test_positions = split_indices(len(presets), test_fraction, split_seed)
+    train = [presets[index] for index in train_positions]
+    test = [presets[index] for index in test_positions]
     return PresetSplit(train=train, test=test)
 
 

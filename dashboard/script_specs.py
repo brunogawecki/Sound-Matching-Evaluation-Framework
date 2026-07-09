@@ -10,7 +10,8 @@ Kinds:
     choice               one of ``choices``; emitted when non-empty
     bool                 store_true flag; emitted (bare) only when True
     path                 like str, but the UI renders a path field
-    paths                nargs="+"; whitespace/newline-separated -> ``--flag a b c``
+    paths                nargs="+"; one entry per line -> ``--flag a b c`` (a path may
+                         itself contain spaces, e.g. macOS "Application Support")
 
 An empty/None value for a non-required arg is omitted, so the script's own
 default applies (e.g. ``--run-name`` left blank -> the script picks the name).
@@ -128,27 +129,25 @@ BUILD_PRESETGEN = ScriptSpec(
     ),
 )
 
+SPLIT_CORPUS = ScriptSpec(
+    key="split",
+    script="scripts/split_corpus.py",
+    description="Split an already-built corpus into a train corpus (audio copied) and a "
+                "test corpus (re-rendered fresh-process; D-REPRO). Not for hybrid corpora.",
+    args=(
+        ArgSpec("corpus", "--corpus", "path", "", required=True,
+                help="Source corpus directory (picked from the dropdown below)."),
+        ArgSpec("test_fraction", "--test-fraction", "float", 0.2,
+                help="Share of samples held out as the test set."),
+        ArgSpec("split_seed", "--split-seed", "int", 0, help="Seed for the train/test row shuffle."),
+        ArgSpec("run_name", "--run-name", "str", "",
+                help="Output base name; _train/_test are appended. Blank uses the source name."),
+    ),
+)
+
 # Mirror of models.registry.MODEL_REGISTRY keys. Kept as plain strings (not
 # imported) so the dashboard never pulls in the torch-heavy pipeline library.
 MODEL_CHOICES = ("MeanParameterBaseline", "Sound2SynthSpectrogramRegressor")
-
-FIT_MODEL = ScriptSpec(
-    key="fit_model",
-    script="scripts/fit_model.py",
-    description="Fit a sound-matching model on a training corpus and save its checkpoint. "
-                "The baseline predicts the train-set mean (no VST); the spectrogram regressor "
-                "is a log-STFT VGG11-BN over the target audio (needs torch + lightning).",
-    args=(
-        ArgSpec("model", "--model", "choice", "Sound2SynthSpectrogramRegressor",
-                choices=MODEL_CHOICES, required=True, help="Model family to train."),
-        ArgSpec("corpus", "--corpus", "path", "", required=True, help="Training corpus directory."),
-        ArgSpec("out", "--out", "path", "",
-                help="Checkpoint path to write. Blank uses checkpoints/<model default filename>."),
-        ArgSpec("config", "--config", "path", "",
-                help="training_config.yaml with harness knobs. Blank uses defaults "
-                     "(ignored by the baseline)."),
-    ),
-)
 
 EVALUATE = ScriptSpec(
     key="evaluate",
@@ -163,6 +162,10 @@ EVALUATE = ScriptSpec(
                 choices=MODEL_CHOICES, required=True,
                 help="Model class to load the checkpoint into."),
         ArgSpec("out", "--out", "path", "", help="Results root. Blank uses <project>/results."),
+        ArgSpec("save_audio", "--save-audio", "bool", False,
+                help="Persist prediction WAVs for a seeded random sample subset."),
+        ArgSpec("save_audio_n", "--save-audio-n", "int", 20,
+                help="Cap on how many samples get their prediction audio saved."),
     ),
 )
 

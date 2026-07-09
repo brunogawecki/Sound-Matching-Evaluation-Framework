@@ -4,10 +4,11 @@ Run with::
 
     streamlit run dashboard/app.py
 
-A private accelerator over the terminal scripts: build datasets, fit the baseline,
-evaluate, and browse the benchmark table -- each page just builds and runs the
-matching ``scripts/*.py`` command and reads the output files back. Nothing here
-imports the pipeline library, so it can never drift from the CLI.
+A private accelerator over the terminal scripts and the SLURM cluster: build datasets,
+train a model on the cluster, evaluate, and browse the benchmark table -- each local page
+just builds and runs the matching ``scripts/*.py`` command (or, for training, shells out
+over SSH) and reads the output files back. Nothing here imports the pipeline library, so
+it can never drift from the CLI.
 """
 from env import bootstrap
 
@@ -25,7 +26,7 @@ st.set_page_config(page_title="Sound-matching control panel", layout="wide")
 st.title("Sound-matching control panel")
 st.caption(
     "A local front-end over the pipeline scripts. Pick a page in the sidebar: "
-    "**Build dataset → Fit model → Evaluate → Results**."
+    "**Build dataset → Split corpus → Train on cluster → Evaluate → Results**."
 )
 
 dexed_ok = os.path.exists(os.path.expanduser(config.DEXED_PATH))

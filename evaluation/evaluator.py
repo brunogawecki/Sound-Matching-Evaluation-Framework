@@ -38,6 +38,7 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
+from scipy.io import wavfile
 
 import config
 from dataset.render_backends import FreshProcessRenderBackend, RenderSettings
@@ -100,6 +101,9 @@ class Evaluator:
         *,
         checkpoint_path: Optional[Union[str, Path]] = None,
         out_dir: Optional[Union[str, Path]] = None,
+        save_audio: bool = False,
+        save_audio_n: int = 20,
+        save_audio_seed: int = 0,
     ) -> EvaluationResult:
         """Score ``model`` on the corpus and persist the result.
 
@@ -111,17 +115,29 @@ class Evaluator:
                 note (e.g. a model fitted in-memory with no file).
             out_dir: results root; defaults to ``<project>/results``. The run is
                 written to ``<out_dir>/<corpus_name>/<model_name>/``.
+            save_audio: if ``True``, persist the re-rendered prediction WAV for a
+                seeded random subset of samples under ``<run_dir>/audio/`` (D-EVAL
+                update), so target vs. prediction can be A/B-played later. Off by
+                default -- a full benchmark sweep shouldn't pay to write audio nobody
+                listens to.
+            save_audio_n: cap on how many samples get their prediction saved. Ignored
+                when ``save_audio`` is ``False``.
+            save_audio_seed: seed for the random sample selection, so which samples get
+                saved is reproducible but not biased by corpus ordering.
 
         Returns:
             The :class:`EvaluationResult`, whose two files are also written to disk.
         """
-        per_sample_rows = self._score_all_samples(model)
-        per_sample_metrics = pd.DataFrame(per_sample_rows, columns=["sample_id"] + [spec.name for spec in METRIC_PANEL])
-
         model_name = type(model).__name__
         results_root = Path(out_dir) if out_dir is not None else Path(config.BASE_DIR) / "results"
         run_dir = results_root / self._corpus.corpus_dir.name / model_name
         run_dir.mkdir(parents=True, exist_ok=True)
+
+        audio_sample_indices = (
+            self._select_audio_sample_indices(save_audio_n, save_audio_seed) if save_audio else frozenset()
+        )
+        per_sample_rows = self._score_all_samples(model, run_dir, audio_sample_indices)
+        per_sample_metrics = pd.DataFrame(per_sample_rows, columns=["sample_id"] + [spec.name for spec in METRIC_PANEL])
 
         per_sample_metrics_path = run_dir / "per_sample.csv"
         per_sample_metrics.to_csv(per_sample_metrics_path, index=False)
@@ -133,15 +149,32 @@ class Evaluator:
 
         return EvaluationResult(per_sample_metrics, summary, per_sample_metrics_path, summary_path)
 
+    # -- audio-sample selection -----------------------------------------------
+    def _select_audio_sample_indices(self, save_audio_n: int, save_audio_seed: int) -> frozenset:
+        """A seeded random subset of corpus indices to persist prediction audio for.
+
+        Random rather than the first N to avoid corpus-ordering bias (D-EVAL update).
+        """
+        num_samples = len(self._corpus)
+        count = min(save_audio_n, num_samples)
+        rng = np.random.default_rng(save_audio_seed)
+        return frozenset(rng.choice(num_samples, size=count, replace=False).tolist())
+
     # -- per-sample scoring --------------------------------------------------
-    def _score_all_samples(self, model) -> List[Dict[str, object]]:
+    def _score_all_samples(
+        self, model, run_dir: Path, audio_sample_indices: frozenset
+    ) -> List[Dict[str, object]]:
         """Predict + re-render + run the panel for every corpus sample.
 
         The fresh-process backend is built here and always closed, even if a render
-        or metric raises midway.
+        or metric raises midway. Samples in ``audio_sample_indices`` also get their
+        re-rendered prediction written to ``<run_dir>/audio/<sample_id>.wav``.
         """
         target_matrix = self._corpus.targets.numpy()
         backend = FreshProcessRenderBackend(self._render_settings, renderer=self._renderer)
+        audio_dir = run_dir / "audio"
+        if audio_sample_indices:
+            audio_dir.mkdir(parents=True, exist_ok=True)
         rows: List[Dict[str, object]] = []
         try:
             for index in range(len(self._corpus)):
@@ -153,7 +186,15 @@ class Evaluator:
                 predicted_vector = self._corpus.parameter_space.synth_dict_to_ml_vector(predicted_dict)
                 prediction_waveform = backend.render({**self._default_params, **predicted_dict})
 
-                row: Dict[str, object] = {"sample_id": self._corpus.metadata.iloc[index]["sample_id"]}
+                sample_id = self._corpus.metadata.iloc[index]["sample_id"]
+                if index in audio_sample_indices:
+                    wavfile.write(
+                        str(audio_dir / f"{sample_id}.wav"),
+                        self._sample_rate,
+                        prediction_waveform.astype(np.float32),
+                    )
+
+                row: Dict[str, object] = {"sample_id": sample_id}
                 for spec in METRIC_PANEL:
                     if spec.input_type == "audio":
                         row[spec.name] = spec.compute(

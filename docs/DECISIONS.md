@@ -606,6 +606,17 @@ reported next to the mean so an "undefined hides failure" case (e.g. a silent pr
 **Why**: see the three points above — each trades a small amount of generality (no split artifact, no
 `config.py` fallback) for a benchmark that is reproducible and impossible to silently corrupt.
 
+**Update (2026-07-07)**: the Evaluator can optionally persist a **seeded random subset** of its
+re-rendered predictions to disk, so the dashboard's Results page can A/B-play target vs. prediction
+(see `D-DASHBOARD-CLUSTER`). Opt-in (`save_audio: bool = False`, default off) and capped
+(`save_audio_n`, default 20) rather than on-by-default, because a benchmark sweep over hundreds or
+thousands of samples shouldn't pay the disk/time cost of writing audio nobody listens to. The sample
+indices are drawn with `np.random.default_rng(save_audio_seed)` rather than taking the first N, to
+avoid corpus-ordering bias (e.g. a corpus sorted by source cartridge). Written under
+`results/<corpus_name>/<model_name>/audio/<sample_id>.wav`, same float32 WAV convention the dataset
+builder already uses for target audio — this does not change the per-sample matrix or eval summary,
+it's an orthogonal side artifact of the same re-render already being computed.
+
 ---
 
 ### D-FRAMEWORK — Deep-model training framework: PyTorch Lightning (LOCKED 2026-06-30)
@@ -740,6 +751,88 @@ when SLURM is detected, per D-FRAMEWORK).
 checkpoint pulled down → loads + predicts locally. This proves the packaging without waiting for a
 full run. `auto_requeue` on SIGTERM is treated as an untested safety net, not verified here. The full
 run reuses `train.sbatch` with a fuller config and a larger `--time`.
+
+---
+
+### D-DASHBOARD-CLUSTER — Dashboard drives the cluster: SSH shell-out, local job registry (LOCKED 2026-07-07)
+
+**Decision**: the Streamlit dashboard (`dashboard/`) submits, tracks, and pulls **training jobs** on
+the PUT cluster directly, so training no longer requires SSHing in and running `cluster/*.sh` /
+`sbatch` by hand. Builds on `D-CLUSTER` (packaging) unchanged; this covers orchestration only.
+
+1. **Remote execution: shell out over `subprocess` + `ssh`**, reusing the existing `cluster/*.sh`
+   scripts and `command_runner.py`'s subprocess pattern. No new dependency (no paramiko/fabric) — the
+   dashboard already shells out to local scripts, this is the same mechanism pointed at a remote host.
+2. **Git-sync guard: warn, don't block.** Before submit, the dashboard checks local `git status` /
+   unpushed-commit state and shows a warning if dirty or ahead of the remote, because the cluster only
+   ever sees what's been `git pull`ed from GitHub (D-CLUSTER §3) — a stale or uncommitted local state
+   silently trains against old code otherwise. Warning rather than a hard block, since there are
+   legitimate reasons to submit anyway (e.g. testing an already-pushed commit while iterating locally).
+3. **Corpus push: always `rsync`, every submit, no "already pushed" tracking.** `rsync -avP` is a
+   stat-only no-op when the remote copy already matches (filename + size + mtime), so re-syncing an
+   unchanged corpus costs a walk, not a transfer — tracking push state separately would be an
+   optimization for a cost that's already negligible.
+4. **Job tracking: local gitignored `cluster/jobs.json`** (see **Job registry** in `CONTEXT.md`), not
+   a live cluster query. `sacct` history is not a reliable long-term job list (retention policy,
+   requires knowing job ids), and the dashboard process itself is not always running, so job identity
+   has to live in a file the dashboard reads back on restart.
+5. **Progress display: poll, don't stream.** `sacct` for SLURM state and `ssh ... tail` of the SLURM
+   stdout file, on a `st.fragment(run_every="5s")` timer (supported on the installed Streamlit 1.58).
+   Reuses the `\r`-collapsing logic `command_runner.run_streaming` already applies to local `tqdm`
+   output, so Lightning's live progress bar renders as one animating line under SSH tailing too,
+   instead of scrolling duplicate lines.
+6. **Checkpoint pull: manual button, not automatic on completion**, since the dashboard is not always
+   open when a 12-hour job finishes; polling for completion just to auto-pull adds complexity for a
+   trigger the user is already looking at the Jobs list to press.
+7. **Cancel: `scancel` via a button** on any job in a non-terminal state — cheap to add alongside the
+   status/log-tail view and avoids a stuck job silently occupying the GPU allocation.
+
+**Why**: the alternative (a lightweight job-queue service, or a persistent SSH-tunnel/websocket
+process) would solve the same problem with materially more moving parts than this thesis's scope
+justifies; the shell-out + polling design reuses everything the dashboard and `cluster/` already have.
+
+---
+
+### D-SPLIT — Post-render corpus splitting (LOCKED 2026-07-08)
+
+**Decision**: a corpus that has already been rendered can be split into a **train** corpus and a
+**test** corpus (`scripts/split_corpus.py`, `dataset/corpus_splitter.py`, and the dashboard's *Split
+corpus* page). This is distinct from build-time splitting (`DexedPresetLoader`, D4), which splits
+*presets before rendering*. It exists so a held-out test set can be carved out of an existing corpus
+without re-rendering all of it — e.g. the ~30k-sample preset-gen corpus, built all-train in-process.
+
+1. **Train audio is copied; the test partition is re-rendered fresh-process at position 0.** A
+   copy-only split of an in-process corpus would produce test targets that carry context leakage and so
+   violate the eval render contract (D-REPRO / D-EVAL: the Evaluator re-renders each prediction fresh
+   at pos 0 and compares it to the target). Re-rendering only the test fraction is cheap and restores
+   the contract; train render context is irrelevant to training, so those WAVs are copied verbatim.
+   This mirrors exactly what `build_dataset.py human` already does (test fresh, train in-process). The
+   test partition's presets are replayed from the source `metadata.csv` via `CorpusPresetSource` (the
+   103 subset params are stored per row; dropped params fall back to the synth defaults as at build).
+2. **Seeded row-partition, reusing the build-time algorithm.** `split_indices` (factored out of
+   `split_presets`) is the single source of truth: permute positions with `split_seed`, take the first
+   `round(n · test_fraction)` as test. So a corpus split and a build-time split shuffle identically.
+3. **No deduplication at split time.** Human / preset-gen corpora were already deduplicated by the
+   loader before rendering, and a deduplicated set stays deduplicated when partitioned; synthetic draws
+   never near-collide. Re-running the O(n²) dedup scan would be redundant. (Dedup is still the build-time
+   guard — see **Deduplication** in `CONTEXT.md`.)
+4. **Hybrid corpora are refused.** Their augmented children (and repeated blend parents) derive from
+   shared human parents, so a row-level split would scatter a parent and its derivatives across train
+   and test — **train/test leakage** (see `CONTEXT.md`). Enforced in the script and surfaced in the UI
+   (the corpus is shown but blocked with the reason). To get a held-out human test set, split the human
+   source cartridges at build time instead. Synthetic and human corpora are leakage-free under a row
+   split (each row is an independent draw or a unique already-deduplicated voice).
+
+Both output corpora stay self-describing (D-SELFDESC): each carries the source's `parameter_space`,
+`render_settings`, `subset_names`, and `default_params` unchanged, with a `source` block recording the
+split provenance (`split_from`, `split_test_fraction`, `split_seed`, and the original construction
+`method`). The test corpus records `render_process: fresh` (so discovery flags it eval-ready); the
+train corpus keeps the source's render process.
+
+**Why**: the framework's discipline is that eval targets are rendered fresh at pos 0 (D-REPRO), so a
+useful post-render split cannot be a pure file copy — it has to re-render the held-out half. Doing that
+for only the test fraction keeps the operation cheap while producing a contract-correct test corpus,
+which is the whole point of holding data out.
 
 ---
 

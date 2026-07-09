@@ -34,17 +34,47 @@ def run_capture(argv: List[str], cwd: Optional[str] = None) -> Tuple[int, str]:
     return completed.returncode, completed.stdout
 
 
+def collapse_carriage_returns(text: str, tail_lines: int = _TAIL_LINES) -> str:
+    """Render ``text`` the way a terminal would, keeping only the last ``tail_lines`` lines.
+
+    A ``\\n`` commits the line being built to scrollback; a ``\\r`` rewinds to
+    the start of that line instead of starting a new one, so a ``tqdm``-style
+    progress bar collapses to one animating line rather than one line per
+    tick. Idempotent on its own output (re-collapsing a collapsed string is a
+    no-op beyond the ``tail_lines`` cut), so :func:`run_streaming` can feed its
+    result back in as the running buffer; callers rendering a one-shot snapshot
+    of a polled remote log tail use it with no state carried between polls.
+
+    The final segment is always kept, even when empty. A trailing ``\\n`` leaves
+    an empty segment that preserves the newline boundary of the just-committed
+    line, so appending the next fed-back chunk starts a fresh line instead of
+    concatenating onto the previous one.
+    """
+    committed: List[str] = []
+    current = ""
+    for char in text:
+        if char == "\n":
+            committed.append(current)
+            current = ""
+        elif char == "\r":
+            current = ""
+        else:
+            current += char
+    lines = committed + [current]
+    return "\n".join(lines[-tail_lines:])
+
+
 def run_streaming(argv: List[str], placeholder) -> int:
     """Run ``argv``, tailing output into a Streamlit ``placeholder``; return code.
 
-    The raw byte stream is consumed so carriage returns are honoured the way a
-    terminal does: a ``\\r`` rewinds the current line, so a ``tqdm`` progress bar
-    stays a single line that updates in place instead of one line per tick. A
-    ``\\n`` commits the current line to the scrollback. ``placeholder`` is an
-    ``st.empty()`` (or any object with ``.code(str)``).
+    The raw byte stream is collapsed (:func:`collapse_carriage_returns`) so
+    carriage returns are honoured the way a terminal does. The collapsed tail is
+    fed back in as the running buffer after each chunk, so memory stays bounded
+    to ``tail_lines`` and the per-chunk work stays proportional to that tail
+    rather than the whole (possibly huge, e.g. a per-file ``rsync -avP``) stream.
+    ``placeholder`` is an ``st.empty()`` (or any object with ``.code(str)``).
     """
-    committed: List[str] = []  # finished lines (ended with \n)
-    current = ""  # the line currently being (over)written
+    buffer = ""
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     process = subprocess.Popen(
@@ -57,29 +87,12 @@ def run_streaming(argv: List[str], placeholder) -> int:
     assert process.stdout is not None
     file_descriptor = process.stdout.fileno()
 
-    def render() -> None:
-        tail = committed[-_TAIL_LINES:]
-        text = "\n".join(tail + ([current] if current else []))
-        placeholder.code(text or "…")
-
     while True:
         chunk = os.read(file_descriptor, 4096)
         if not chunk:
             break
-        for char in decoder.decode(chunk):
-            if char == "\n":
-                committed.append(current)
-                current = ""
-            elif char == "\r":
-                current = ""  # carriage return: overwrite the current line
-            else:
-                current += char
-        render()
+        buffer = collapse_carriage_returns(buffer + decoder.decode(chunk))
+        placeholder.code(buffer or "…")
 
-    if current:
-        committed.append(current)
-    render()
-    return_code = process.wait()
-    if not committed:
-        placeholder.code("(no output)")
-    return return_code
+    placeholder.code(buffer or "(no output)")
+    return process.wait()

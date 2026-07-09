@@ -165,6 +165,56 @@ class HumanPresetSource(PresetSource):
         }
 
 
+class CorpusPresetSource(PresetSource):
+    """Replay presets read back from an already-rendered corpus (the post-render split).
+
+    Yields one :class:`PresetRecord` per metadata row handed in, reconstructing the
+    subset dict from the row's parameter columns and carrying its provenance. Used
+    to re-render the test partition of a corpus split in fresh processes (D-REPRO);
+    the train partition is copied, not replayed. Like :class:`HumanPresetSource`,
+    the presets are fixed, so :meth:`resample` returns ``None`` (no audibility redraw).
+
+    ``records`` are plain dicts (a metadata row each) with NaN provenance already
+    coerced to ``None`` and the subset parameter columns present. ``description`` is
+    the run-summary ``source`` block (built by ``dataset.corpus_splitter``), returned
+    verbatim so both split partitions share an identical provenance shape.
+    """
+
+    def __init__(
+        self,
+        records: List[Dict[str, object]],
+        parameter_space: ParameterSpace,
+        description: Dict[str, object],
+        partition: str = "test",
+    ):
+        self._records = list(records)
+        self._parameter_space = parameter_space
+        self._description = dict(description)
+        self._partition = partition
+
+    def _subset_parameters(self, record: Dict[str, object]) -> Dict[str, float]:
+        missing = [name for name in self._parameter_space.names if name not in record]
+        if missing:
+            raise KeyError(f"Corpus row is missing subset parameters: {missing}")
+        return {name: float(record[name]) for name in self._parameter_space.names}
+
+    def iter_presets(self) -> Iterator[PresetRecord]:
+        for record in self._records:
+            voice_index = record.get("voice_index")
+            yield PresetRecord(
+                params=self._subset_parameters(record),
+                method=str(record.get("method") or METHOD_HUMAN),
+                partition=self._partition,
+                source_file=record.get("source_file"),
+                voice_index=int(voice_index) if voice_index is not None else None,
+                voice_name=record.get("voice_name"),
+                parent_id=record.get("parent_id"),
+            )
+
+    def describe(self) -> Dict[str, object]:
+        return dict(self._description)
+
+
 class HybridPresetSource(PresetSource):
     """Combine human-train presets with synthetic material (the "hybrid" method).
 

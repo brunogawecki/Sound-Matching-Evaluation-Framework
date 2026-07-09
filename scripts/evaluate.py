@@ -11,10 +11,12 @@ Pair with ``scripts/fit_model.py``, which produces the checkpoint::
     python scripts/evaluate.py --checkpoint checkpoints/mean_parameter_baseline.json \
         --corpus dataset/run_A_test --model MeanParameterBaseline
 
-    --checkpoint  the saved model file to load and fingerprint        [REQUIRED]
-    --corpus      the eval corpus directory (must be fresh-process)    [REQUIRED]
-    --model       model class to load the checkpoint into              [REQUIRED]
-    --out         results root                                  [default: <project>/results]
+    --checkpoint      the saved model file to load and fingerprint        [REQUIRED]
+    --corpus          the eval corpus directory (must be fresh-process)    [REQUIRED]
+    --model           model class to load the checkpoint into              [REQUIRED]
+    --out             results root                                  [default: <project>/results]
+    --save-audio      persist prediction WAVs for a seeded random sample subset
+    --save-audio-n    cap on how many samples get saved             [default: 20]
 """
 import argparse
 import os
@@ -61,6 +63,14 @@ def main() -> None:
         help="model class to load the checkpoint into",
     )
     parser.add_argument("--out", default=None, help="results root (default: <project>/results)")
+    parser.add_argument(
+        "--save-audio", action="store_true",
+        help="persist the re-rendered prediction WAV for a seeded random sample subset",
+    )
+    parser.add_argument(
+        "--save-audio-n", type=int, default=20,
+        help="cap on how many samples get their prediction audio saved (default: 20)",
+    )
     args = parser.parse_args()
 
     _require_dexed()
@@ -75,7 +85,13 @@ def main() -> None:
     corpus = RenderedCorpusDataset.load(args.corpus)
 
     print(f"--- Evaluating {args.model} on '{corpus.corpus_dir.name}' ({len(corpus)} samples) ---")
-    result = Evaluator(corpus).evaluate(model, checkpoint_path=checkpoint_path, out_dir=args.out)
+    result = Evaluator(corpus).evaluate(
+        model,
+        checkpoint_path=checkpoint_path,
+        out_dir=args.out,
+        save_audio=args.save_audio,
+        save_audio_n=args.save_audio_n,
+    )
     _print_table(result)
 
 

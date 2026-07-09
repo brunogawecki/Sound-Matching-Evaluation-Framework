@@ -26,7 +26,7 @@ if not os.path.exists(os.path.expanduser(config.DEXED_PATH)):
 checkpoints = discovery.list_checkpoints()
 corpora = discovery.list_corpora()
 if not checkpoints:
-    st.info("No checkpoints yet. Fit a model on the **Fit model** page first.")
+    st.info("No checkpoints yet. Train a model on the **Train on cluster** page first.")
     st.stop()
 if not corpora:
     st.info("No corpora yet. Build a (fresh-process) eval corpus on **Build dataset** first.")
@@ -51,11 +51,24 @@ if not corpus.fresh_process:
 model_choice = next(arg for arg in EVALUATE.args if arg.name == "model")
 model = st.selectbox("Model class", list(model_choice.choices))
 out = st.text_input("Results root (optional)", value="", help="Blank uses <project>/results.")
+save_audio_n = st.number_input(
+    "Prediction samples to save for listening",
+    min_value=0, value=20, step=1,
+    help="A seeded random subset of predictions is re-rendered to WAV for the Results "
+         "page's Listen section.",
+)
 
 try:
     argv = build_command(
         EVALUATE,
-        {"checkpoint": str(checkpoint), "corpus": str(corpus.path), "model": model, "out": out},
+        {
+            "checkpoint": str(checkpoint),
+            "corpus": str(corpus.path),
+            "model": model,
+            "out": out,
+            "save_audio": True,
+            "save_audio_n": int(save_audio_n),
+        },
     )
 except ValueError as exc:
     argv = None

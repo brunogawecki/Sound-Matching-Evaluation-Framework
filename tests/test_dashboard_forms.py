@@ -20,8 +20,8 @@ from script_specs import (  # noqa: E402
     BUILD_HUMAN,
     BUILD_SYNTHETIC,
     EVALUATE,
-    FIT_MODEL,
     MODEL_CHOICES,
+    SPLIT_CORPUS,
 )
 
 from models.registry import MODEL_REGISTRY  # noqa: E402
@@ -60,7 +60,7 @@ def test_bool_flag_is_bare_when_true_absent_when_false():
 
 
 def test_paths_split_and_blank_choice_omitted():
-    argv = build_command(BUILD_HUMAN, {"cartridges": "a.syx b.syx", "partition": ""})
+    argv = build_command(BUILD_HUMAN, {"cartridges": "a.syx\nb.syx", "partition": ""})
     assert argv[:6] == [
         sys.executable, "scripts/build_dataset.py", "human",
         "--cartridges", "a.syx", "b.syx",
@@ -68,6 +68,32 @@ def test_paths_split_and_blank_choice_omitted():
     assert "--partition" not in argv  # blank choice -> script default (both)
     # unspecified args fall back to their declared defaults
     assert "--test-fraction" in argv and "--dedup-threshold" in argv
+
+
+def test_paths_preserves_spaces_within_a_line():
+    # A single folder whose name contains a space (e.g. macOS "Application Support")
+    # must survive as one argv token, not be split into two.
+    argv = build_command(
+        BUILD_HUMAN,
+        {"cartridges": "/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges"},
+    )
+    assert argv[:5] == [
+        sys.executable, "scripts/build_dataset.py", "human", "--cartridges",
+        "/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges",
+    ]
+
+
+def test_paths_strips_surrounding_quotes():
+    # A path pasted pre-quoted (e.g. copied out of a shell command) shouldn't carry
+    # the quote characters into the actual path.
+    argv = build_command(
+        BUILD_HUMAN,
+        {"cartridges": "'/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges'"},
+    )
+    assert argv[:5] == [
+        sys.executable, "scripts/build_dataset.py", "human", "--cartridges",
+        "/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges",
+    ]
 
 
 def test_required_missing_raises():
@@ -79,38 +105,9 @@ def test_required_missing_raises():
 
 def test_model_choice_required_raises_when_blank():
     with pytest.raises(ValueError):
-        build_command(FIT_MODEL, {"model": "", "corpus": "dataset/run_A_train", "out": ""})
-    with pytest.raises(ValueError):
         build_command(
             EVALUATE, {"checkpoint": "checkpoints/m.json", "corpus": "c", "model": ""}
         )
-
-
-def test_optional_blank_out_is_omitted():
-    argv = build_command(
-        FIT_MODEL,
-        {"model": "MeanParameterBaseline", "corpus": "dataset/run_A_train", "out": ""},
-    )
-    assert argv == [
-        sys.executable, "scripts/fit_model.py",
-        "--model", "MeanParameterBaseline",
-        "--corpus", "dataset/run_A_train",
-    ]
-
-
-def test_fit_model_full_command():
-    argv = build_command(
-        FIT_MODEL,
-        {"model": "Sound2SynthSpectrogramRegressor", "corpus": "dataset/run_A_train",
-         "out": "checkpoints/spectrogram_cnn.pt", "config": "cluster/training_configs/smoke_config.yaml"},
-    )
-    assert argv == [
-        sys.executable, "scripts/fit_model.py",
-        "--model", "Sound2SynthSpectrogramRegressor",
-        "--corpus", "dataset/run_A_train",
-        "--out", "checkpoints/spectrogram_cnn.pt",
-        "--config", "cluster/training_configs/smoke_config.yaml",
-    ]
 
 
 def test_evaluate_full_command():
@@ -124,6 +121,51 @@ def test_evaluate_full_command():
         "--checkpoint", "checkpoints/m.json",
         "--corpus", "dataset/run_A_test",
         "--model", "MeanParameterBaseline",
+        "--save-audio-n", "20",
+    ]
+
+
+def test_evaluate_save_audio_flag_emitted_when_true():
+    argv = build_command(
+        EVALUATE,
+        {"checkpoint": "checkpoints/m.json", "corpus": "dataset/run_A_test",
+         "model": "MeanParameterBaseline", "out": "", "save_audio": True, "save_audio_n": 5},
+    )
+    assert argv == [
+        sys.executable, "scripts/evaluate.py",
+        "--checkpoint", "checkpoints/m.json",
+        "--corpus", "dataset/run_A_test",
+        "--model", "MeanParameterBaseline",
+        "--save-audio",
+        "--save-audio-n", "5",
+    ]
+
+
+def test_split_corpus_command_is_exact():
+    argv = build_command(
+        SPLIT_CORPUS,
+        {"corpus": "dataset/full_preset-gen-vae", "test_fraction": 0.2,
+         "split_seed": 0, "run_name": ""},
+    )
+    assert argv == [
+        sys.executable, "scripts/split_corpus.py",
+        "--corpus", "dataset/full_preset-gen-vae",
+        "--test-fraction", "0.2",
+        "--split-seed", "0",
+    ]
+
+
+def test_split_corpus_run_name_emitted_when_set():
+    argv = build_command(
+        SPLIT_CORPUS,
+        {"corpus": "dataset/demo", "test_fraction": 0.25, "split_seed": 7, "run_name": "bench"},
+    )
+    assert argv == [
+        sys.executable, "scripts/split_corpus.py",
+        "--corpus", "dataset/demo",
+        "--test-fraction", "0.25",
+        "--split-seed", "7",
+        "--run-name", "bench",
     ]
 
 
@@ -160,3 +202,42 @@ def test_list_corpora_reads_run_summary(tmp_path, monkeypatch):
     assert corpora[0].name == "demo_train"
     assert corpora[0].num_samples == 5
     assert corpora[0].fresh_process is True
+    assert corpora[0].method is None
+
+
+def test_list_corpora_reads_construction_method(tmp_path, monkeypatch):
+    corpus = tmp_path / "demo_hybrid"
+    (corpus / "audio").mkdir(parents=True)
+    (corpus / "run_summary.json").write_text(
+        '{"run_name": "demo_hybrid", "num_samples": 5, "render_process": "in-process", '
+        '"source": {"method": "hybrid"}}'
+    )
+    monkeypatch.setattr(discovery, "DATASET_DIR", tmp_path)
+    assert discovery.list_corpora()[0].method == "hybrid"
+
+
+def test_list_saved_audio_samples_empty_when_no_audio_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "RESULTS_DIR", tmp_path)
+    assert discovery.list_saved_audio_samples("demo_test", "MeanParameterBaseline") == []
+
+
+def test_list_saved_audio_samples_returns_sorted_stems(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "RESULTS_DIR", tmp_path)
+    audio_dir = tmp_path / "demo_test" / "MeanParameterBaseline" / "audio"
+    audio_dir.mkdir(parents=True)
+    for sample_id in ("sample_000002", "sample_000000", "sample_000001"):
+        (audio_dir / f"{sample_id}.wav").write_bytes(b"")
+    assert discovery.list_saved_audio_samples("demo_test", "MeanParameterBaseline") == [
+        "sample_000000", "sample_000001", "sample_000002",
+    ]
+
+
+def test_original_and_predicted_audio_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(discovery, "DATASET_DIR", tmp_path / "dataset")
+    monkeypatch.setattr(discovery, "RESULTS_DIR", tmp_path / "results")
+    assert discovery.original_audio_path("demo_test", "sample_000000") == (
+        tmp_path / "dataset" / "demo_test" / "audio" / "sample_000000.wav"
+    )
+    assert discovery.predicted_audio_path("demo_test", "MeanParameterBaseline", "sample_000000") == (
+        tmp_path / "results" / "demo_test" / "MeanParameterBaseline" / "audio" / "sample_000000.wav"
+    )
