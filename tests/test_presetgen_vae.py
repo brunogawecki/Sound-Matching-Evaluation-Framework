@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 torch = pytest.importorskip("torch")
 
 from models.presetgen_vae import (
+    PresetGenVAEFlowRegressor,
     PresetGenVAEMLPRegressor,
     PresetGenVAENetwork,
     VAENetworkOutput,
@@ -128,6 +129,37 @@ def test_autoencoder_reparameterizes_only_in_training_mode():
     first = network.forward_training(audio).reconstruction
     second = network.forward_training(audio).reconstruction
     assert not torch.allclose(first, second)
+
+
+# -- flow regressor head (issue #35) ------------------------------------------------
+
+
+def flow_network_kwargs():
+    kwargs = dict(TINY_KWARGS)
+    kwargs.update(
+        regressor_architecture="flow", regressor_hidden_layers=2, regressor_hidden_width=16
+    )
+    return kwargs
+
+
+def test_flow_head_forward_maps_audio_batch_to_ml_dimension():
+    # Invertible head: ml_dimension must match the 16-wide latent from TINY_KWARGS.
+    network = PresetGenVAENetwork(ml_dimension=16, **flow_network_kwargs())
+    network.eval()
+    audio = torch.randn(3, NUM_AUDIO_SAMPLES)
+    assert network(audio).shape == (3, 16)
+
+
+def test_flow_head_requires_latent_dimension_equal_to_ml_dimension():
+    with pytest.raises(ValueError, match="latent_dimension == ml_dimension"):
+        PresetGenVAENetwork(ml_dimension=5, **flow_network_kwargs())
+
+
+def test_unknown_regressor_architecture_raises():
+    kwargs = dict(TINY_KWARGS)
+    kwargs["regressor_architecture"] = "transformer"
+    with pytest.raises(ValueError, match="regressor_architecture"):
+        PresetGenVAENetwork(ml_dimension=5, **kwargs)
 
 
 # -- end-to-end family (fit -> save -> load -> predict) ----------------------------
@@ -278,6 +310,47 @@ def test_vae_fit_save_load_predict_end_to_end(tmp_path):
     prediction = reloaded.predict(audio)
 
     space = train_dataset.parameter_space
+    assert set(prediction) == set(space.names)
+    assert prediction["CAT"] in (0.0, 0.5, 1.0)
+    assert 0.0 <= prediction["AMP"] <= 1.0
+
+
+# The flow family takes no latent_dimension knob (pinned to ml_dimension at fit time).
+FLOW_FAMILY_TINY_KWARGS = dict(
+    n_fft=256,
+    hop_length=128,
+    win_length=256,
+    n_mels=32,
+    mel_fmin=0.0,
+    mel_fmax=4000.0,
+    encoder_dropout=0.0,
+    regressor_hidden_layers=2,
+    regressor_hidden_width=16,
+    regressor_dropout=0.0,
+)
+
+
+def test_flow_fit_save_load_predict_end_to_end(tmp_path):
+    pytest.importorskip("lightning")  # training-only dependency (cluster-side)
+
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    model = PresetGenVAEFlowRegressor(
+        default_root_dir=str(tmp_path / "logs"), **FLOW_FAMILY_TINY_KWARGS
+    )
+    model.fit(train_dataset, config=training_config())
+
+    # The invertible head pins the latent to the ML-side width at fit time.
+    space = train_dataset.parameter_space
+    assert model._architecture_hparams["latent_dimension"] == space.ml_dimension
+    assert model._architecture_hparams["regressor_architecture"] == "flow"
+
+    checkpoint_path = tmp_path / "presetgen_vae_flow.pt"
+    model.save(checkpoint_path)
+    reloaded = PresetGenVAEFlowRegressor(**FLOW_FAMILY_TINY_KWARGS)
+    reloaded.load(checkpoint_path)
+
+    audio, _ = train_dataset[0]
+    prediction = reloaded.predict(audio)
     assert set(prediction) == set(space.names)
     assert prediction["CAT"] in (0.0, 0.5, 1.0)
     assert 0.0 <= prediction["AMP"] <= 1.0

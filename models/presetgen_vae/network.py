@@ -1,17 +1,12 @@
-"""preset-gen-vae port (Le Vaillant et al., DAFx 2021; paper_repos/preset-gen-vae).
+"""The paper's ``BasicVAE`` network: mel-dB front-end + ``speccnn8l1_bn`` VAE + regressor head.
 
-A staged reimplementation of the paper's ``FlVAE2`` model as a ``BaseDeepModel``
-family that predicts this framework's D1 parameter space through ``ParameterSpace``
-(not the paper's 144-param / ``all<=32`` scheme), so it stays comparable to the other
-model families and trains through the existing harness and ``ParameterLoss``.
-
-**Stage 2** (:class:`PresetGenVAENetwork`): the paper's ``BasicVAE`` -- a
-mel-dB front-end and the paper's ``speccnn8l1_bn`` spectrogram encoder emitting
+The mel-dB front-end and the paper's ``speccnn8l1_bn`` spectrogram encoder emit
 ``mu``/``logvar``; a reparameterized sample feeds both the mirror-image ``speccnn8l1_bn``
-spectrogram decoder (reconstruction) and the MLP regressor head (controls). The regression
+spectrogram decoder (reconstruction) and the regressor head (controls). The regression
 gradient flows into the encoder (joint training), exactly as the paper trains the VAE and
-regressor together. Stage 3 adds the RealNVP flows as a second family
-(``PresetGenVAEFlowRegressor``, full ``FlVAE2``) beside this MLP variant.
+regressor together. The head is either the paper's MLP (``3l1024``) or its RealNVP flow
+used feed-forward (``realnvp_6l300``, issue #35). The latent RealNVP flow completing
+``FlVAE2`` is issue #36.
 
 The head emits **raw** outputs (continuous floats + categorical logits), matching the
 ``ParameterSpace`` / ``ParameterLoss`` contract -- the paper's ``PresetActivation``
@@ -20,9 +15,8 @@ does. ``ParameterLoss`` applies softmax/cross-entropy to categorical blocks itse
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Tuple
 
 import numpy as np
 import torch
@@ -30,10 +24,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from dataset.torch_dataset import RenderedCorpusDataset
-from models.base_deep_model import BaseDeepModel
-from models.training.config import TrainingConfig
-from models.training.loss import ParameterLoss
-from synth.parameter_space import ParameterSpace
+from models.presetgen_vae.realnvp import RealNVP
 
 # Fixed architecture constants, faithful to the paper's speccnn8l1_bn encoder.
 _NEGATIVE_SLOPE = 0.1  # LeakyReLU slope used throughout the paper's CNN
@@ -250,7 +241,11 @@ class PresetGenVAENetwork(nn.Module):
     values (``mu`` and ``logvar``; ``latent_dimension`` is the paper's ``dim_z``). A
     reparameterized sample ``z`` feeds both the
     mirror-image ``speccnn8l1_bn`` decoder -- reconstructing the normalized mel-dB spectrogram --
-    and the MLP regressor. ``forward`` returns the regressor prediction only (from the posterior
+    and the regressor head. The head is ``regressor_architecture``: the paper's MLP, or its
+    RealNVP flow used feed-forward -- an invertible map, so ``latent_dimension`` must then equal
+    ``ml_dimension`` (the paper's build-time assert). For the flow,
+    ``regressor_hidden_layers`` / ``regressor_hidden_width`` mean coupling layers / hidden
+    features (the paper's ``6l300``). ``forward`` returns the regressor prediction only (from the posterior
     mean, deterministic in eval), so the inherited ``BaseDeepModel.predict`` path is unchanged and
     the decoder is skipped at inference. ``forward_training`` additionally runs the decoder and
     returns the reconstruction, its target, and ``mu``/``logvar`` for the reconstruction + KL loss.
@@ -271,6 +266,7 @@ class PresetGenVAENetwork(nn.Module):
         spectrogram_max_db: float = 0.0,
         latent_dimension: int = 256,
         encoder_dropout: float = 0.3,
+        regressor_architecture: str = "mlp",
         regressor_hidden_layers: int = 3,
         regressor_hidden_width: int = 1024,
         regressor_dropout: float = 0.4,
@@ -308,9 +304,26 @@ class PresetGenVAENetwork(nn.Module):
             nn.Linear(latent_dimension, cnn_output_items), nn.Dropout(encoder_dropout)
         )
         self.decoder_cnn = _build_decoder_cnn(unmixer_in_channels=cnn_output_shape[0])
-        self.regressor = _build_regressor(
-            latent_dimension, ml_dimension, regressor_hidden_layers, regressor_hidden_width, regressor_dropout
-        )
+        if regressor_architecture == "mlp":
+            self.regressor: nn.Module = _build_regressor(
+                latent_dimension, ml_dimension, regressor_hidden_layers, regressor_hidden_width, regressor_dropout
+            )
+        elif regressor_architecture == "flow":
+            if latent_dimension != ml_dimension:
+                raise ValueError(
+                    "regressor_architecture='flow' is invertible and needs latent_dimension == "
+                    f"ml_dimension, got {latent_dimension} != {ml_dimension}."
+                )
+            self.regressor = RealNVP(
+                features=ml_dimension,
+                hidden_features=regressor_hidden_width,
+                coupling_layers=regressor_hidden_layers,
+                dropout=regressor_dropout,
+            )
+        else:
+            raise ValueError(
+                f"Unknown regressor_architecture '{regressor_architecture}' (use 'mlp' or 'flow')."
+            )
 
     def _mel_db_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
         return _compute_mel_db_spectrogram(
@@ -400,121 +413,3 @@ def measure_corpus_mel_db_range(
         running_min = min(running_min, float(decibels.min()))
         running_max = max(running_max, float(decibels.max()))
     return running_min, running_max
-
-
-class PresetGenVAEMLPRegressor(BaseDeepModel):
-    """The :class:`BaseDeepModel` family wrapping :class:`PresetGenVAENetwork`.
-
-    The paper's ``BasicVAE``: a Gaussian-latent spectrogram autoencoder with a regressor head,
-    trained by :class:`LightningVAERegressor` (reconstruction + beta-KL + controls). The
-    mel/STFT/encoder/regressor knobs are constructor arguments (paper ``speccnn8l1_bn`` +
-    ``3l1024`` defaults); ``ml_dimension``, ``num_audio_samples`` and ``sample_rate`` are read
-    from the corpus at ``fit`` time and folded into ``architecture_hparams`` so ``load`` can
-    rebuild the exact network before restoring weights (no VST, no Lightning). Reading the render
-    length + sample rate from the corpus (not the constructor) keeps the network aligned with the
-    self-describing corpus (D-SELFDESC). Stage 3 adds ``PresetGenVAEFlowRegressor`` -- the latent
-    RealNVP flow + flow regressor (full ``FlVAE2``) -- as a second registry entry beside this one.
-    """
-
-    def __init__(
-        self,
-        n_fft: int = 1024,
-        hop_length: int = 256,
-        win_length: int = 1024,
-        n_mels: int = 257,
-        mel_fmin: float = 30.0,
-        mel_fmax: float = 11000.0,
-        spectrogram_min_db: float = -120.0,
-        spectrogram_max_db: float = 0.0,
-        latent_dimension: int = 256,
-        encoder_dropout: float = 0.3,
-        regressor_hidden_layers: int = 3,
-        regressor_hidden_width: int = 1024,
-        regressor_dropout: float = 0.4,
-        default_root_dir: str = "lightning_logs",
-    ) -> None:
-        super().__init__(default_root_dir=default_root_dir)
-        self._n_fft = n_fft
-        self._hop_length = hop_length
-        self._win_length = win_length
-        self._n_mels = n_mels
-        self._mel_fmin = mel_fmin
-        self._mel_fmax = mel_fmax
-        self._spectrogram_min_db = spectrogram_min_db
-        self._spectrogram_max_db = spectrogram_max_db
-        self._latent_dimension = latent_dimension
-        self._encoder_dropout = encoder_dropout
-        self._regressor_hidden_layers = regressor_hidden_layers
-        self._regressor_hidden_width = regressor_hidden_width
-        self._regressor_dropout = regressor_dropout
-
-    def _build_network(self, architecture_hparams: Dict[str, Any]) -> nn.Module:
-        return PresetGenVAENetwork(
-            ml_dimension=architecture_hparams["ml_dimension"],
-            num_audio_samples=architecture_hparams["num_audio_samples"],
-            sample_rate=architecture_hparams["sample_rate"],
-            n_fft=architecture_hparams["n_fft"],
-            hop_length=architecture_hparams["hop_length"],
-            win_length=architecture_hparams["win_length"],
-            n_mels=architecture_hparams["n_mels"],
-            mel_fmin=architecture_hparams["mel_fmin"],
-            mel_fmax=architecture_hparams["mel_fmax"],
-            spectrogram_min_db=architecture_hparams["spectrogram_min_db"],
-            spectrogram_max_db=architecture_hparams["spectrogram_max_db"],
-            latent_dimension=architecture_hparams["latent_dimension"],
-            encoder_dropout=architecture_hparams["encoder_dropout"],
-            regressor_hidden_layers=architecture_hparams["regressor_hidden_layers"],
-            regressor_hidden_width=architecture_hparams["regressor_hidden_width"],
-            regressor_dropout=architecture_hparams["regressor_dropout"],
-        )
-
-    @staticmethod
-    def _corpus_sample_rate(train_dataset: RenderedCorpusDataset) -> int:
-        """Read the render sample rate from the corpus's ``run_summary.json``."""
-        with open(train_dataset.corpus_dir / "run_summary.json") as summary_file:
-            return int(json.load(summary_file)["sample_rate"])
-
-    def _build_architecture_hparams(
-        self, train_dataset: RenderedCorpusDataset, parameter_space: ParameterSpace
-    ) -> Dict[str, Any]:
-        """The network hparams for build + checkpoint.
-
-        Render length + sample rate come from the corpus (D-SELFDESC); the mel-dB normalization
-        endpoints are measured over the train corpus (D-MELNORM), overriding the constructor
-        defaults, so ``load`` rebuilds the identical front-end offline.
-        """
-        example_audio, _ = train_dataset[0]
-        sample_rate = self._corpus_sample_rate(train_dataset)
-        min_db, max_db = measure_corpus_mel_db_range(
-            train_dataset, sample_rate=sample_rate, n_fft=self._n_fft,
-            hop_length=self._hop_length, win_length=self._win_length, n_mels=self._n_mels,
-            mel_fmin=self._mel_fmin, mel_fmax=self._mel_fmax, db_floor=self._spectrogram_min_db,
-        )
-        return {
-            "ml_dimension": parameter_space.ml_dimension,
-            "num_audio_samples": int(example_audio.shape[-1]),
-            "sample_rate": sample_rate,
-            "n_fft": self._n_fft,
-            "hop_length": self._hop_length,
-            "win_length": self._win_length,
-            "n_mels": self._n_mels,
-            "mel_fmin": self._mel_fmin,
-            "mel_fmax": self._mel_fmax,
-            "spectrogram_min_db": min_db,
-            "spectrogram_max_db": max_db,
-            "latent_dimension": self._latent_dimension,
-            "encoder_dropout": self._encoder_dropout,
-            "regressor_hidden_layers": self._regressor_hidden_layers,
-            "regressor_hidden_width": self._regressor_hidden_width,
-            "regressor_dropout": self._regressor_dropout,
-        }
-
-    def _build_lightning_module(
-        self, network: nn.Module, parameter_loss: ParameterLoss, training_config: TrainingConfig
-    ):
-        # Lazy: the training-only Lightning stack (D-FRAMEWORK) stays off the eval path.
-        from models.training.lightning_vae_module import LightningVAERegressor
-
-        return LightningVAERegressor(
-            network, parameter_loss, training_config.optimizer, training_config.loss
-        )

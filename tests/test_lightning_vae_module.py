@@ -13,8 +13,8 @@ import torch.nn.functional as F
 from torch import nn
 
 from models.presetgen_vae import VAENetworkOutput
+from models.presetgen_vae.lightning_module import LightningVAERegressor, linear_warmup
 from models.training.config import LossConfig, OptimizerConfig
-from models.training.lightning_vae_module import LightningVAERegressor, linear_warmup
 from models.training.loss import ParameterLoss, gaussian_kl_divergence
 from synth.parameter_space import ParameterSpace, ParameterSpecification
 

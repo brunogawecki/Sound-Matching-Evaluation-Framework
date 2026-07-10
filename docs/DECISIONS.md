@@ -838,7 +838,7 @@ which is the whole point of holding data out.
 
 ### D-MELNORM — preset-gen-vae mel-dB front-end normalizes from corpus stats (LOCKED 2026-07-09)
 
-**Decision**: the preset-gen-vae port's mel-dB spectrogram front-end (`models/presetgen_vae.py`)
+**Decision**: the preset-gen-vae port's mel-dB spectrogram front-end (`models/presetgen_vae/network.py`)
 min-max normalizes to [−1, 1] using the **actual min/max dB measured over the train corpus**, not a
 hardcoded dB range. The two endpoints are computed in one pass at the start of the family's `fit()`
 and folded into the checkpoint's `architecture_hparams` (exactly like `num_audio_samples` /

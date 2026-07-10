@@ -1,7 +1,10 @@
 # The preset-gen-vae port — networks, models, and modules
 
 How the paper *"Improving Synthesizer Programming from VAE Latent Space"* (Le Vaillant et al.,
-DAFx 2021, `paper_repos/preset-gen-vae/`) maps onto the code in `models/presetgen_vae.py`. Read this
+DAFx 2021, `paper_repos/preset-gen-vae/`) maps onto the code in the `models/presetgen_vae/`
+package -- one paper, one package, one file per role: `network.py` (front-end + VAE),
+`realnvp.py` (the ported flow), `families.py` (the registered model wrappers), and
+`lightning_module.py` (the training-only loss recipe). Read this
 if the split between "network", "model", and "module" is unclear, or you want to know which class is
 which part of the paper. Design rationale (D1, D-MELNORM, D-KIND, D-METRIC-SR) lives in
 `docs/DECISIONS.md`; this doc is just the map.
@@ -88,23 +91,29 @@ samples new latents to invent presets; the VAE can do it, but the benchmark does
 
 ## How the code maps onto this
 
-The port is built **in stages**. Stage 2 (current) is the paper's VAE with an MLP regressor; Stage 3
-(future) adds the RealNVP flows for the full model. Each stage = one network + one model wrapper + one
-training module.
+The port is built **in stages**. Stage 2 is the paper's VAE with an MLP regressor; Stage 3a swaps
+the head for the RealNVP flow regressor (issue #35); Stage 3b (future) adds the latent RealNVP flow
+completing the full model (issue #36). Both regressor variants share `PresetGenVAENetwork` (a
+`regressor_architecture` knob) and `LightningVAERegressor`.
 
 | Stage | Network | Model (family) | Trained by | = which paper piece |
 |-------|---------|----------------|------------|---------------------|
-| **2** *(current)* | `PresetGenVAENetwork` | `PresetGenVAEMLPRegressor` | `LightningVAERegressor` | the paper's VAE + **MLP** regressor (≈ the "MLP" rows of Table 1), with closed-form KL |
-| **3** *(future)* | *(flow variant)* | `PresetGenVAEFlowRegressor` | *(flow module)* | the paper's VAE + **flow** regressor (≈ the "Flow" rows), + RealNVP latent flow = full `FlVAE2` |
+| **2** | `PresetGenVAENetwork` (`mlp` head) | `PresetGenVAEMLPRegressor` | `LightningVAERegressor` | the paper's VAE + **MLP** regressor (≈ the "MLP" rows of Table 1), with closed-form KL |
+| **3a** *(current)* | `PresetGenVAENetwork` (`flow` head, `realnvp.py`) | `PresetGenVAEFlowRegressor` | `LightningVAERegressor` | the paper's VAE + **flow** regressor (≈ the "Flow" rows), still closed-form KL |
+| **3b** *(future, #36)* | *(+ latent RealNVP flow)* | *(same families)* | *(flow-KL module)* | latent flow z0 → zK + Monte-Carlo KL = full `FlVAE2` |
 
-Stage 3 registers as a **second registry entry** beside the MLP one, so the two variants stay
-separately trainable and evaluable — mirroring the paper's MLP-vs-Flow comparison.
+The two regressor variants are **separate registry entries**, so they stay separately trainable and
+evaluable — mirroring the paper's MLP-vs-Flow comparison.
 
 - **Stage 2 ≈ the paper's "MLP regression" model** — the full VAE (encoder + latent + decoder +
-  reconstruction + KL) with an MLP head off the latent. We use the closed-form KL (`BasicVAE`); the
-  latent flow is deferred to Stage 3.
-- **Stage 3 ≈ the paper's "Flow regression" model** (their headline `FlVAE2`) — same VAE, but the
-  regressor head becomes a RealNVP flow, plus a RealNVP flow on the latent itself.
+  reconstruction + KL) with an MLP head (`3l1024`) off the latent.
+- **Stage 3a ≈ the paper's "Flow regression" model** — same VAE, but the head is a RealNVP flow
+  (`realnvp_6l300`) used feed-forward. Invertible, so `latent_dimension` is pinned to
+  `ml_dimension` at fit time (the paper's build-time assert). The nflows pieces the paper uses are
+  ported as plain torch in `models/presetgen_vae/realnvp.py` (the head runs at predict time, so it cannot hide
+  behind the training-only lazy imports).
+- **Stage 3b** (their headline `FlVAE2`) — adds a RealNVP flow on the latent itself and replaces
+  the closed-form KL with the Monte-Carlo estimate using the flow's log-det-Jacobian.
 
 (Numbering starts at 2 because an earlier Stage 1 — a no-VAE encoder→regressor baseline, to isolate
 what the VAE machinery buys — was built and then removed as out of scope. The discriminative slot in
