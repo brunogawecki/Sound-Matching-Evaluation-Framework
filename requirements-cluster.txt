@@ -4,9 +4,11 @@
 # This is the COMPLETE set to install on the GPU cluster: the base scientific
 # stack MINUS the VST/render/eval/dashboard packages, PLUS the training-only libs.
 # Training reads self-describing corpora and never touches a live plugin
-# (D-SELFDESC / D-EVAL), so none of dawdreamer / librosa / pyloudnorm / streamlit
-# is needed. PyTorch Lightning is imported only under models/training/; pyyaml only
-# by TrainingConfig.from_yaml. Neither is in the base requirements.txt, so the Mac
+# (D-SELFDESC / D-EVAL), so none of dawdreamer / pyloudnorm / streamlit is needed.
+# librosa IS needed: the preset-gen-vae families build their mel filterbank with
+# librosa.filters.mel at fit time (models/presetgen_vae/network.py). PyTorch
+# Lightning is imported only under models/training/; pyyaml only by
+# TrainingConfig.from_yaml. Neither is in the base requirements.txt, so the Mac
 # eval path stays Lightning-free (D-FRAMEWORK).
 #
 # Versions are pinned to the local dev environment (Python 3.11) for reproducible
@@ -19,6 +21,7 @@ scipy==1.17.1
 pandas==3.0.3
 python-dotenv==1.2.2
 torch==2.12.1
+librosa==0.11.0  # mel filterbank for the preset-gen-vae front-end (fit-time)
 
 # Training-only (models/training/): Lightning harness + YAML config parsing.
 lightning==2.6.5

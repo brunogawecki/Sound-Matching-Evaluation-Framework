@@ -15,8 +15,9 @@ on the cluster.
 | `cluster.env(.example)` | Machine-specific paths / SSH target / account (gitignored; copy the example). |
 | `push_corpus.sh` | `rsync` a corpus up to the cluster (laptop). |
 | `pull_checkpoint.sh` | `rsync` the trained checkpoint (+ logs) back down (laptop). |
-| `training_configs/smoke_config.yaml` | Acceptance run (2 epochs). |
+| `training_configs/smoke_config.yaml` | Acceptance run (2 epochs, any model family). |
 | `training_configs/full_config.yaml` | Full run (30 epochs, Sound2Synth hyperparameters). |
+| `training_configs/presetgen_full_config.yaml` | Full run for the preset-gen-vae families (400 epochs, the paper's hyperparameters). Third `train.sbatch` arg: `presetgen_full`. |
 
 ## Config
 

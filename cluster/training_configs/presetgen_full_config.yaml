@@ -1,0 +1,51 @@
+# Full training config for the preset-gen-vae families (PresetGenVAEMLPRegressor /
+# PresetGenVAEFlowRegressor, issues #23/#35). Hyperparameters carried over from the
+# paper's own config.py (paper_repos/preset-gen-vae) where models/training/ supports
+# them; the loss knobs (beta warmup, categorical weight, normalized losses) also match
+# the paper but are set explicitly here so the run's echoed config is self-contained.
+#
+# Deviations from the paper, both documented in docs/PRESETGEN_VAE_PORT.md caveats:
+# - Scheduler: the paper uses ReduceLROnPlateau (factor 0.2, patience 6, cooldown 6)
+#   and stops when the LR falls below initial * 1e-3. Our harness supports cosine
+#   only (the paper's config even carries a "TODO try CosineAnnealing"), so this uses
+#   cosine decay over the full run with val-loss early stopping as the stand-in.
+# - Validation: a single seeded 10% split (framework convention), not the paper's
+#   5-fold cross-validation.
+seed: 0
+
+optimizer:
+  name: adam                # paper: Adam (not AdamW), default betas
+  learning_rate: 2.0e-4     # paper: initial_learning_rate
+  weight_decay: 1.0e-4      # paper: weight_decay
+  scheduler: cosine
+  scheduler_max_epochs: 400 # matches trainer.max_epochs below
+
+loss:
+  continuous_loss: mse
+  categorical_loss_weight: 0.2  # paper: categorical_loss_factor
+  reconstruction_loss: mse
+  beta: 0.2                 # paper: latent loss factor (with normalized losses)
+  beta_start_value: 0.1
+  beta_warmup_epochs: 25    # paper default for the ~30k corpus (16k corpus: 40)
+  normalize_latent_loss: true
+
+data:
+  batch_size: 160           # paper: minibatch_size
+  num_workers: 8            # matches #SBATCH --cpus-per-task=8
+  pin_memory: true
+  persistent_workers: true
+  val_fraction: 0.1         # seeded sample-level split (paper: 5-fold CV; see header)
+
+trainer:
+  max_epochs: 400             # paper: n_epochs for the ~30k corpus (16k corpus: 700)
+  precision: bf16-mixed       # A100
+  accelerator: gpu            # fail loud if no GPU is visible (we requested --gres=gpu:1)
+  devices: 1
+  strategy: auto
+  early_stopping_patience: 20 # stand-in for the paper's LR-threshold stop (see header)
+  log_every_n_steps: 50
+  deterministic: false        # the flow head's index assignment has no deterministic
+                              # CUDA path; seed still fixes RNG (see smoke_config.yaml)
+
+logger:
+  wandb: true
