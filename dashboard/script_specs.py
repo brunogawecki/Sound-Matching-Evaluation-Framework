@@ -150,7 +150,7 @@ SPLIT_CORPUS = ScriptSpec(
 MODEL_CHOICES = (
     "MeanParameterBaseline",
     "Sound2SynthSpectrogramRegressor",
-    "PresetGenVaeRegressor",
+    "PresetGenVAEMLPRegressor",
 )
 
 EVALUATE = ScriptSpec(

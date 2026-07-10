@@ -77,16 +77,26 @@ class LightningRegressor(pl.LightningModule):
         audio, targets = batch
         predictions = self.network(audio)
         losses = self.parameter_loss(predictions, targets)
-        batch_size = audio.shape[0]
         # Epoch aggregates: {stage}_loss is what ModelCheckpoint/EarlyStopping monitor.
-        log = dict(on_step=False, on_epoch=True, batch_size=batch_size)
+        log = dict(on_step=False, on_epoch=True, batch_size=audio.shape[0])
         self.log(f"{stage}_loss", losses["loss"], prog_bar=True, **log)
-        self.log(f"{stage}_continuous_loss", losses["continuous_loss"], **log)
-        self.log(f"{stage}_categorical_loss", losses["categorical_loss"], **log)
+        self._log_parameter_losses(predictions, targets, losses, stage, log)
+        return losses["loss"]
+
+    def _log_parameter_losses(
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
+        losses: Dict[str, torch.Tensor],
+        stage: str,
+        log_kwargs: Dict[str, Any],
+    ) -> None:
+        """Log the :class:`ParameterLoss` components (shared with subclasses)."""
+        self.log(f"{stage}_continuous_loss", losses["continuous_loss"], **log_kwargs)
+        self.log(f"{stage}_categorical_loss", losses["categorical_loss"], **log_kwargs)
         if self.parameter_loss.has_categorical:
             accuracy = self.parameter_loss.categorical_accuracy(predictions, targets)
-            self.log(f"{stage}_categorical_accuracy", accuracy, **log)
-        return losses["loss"]
+            self.log(f"{stage}_categorical_accuracy", accuracy, **log_kwargs)
 
     def configure_optimizers(self) -> Dict[str, Any]:
         return build_optimizers(self.network, self._optimizer_config)

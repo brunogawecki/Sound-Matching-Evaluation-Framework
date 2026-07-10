@@ -27,7 +27,8 @@ Re-sync from the sheet: `docs/PAPER_CANDIDATES.md` mirrors
 
 - **preset-gen-vae** ("Improving Synthesizer Programming from VAE Latent Space", 2021) — Dexed, VAE over
   mel-spectrograms from log-magnitude STFT. Already vendored at `paper_repos/preset-gen-vae/`; source of
-  the human DX7 corpus (`dexed_presets.sqlite`) used by Phase 4.
+  the human DX7 corpus (`dexed_presets.sqlite`) used by Phase 4. Being ported into `models/presetgen_vae.py`
+  in stages — see `docs/PRESETGEN_VAE_PORT.md` for how its networks/models/modules map onto the paper.
   Repo: https://github.com/gwendal-lv/preset-gen-vae
 - **Flow synthesizer** (2020) — Diva, VAE + normalizing flows, mel spectrogram, MSE + KL loss.
   Repo: https://github.com/acids-ircam/flow_synthesizer

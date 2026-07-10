@@ -869,13 +869,14 @@ existing corpus→hparams→checkpoint pattern instead of a separate cached file
   *method*, not its *numbers* (different renderer / corpus / 103-vs-144 param space / categorical scheme
   already guarantee non-matching numbers — see D1, D-METRIC-SR), byte-faithfulness buys nothing here.
 
-**Consequences**: `PresetGenVaeNetwork` / `PresetGenVaeAutoencoderNetwork` keep
-`spectrogram_min_db` / `spectrogram_max_db` as constructor args (the fixed floor stays the default
-lower value), but the deep families' `fit()` overwrites the normalization endpoints with the measured
-corpus values before building the network and recording hparams. Applied to **both** the Stage-1
-regressor and the Stage-2 autoencoder so their inputs stay identical (the only difference between them
-is the VAE machinery). The −120 dB floor and the minor front-end details (eps-in-log floor, upper
-clamp, periodic Hann, reflect pad) are unchanged and explicitly **not** pursued.
+**Consequences**: `PresetGenVAENetwork` keeps `spectrogram_min_db` / `spectrogram_max_db`
+as constructor args (the fixed floor stays the default lower value), but `PresetGenVAEMLPRegressor.fit()`
+overwrites the normalization endpoints with the measured corpus values before building the network and
+recording hparams. The −120 dB floor and the minor front-end details (eps-in-log floor, upper clamp,
+periodic Hann, reflect pad) are unchanged and explicitly **not** pursued.
+
+(An earlier Stage-1 no-VAE regressor shared this same corpus-stat wiring for input parity; it was
+removed as out of scope, so the endpoints are now measured for the one VAE family only.)
 
 ---
 

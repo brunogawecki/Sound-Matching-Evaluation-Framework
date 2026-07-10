@@ -12,7 +12,7 @@ pytest.importorskip("lightning")
 import torch.nn.functional as F
 from torch import nn
 
-from models.presetgen_vae import VaeNetworkOutput
+from models.presetgen_vae import VAENetworkOutput
 from models.training.config import LossConfig, OptimizerConfig
 from models.training.lightning_vae_module import LightningVAERegressor, linear_warmup
 from models.training.loss import ParameterLoss, gaussian_kl_divergence
@@ -34,10 +34,10 @@ def test_linear_warmup_disabled_when_no_warmup_epochs():
 
 # -- the loss step -----------------------------------------------------------
 
-class FakeVaeNetwork(nn.Module):
+class FakeVAENetwork(nn.Module):
     """Returns fixed VAE outputs regardless of input, so the loss composition is checkable."""
 
-    def __init__(self, output: VaeNetworkOutput):
+    def __init__(self, output: VAENetworkOutput):
         super().__init__()
         self._output = output
         self._parameter = nn.Linear(1, 1)  # gives configure_optimizers something to optimize
@@ -62,8 +62,8 @@ def make_module(loss_config: LossConfig):
     target = torch.tensor([[[[0.4, -0.6]]], [[[0.1, 0.3]]]])
     mu = torch.tensor([[0.5, -0.3, 0.1], [0.2, 0.0, -0.4]])
     logvar = torch.tensor([[0.0, 0.2, -0.1], [0.1, -0.2, 0.0]])
-    network = FakeVaeNetwork(
-        VaeNetworkOutput(prediction, reconstruction, target, mu, logvar)
+    network = FakeVAENetwork(
+        VAENetworkOutput(prediction, reconstruction, target, mu, logvar)
     )
     parameter_loss = ParameterLoss(continuous_space(), loss_config)
     module = LightningVAERegressor(network, parameter_loss, OptimizerConfig(), loss_config)

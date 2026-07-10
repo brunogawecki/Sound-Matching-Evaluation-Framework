@@ -2,20 +2,19 @@
 
 Objective: ``reconstruction_MSE + beta * KL(q(z|x) || N(0, I)) + controls_loss``. ``beta`` is
 warmed up linearly (preset-gen-vae's ``LinearDynamicParam``); the controls term reuses
-:class:`ParameterLoss` unchanged. Like :class:`LightningRegressor`, ``forward`` is
-prediction-only and the wrapper exists during training only.
+:class:`ParameterLoss` unchanged. Extends :class:`LightningRegressor` -- only the loss step
+differs; step routing, optimizers, and the ``ParameterLoss`` logging are inherited.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import List
 
-import lightning.pytorch as pl
 import torch
 import torch.nn.functional as F
 from torch import nn
 
 from models.training.config import LossConfig, OptimizerConfig
-from models.training.lightning_module import build_optimizers
+from models.training.lightning_module import LightningRegressor
 from models.training.loss import ParameterLoss, gaussian_kl_divergence
 
 
@@ -34,11 +33,11 @@ def linear_warmup(
     return start_value + (end_value - start_value) * current_epoch / warmup_epochs
 
 
-class LightningVAERegressor(pl.LightningModule):
+class LightningVAERegressor(LightningRegressor):
     """Wraps a VAE network + :class:`ParameterLoss` into a trainable module.
 
     ``network`` exposes ``forward(audio) -> [batch, ml_dimension]`` and
-    ``forward_training(audio) -> VaeNetworkOutput``. ``loss_config`` supplies the
+    ``forward_training(audio) -> VAENetworkOutput``. ``loss_config`` supplies the
     reconstruction/latent knobs (``beta``, warmup, normalization).
     """
 
@@ -49,27 +48,15 @@ class LightningVAERegressor(pl.LightningModule):
         optimizer_config: OptimizerConfig,
         loss_config: LossConfig,
     ) -> None:
-        super().__init__()
+        super().__init__(network, parameter_loss, optimizer_config)
         if loss_config.reconstruction_loss != "mse":
             raise ValueError(
                 f"reconstruction_loss must be 'mse', got '{loss_config.reconstruction_loss}'."
             )
-        self.network = network
-        self.parameter_loss = parameter_loss
-        self._optimizer_config = optimizer_config
         self._beta = float(loss_config.beta)
         self._beta_start_value = float(loss_config.beta_start_value)
         self._beta_warmup_epochs = int(loss_config.beta_warmup_epochs)
         self._normalize_latent_loss = bool(loss_config.normalize_latent_loss)
-
-    def forward(self, audio: torch.Tensor) -> torch.Tensor:
-        return self.network(audio)
-
-    def training_step(self, batch: List[torch.Tensor], batch_index: int) -> torch.Tensor:
-        return self._shared_step(batch, stage="train")
-
-    def validation_step(self, batch: List[torch.Tensor], batch_index: int) -> torch.Tensor:
-        return self._shared_step(batch, stage="val")
 
     def _current_beta(self, stage: str) -> float:
         # Warm up in training; validation uses the final beta so val_loss stays a stationary monitor.
@@ -97,14 +84,7 @@ class LightningVAERegressor(pl.LightningModule):
         self.log(f"{stage}_reconstruction_loss", reconstruction_loss, prog_bar=True, **log)
         self.log(f"{stage}_kl_loss", kl_loss, **log)
         self.log(f"{stage}_controls_loss", controls["loss"], **log)
-        self.log(f"{stage}_continuous_loss", controls["continuous_loss"], **log)
-        self.log(f"{stage}_categorical_loss", controls["categorical_loss"], **log)
-        if self.parameter_loss.has_categorical:
-            accuracy = self.parameter_loss.categorical_accuracy(output.prediction, targets)
-            self.log(f"{stage}_categorical_accuracy", accuracy, **log)
+        self._log_parameter_losses(output.prediction, targets, controls, stage, log)
         if stage == "train":
             self.log("beta", beta, **log)
         return total
-
-    def configure_optimizers(self) -> Dict[str, Any]:
-        return build_optimizers(self.network, self._optimizer_config)

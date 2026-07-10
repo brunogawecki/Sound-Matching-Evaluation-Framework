@@ -127,9 +127,9 @@ def gaussian_kl_divergence(
     """Closed-form KL of the diagonal-Gaussian posterior from ``N(0, I)`` (VAE latent term).
 
     Ports preset-gen-vae's ``GaussianDkl``: ``0.5 * sum(exp(logvar) + mu^2 - logvar - 1)``
-    summed over ``dim_z`` and averaged over the batch. ``normalize`` also divides by ``dim_z``
-    so the term stays comparable to a mean-reduced reconstruction MSE. ``mu``/``logvar`` are
-    ``[batch, dim_z]``.
+    summed over the latent dimension and averaged over the batch. ``normalize`` also divides
+    by the latent dimension so the term stays comparable to a mean-reduced reconstruction MSE.
+    ``mu``/``logvar`` are ``[batch, latent_dimension]``.
     """
     per_sample = 0.5 * torch.sum(torch.exp(logvar) + mu.square() - logvar - 1.0, dim=1)
     divergence = per_sample.mean()
