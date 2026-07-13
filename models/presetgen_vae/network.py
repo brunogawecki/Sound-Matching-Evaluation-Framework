@@ -127,8 +127,11 @@ def _conv2d_block(
 def _build_spectrogram_cnn() -> nn.Sequential:
     """The paper's ``speccnn8l1_bn`` single-channel encoder CNN (enc1..enc8).
 
-    Eight strided convolutions taking a 1-channel spectrogram to 1024 feature maps.
-    No batch-norm on the first (enc1) and last (enc8) layers, per the paper.
+    Eight strided convolutions taking a 1-channel spectrogram to 2048 feature maps.
+    No batch-norm on the first (enc1) and last (enc8) layers, per the paper. enc8's width
+    follows the paper's composed ``SpectrogramEncoder`` (``mixer_1x1conv_ch`` = 2048 for
+    single-channel input), not the raw ``speccnn8l1_bn`` listing (512 -> 1024), which is
+    dead code under the paper's own config.
     """
     return nn.Sequential(
         _conv2d_block(1, 8, (5, 5), (2, 2), 2, use_batch_norm=False),  # enc1
@@ -138,7 +141,7 @@ def _build_spectrogram_cnn() -> nn.Sequential:
         _conv2d_block(64, 128, (4, 4), (2, 2), 2, use_batch_norm=True),  # enc5
         _conv2d_block(128, 256, (4, 4), (2, 2), 2, use_batch_norm=True),  # enc6
         _conv2d_block(256, 512, (4, 4), (2, 2), 2, use_batch_norm=True),  # enc7 (4x4conv)
-        _conv2d_block(512, 1024, (1, 1), (1, 1), 0, use_batch_norm=False),  # enc8 (1x1conv)
+        _conv2d_block(512, 2048, (1, 1), (1, 1), 0, use_batch_norm=False),  # enc8 (1x1conv)
     )
 
 
@@ -175,7 +178,7 @@ def _build_decoder_cnn(unmixer_in_channels: int) -> nn.Sequential:
     mirroring the encoder's 1x1 enc8) followed by six 4x4 up-convolutions and a final 5x5
     transposed conv to one channel, ending in ``Hardtanh`` to bound the output to the
     normalized mel-dB target's [-1, 1] range. ``unmixer_in_channels`` is the encoder's deepest
-    channel count (1024 here), so the decoder inverts the exact encoder feature map.
+    channel count (2048 here), so the decoder inverts the exact encoder feature map.
     """
     return nn.Sequential(
         _tconv2d_block(unmixer_in_channels, 512, (1, 1), (1, 1), 0, (0, 0), use_batch_norm=True),  # dec1
