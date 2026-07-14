@@ -22,12 +22,22 @@ def _render_terminal_job(job: cluster_runner.Job, state: str) -> None:
     """Static (non-polling) view for a job that has left the running states."""
     if state in _TERMINAL_STATES:
         st.success(f"State: **{state}**")
+        with_ckpt = st.checkbox(
+            "Also pull the raw Lightning .ckpt files (~900 MB)",
+            key=f"with_ckpt_{job.job_id}",
+            help="Only needed to resume training, which happens on the cluster. The "
+                 "exported .pt already holds the best epoch's weights.",
+        )
         if st.button("Pull checkpoint", key=f"pull_{job.job_id}"):
             placeholder = st.empty()
-            with st.spinner("Pulling checkpoint…"):
-                code = cluster_runner.pull_checkpoint(job.model, placeholder)
+            with st.spinner(f"Pulling job {job.job_id}…"):
+                code = cluster_runner.pull_checkpoint(
+                    job.job_id, job.model, placeholder, with_ckpt=with_ckpt
+                )
             if code == 0:
-                st.success(f"Pulled checkpoint for {job.model}. See the Evaluate page.")
+                st.success(
+                    f"Pulled job {job.job_id} ({job.model}). See the Evaluate page."
+                )
             else:
                 st.error(f"cluster/pull_checkpoint.sh exited {code}; see log above.")
     else:

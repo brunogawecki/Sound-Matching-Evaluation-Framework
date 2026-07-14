@@ -352,6 +352,18 @@ def test_cancel_job_failure_raises(monkeypatch):
         cluster_runner.cancel_job("98765")
 
 
+def test_build_pull_command_is_job_scoped():
+    assert cluster_runner.build_pull_command("982169", "PresetGenVAEFlowRegressor") == [
+        "cluster/pull_checkpoint.sh", "982169", "PresetGenVAEFlowRegressor"
+    ]
+
+
+def test_build_pull_command_with_ckpt_appends_the_flag():
+    assert cluster_runner.build_pull_command(
+        "982169", "PresetGenVAEFlowRegressor", with_ckpt=True
+    ) == ["cluster/pull_checkpoint.sh", "982169", "PresetGenVAEFlowRegressor", "--with-ckpt"]
+
+
 def test_pull_checkpoint_delegates_to_run_streaming(monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -359,6 +371,6 @@ def test_pull_checkpoint_delegates_to_run_streaming(monkeypatch):
         lambda argv, placeholder: calls.append(argv) or 0,
     )
     placeholder = _FakePlaceholder()
-    code = cluster_runner.pull_checkpoint("MeanParameterBaseline", placeholder)
+    code = cluster_runner.pull_checkpoint("111", "MeanParameterBaseline", placeholder)
     assert code == 0
-    assert calls == [["cluster/pull_checkpoint.sh", "MeanParameterBaseline"]]
+    assert calls == [["cluster/pull_checkpoint.sh", "111", "MeanParameterBaseline"]]

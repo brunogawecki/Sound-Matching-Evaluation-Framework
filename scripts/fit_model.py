@@ -13,6 +13,7 @@ ML-side targets, no VST. Produces the checkpoint ``scripts/evaluate.py`` loads.
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional, Tuple
 
 # This script lives in scripts/; put the project root on the path so the
 # top-level packages (config, dataset, models) import from anywhere.
@@ -20,8 +21,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 from dataset.torch_dataset import RenderedCorpusDataset
+from models.base_deep_model import BaseDeepModel
 from models.registry import MODEL_REGISTRY
 from models.training.config import TrainingConfig
+
+
+def resolve_run_paths(model_name: str, run_id: Optional[str]) -> Tuple[Path, Path]:
+    """Where this run writes its checkpoint and its Lightning logs.
+
+    A ``run_id`` (the SLURM job id on the cluster) scopes both under a directory
+    of their own, so repeat runs of one family never overwrite each other and a
+    pull can name exactly one job's artifacts. Without one, the flat layout is
+    unchanged.
+    """
+    base_dir = Path(config.BASE_DIR)
+    filename = MODEL_REGISTRY[model_name].default_checkpoint_filename
+    if run_id:
+        return (
+            base_dir / "checkpoints" / run_id / filename,
+            base_dir / "lightning_logs" / run_id,
+        )
+    return base_dir / "checkpoints" / filename, base_dir / "lightning_logs"
 
 
 def main() -> None:
@@ -46,13 +66,16 @@ def main() -> None:
         "--val", default=None,
         help="optional explicit validation corpus directory (ignored by the baseline)",
     )
+    parser.add_argument(
+        "--run-id", default=None,
+        help="scope this run's checkpoint and logs under checkpoints/<run-id>/ and "
+             "lightning_logs/<run-id>/ (the cluster passes $SLURM_JOB_ID)",
+    )
     args = parser.parse_args()
 
     registration = MODEL_REGISTRY[args.model]
-    out_path = (
-        Path(args.out) if args.out
-        else Path(config.BASE_DIR) / "checkpoints" / registration.default_checkpoint_filename
-    )
+    default_out_path, log_root = resolve_run_paths(args.model, args.run_id)
+    out_path = Path(args.out) if args.out else default_out_path
 
     training_config = (
         TrainingConfig.from_yaml(args.config).to_dict() if args.config else None
@@ -63,7 +86,14 @@ def main() -> None:
     print(f"--- Fitting {args.model} on '{corpus.corpus_dir.name}' "
           f"({len(corpus)} samples) ---")
 
-    model = registration.model_class()
+    # Only the deep families log through the Lightning harness; the baseline
+    # takes no default_root_dir.
+    model_kwargs = (
+        {"default_root_dir": str(log_root)}
+        if issubclass(registration.model_class, BaseDeepModel)
+        else {}
+    )
+    model = registration.model_class(**model_kwargs)
     model.fit(corpus, validation_dataset=validation_corpus, config=training_config)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

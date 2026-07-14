@@ -273,6 +273,22 @@ def cancel_job(job_id: str) -> None:
         raise RuntimeError(f"scancel exited {code}:\n{output}")
 
 
-def pull_checkpoint(model_name: str, placeholder) -> int:
-    """Run ``cluster/pull_checkpoint.sh <model_name>``, streaming into ``placeholder``."""
-    return command_runner.run_streaming(["cluster/pull_checkpoint.sh", model_name], placeholder)
+def build_pull_command(job_id: str, model_name: str, with_ckpt: bool = False) -> List[str]:
+    """The argv :func:`pull_checkpoint` runs. Pure, so it can be tested without SSH."""
+    command = ["cluster/pull_checkpoint.sh", job_id, model_name]
+    if with_ckpt:
+        command.append("--with-ckpt")
+    return command
+
+
+def pull_checkpoint(
+    job_id: str, model_name: str, placeholder, with_ckpt: bool = False
+) -> int:
+    """Pull one job's checkpoint (+ CSV logs), streaming into ``placeholder``.
+
+    ``with_ckpt`` also fetches the raw Lightning ``.ckpt`` files (~900 MB/job);
+    they're only needed to resume training, which happens on the cluster.
+    """
+    return command_runner.run_streaming(
+        build_pull_command(job_id, model_name, with_ckpt), placeholder
+    )

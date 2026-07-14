@@ -69,7 +69,8 @@ def build_trainer(
         plugins.append(SLURMEnvironment(auto_requeue=True))
 
     # CSVLogger always runs; WandbLogger is opt-in via logger.wandb (config.py).
-    loggers: List[Logger] = [CSVLogger(save_dir=str(default_root_dir))]
+    # name="" stops CSVLogger nesting a second `lightning_logs/` under save_dir.
+    loggers: List[Logger] = [CSVLogger(save_dir=str(default_root_dir), name="")]
     logger_config = training_config.logger
     if logger_config.wandb:
         loggers.append(

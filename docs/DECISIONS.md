@@ -784,6 +784,15 @@ the PUT cluster directly, so training no longer requires SSHing in and running `
 6. **Checkpoint pull: manual button, not automatic on completion**, since the dashboard is not always
    open when a 12-hour job finishes; polling for completion just to auto-pull adds complexity for a
    trigger the user is already looking at the Jobs list to press.
+   *Amended 2026-07-14 — the pull is **job-scoped**.* Training writes to
+   `checkpoints/<job id>/` and `lightning_logs/<job id>/` (`train.sbatch` passes `$SLURM_JOB_ID` to
+   `fit_model.py --run-id`), and the button pulls exactly that job. Previously every run of a family
+   wrote one shared `checkpoints/<model>.pt`, so a re-run destroyed the earlier run's checkpoint
+   before it could be pulled and the button silently served the newer file under the older job's row.
+   Raw Lightning `.ckpt` files (~450 MB each) stay on the cluster behind an opt-in `--with-ckpt`:
+   they only carry optimizer state for *resuming*, which happens cluster-side, and the exported `.pt`
+   already holds the best epoch's weights. Jobs submitted before this change have no per-job
+   directory; the pull falls back to the shared path and warns that the file may belong to a later run.
 7. **Cancel: `scancel` via a button** on any job in a non-terminal state — cheap to add alongside the
    status/log-tail view and avoids a stuck job silently occupying the GPU allocation.
 

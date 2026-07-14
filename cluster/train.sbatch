@@ -48,9 +48,13 @@ echo "--- host $(hostname) | env $CONDA_ENV | model $model | config $TRAINING_CO
 nvidia-smi || true
 
 # No --out: fit_model.py names the checkpoint from the model's registry entry.
+# --run-id scopes this job's artifacts to checkpoints/<job id>/ and
+# lightning_logs/<job id>/, so repeat runs of a family never overwrite each other
+# and the dashboard can pull exactly one job's output.
 python scripts/fit_model.py \
     --model "$model" \
     --corpus "$REMOTE_CORPUS_DIR" \
-    --config "$TRAINING_CONFIG"
+    --config "$TRAINING_CONFIG" \
+    --run-id "$SLURM_JOB_ID"
 
-echo "--- done; checkpoint under checkpoints/ ---"
+echo "--- done; checkpoint under checkpoints/$SLURM_JOB_ID/ ---"

@@ -32,7 +32,13 @@ if not corpora:
     st.info("No corpora yet. Build a (fresh-process) eval corpus on **Build dataset** first.")
     st.stop()
 
-checkpoint = st.selectbox("Checkpoint", checkpoints, format_func=lambda p: p.name)
+# Show the path relative to checkpoints/, so job-scoped pulls read as
+# "<job id>/<model>.pt" instead of several identically-named files.
+checkpoint = st.selectbox(
+    "Checkpoint",
+    checkpoints,
+    format_func=lambda p: str(p.relative_to(discovery.CHECKPOINTS_DIR)),
+)
 
 # Fresh-process corpora are the correct eval targets (D-REPRO); surface them first
 # but don't hard-block the others (matches the CLI, which only warns).
