@@ -1,29 +1,45 @@
-"""Shared base for deep model families: save/load/predict over an injected network.
+"""Shared base for deep model families: the Lightning ``fit`` skeleton plus
+save/load/predict over an injected network.
 
-``fit`` and the network architecture stay abstract; a subclass provides
-``_build_network`` (so ``load`` can rebuild the network before loading weights) and a
-``fit`` that registers a trained network via :meth:`_set_trained_network`. Everything
-else -- the checkpoint format and ``predict``'s decode path -- lives here, depending
-only on ``torch`` and the pure :mod:`models.training.checkpoint` / ``synth.parameter_space``.
+A subclass provides three hooks: ``_build_architecture_hparams`` (constructor knobs +
+corpus-derived values), ``_build_network`` (so ``fit`` and ``load`` can rebuild the
+network from those hparams), and ``_build_lightning_module`` (the family's training
+recipe). The template ``fit`` here does the rest -- seeding, data module, trainer,
+best-checkpoint reload, :meth:`_set_trained_network` -- and so do the checkpoint
+format and ``predict``'s decode path. Lightning is imported lazily inside ``fit``
+(D-FRAMEWORK), so the eval path depends only on ``torch`` and the pure
+:mod:`models.training.checkpoint` / ``synth.parameter_space``.
 """
 from __future__ import annotations
 
 import abc
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import torch
 from torch import nn
 
 from models.base_model import BaseModel
-from models.training.checkpoint import export_checkpoint, load_checkpoint
+from models.training.checkpoint import (
+    export_checkpoint,
+    load_checkpoint,
+    network_state_dict_from_lightning_checkpoint,
+)
+from models.training.config import TrainingConfig
+from models.training.loss import ParameterLoss
 from synth.parameter_space import ParameterSpace
+
+if TYPE_CHECKING:
+    import lightning.pytorch as pl
+
+    from dataset.torch_dataset import RenderedCorpusDataset
 
 
 class BaseDeepModel(BaseModel):
     """``BaseModel`` with shared ``save``/``load``/``predict`` for deep families."""
 
-    def __init__(self) -> None:
+    def __init__(self, default_root_dir: str = "lightning_logs") -> None:
+        self._default_root_dir = default_root_dir
         self._network: Optional[nn.Module] = None
         self._architecture_hparams: Optional[Dict[str, Any]] = None
         self._parameter_space: Optional[ParameterSpace] = None
@@ -33,13 +49,83 @@ class BaseDeepModel(BaseModel):
     def _build_network(self, architecture_hparams: Dict[str, Any]) -> nn.Module:
         """Construct (untrained) the family's network from its hparams.
 
-        Called by :meth:`load` to rebuild the network's structure before loading the
-        saved ``state_dict``. Must be deterministic in ``architecture_hparams`` and
-        depend only on ``torch`` (no VST, no Lightning).
+        Called by :meth:`fit` and :meth:`load` to build the network's structure
+        (before training / before loading the saved ``state_dict``). Must be
+        deterministic in ``architecture_hparams`` and depend only on ``torch``
+        (no VST, no Lightning).
         """
 
-    # ``fit`` stays abstract (inherited from BaseModel) -- each family trains
-    # differently. A family's fit trains a network then calls _set_trained_network.
+    @abc.abstractmethod
+    def _build_architecture_hparams(
+        self, train_dataset: "RenderedCorpusDataset", parameter_space: ParameterSpace
+    ) -> Dict[str, Any]:
+        """The hparams dict :meth:`_build_network` consumes.
+
+        Called once at the start of :meth:`fit`: constructor knobs plus anything
+        derived from the corpus (``ml_dimension``, render length, ...), so ``load``
+        can rebuild the exact network offline from the checkpoint alone.
+        """
+
+    @abc.abstractmethod
+    def _build_lightning_module(
+        self,
+        network: nn.Module,
+        parameter_loss: ParameterLoss,
+        training_config: TrainingConfig,
+    ) -> "pl.LightningModule":
+        """The family's training-time LightningModule wrapping ``network``.
+
+        Import the module class lazily inside the method body so the eval path
+        stays free of training dependencies (D-FRAMEWORK).
+        """
+
+    def fit(
+        self,
+        train_dataset: "RenderedCorpusDataset",
+        validation_dataset: Optional["RenderedCorpusDataset"] = None,
+        config: Optional[Dict[str, object]] = None,
+    ) -> None:
+        """The shared training skeleton: hooks -> trainer -> best checkpoint -> register."""
+        # Lazy: the training-only Lightning stack (D-FRAMEWORK) stays off the eval path.
+        import lightning.pytorch as pl
+
+        from models.training.data_module import CorpusDataModule
+        from models.training.trainer_factory import build_trainer
+
+        training_config = TrainingConfig.from_dict(config)
+        pl.seed_everything(training_config.seed, workers=True)
+
+        parameter_space = train_dataset.parameter_space
+        architecture_hparams = self._build_architecture_hparams(train_dataset, parameter_space)
+        network = self._build_network(architecture_hparams)
+        parameter_loss = ParameterLoss(parameter_space, training_config.loss)
+        lightning_module = self._build_lightning_module(network, parameter_loss, training_config)
+        data_module = CorpusDataModule(
+            train_dataset, validation_dataset, training_config.data, seed=training_config.seed
+        )
+
+        will_validate = data_module.will_validate
+        monitor = "val_loss" if will_validate else "train_loss"
+        trainer = build_trainer(
+            training_config,
+            default_root_dir=self._default_root_dir,
+            monitor=monitor,
+            run_validation=will_validate,
+        )
+
+        run_metadata = {
+            "architecture": type(self).__name__,
+            "dataset": train_dataset.corpus_dir.name,
+        }
+        for logger in trainer.loggers:
+            logger.log_hyperparams({**run_metadata, **training_config.to_dict()})
+        trainer.fit(lightning_module, datamodule=data_module)
+
+        # Load the best checkpoint's weights, then register the trained network.
+        best_path = trainer.checkpoint_callback.best_model_path
+        if best_path:
+            network.load_state_dict(network_state_dict_from_lightning_checkpoint(best_path))
+        self._set_trained_network(network, architecture_hparams, parameter_space)
 
     def _set_trained_network(
         self,

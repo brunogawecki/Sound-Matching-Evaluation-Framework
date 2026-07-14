@@ -6,21 +6,17 @@ be exercised on CPU with no GPU and no VST, standing in for a real deep family.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-import lightning.pytorch as pl
 import torch
 import torch.nn.functional as F
 from torch import nn
 
 from dataset.torch_dataset import RenderedCorpusDataset
 from models.base_deep_model import BaseDeepModel
-from models.training.checkpoint import network_state_dict_from_lightning_checkpoint
 from models.training.config import TrainingConfig
-from models.training.data_module import CorpusDataModule
-from models.training.lightning_module import LightningRegressor
 from models.training.loss import ParameterLoss
-from models.training.trainer_factory import build_trainer
+from synth.parameter_space import ParameterSpace
 
 
 class TinyNetwork(nn.Module):
@@ -38,12 +34,14 @@ class TinyNetwork(nn.Module):
 
 
 class TinyDeepModel(BaseDeepModel):
-    """A minimal :class:`BaseDeepModel` family wiring the harness components."""
+    """A minimal :class:`BaseDeepModel` family wiring the harness components.
+
+    ``fit`` is the inherited template; only the three ``_build_*`` hooks are supplied.
+    """
 
     def __init__(self, num_features: int = 8, default_root_dir: str = "lightning_logs") -> None:
-        super().__init__()
+        super().__init__(default_root_dir=default_root_dir)
         self._num_features = num_features
-        self._default_root_dir = default_root_dir
 
     def _build_network(self, architecture_hparams: Dict[str, Any]) -> nn.Module:
         return TinyNetwork(
@@ -51,39 +49,17 @@ class TinyDeepModel(BaseDeepModel):
             num_features=architecture_hparams["num_features"],
         )
 
-    def fit(
-        self,
-        train_dataset: RenderedCorpusDataset,
-        validation_dataset: Optional[RenderedCorpusDataset] = None,
-        config: Optional[Dict[str, object]] = None,
-    ) -> None:
-        training_config = TrainingConfig.from_dict(config)
-        pl.seed_everything(training_config.seed, workers=True)
-
-        parameter_space = train_dataset.parameter_space
-        architecture_hparams = {
+    def _build_architecture_hparams(
+        self, train_dataset: RenderedCorpusDataset, parameter_space: ParameterSpace
+    ) -> Dict[str, Any]:
+        return {
             "ml_dimension": parameter_space.ml_dimension,
             "num_features": self._num_features,
         }
-        network = self._build_network(architecture_hparams)
-        parameter_loss = ParameterLoss(parameter_space, training_config.loss)
-        lightning_regressor = LightningRegressor(network, parameter_loss, training_config.optimizer)
-        data_module = CorpusDataModule(
-            train_dataset, validation_dataset, training_config.data, seed=training_config.seed
-        )
 
-        will_validate = data_module.will_validate
-        monitor = "val_loss" if will_validate else "train_loss"
-        trainer = build_trainer(
-            training_config,
-            default_root_dir=self._default_root_dir,
-            monitor=monitor,
-            run_validation=will_validate,
-        )
-        trainer.fit(lightning_regressor, datamodule=data_module)
+    def _build_lightning_module(
+        self, network: nn.Module, parameter_loss: ParameterLoss, training_config: TrainingConfig
+    ):
+        from models.training.lightning_module import LightningRegressor
 
-        # Export step: load the best .ckpt's network weights, then register the network.
-        best_path = trainer.checkpoint_callback.best_model_path
-        if best_path:
-            network.load_state_dict(network_state_dict_from_lightning_checkpoint(best_path))
-        self._set_trained_network(network, architecture_hparams, parameter_space)
+        return LightningRegressor(network, parameter_loss, training_config.optimizer)

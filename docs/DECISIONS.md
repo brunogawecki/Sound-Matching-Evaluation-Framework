@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-06-11 (grilling session with Claude Code).
+Last updated: 2026-07-09 (D-MELNORM — preset-gen-vae mel-dB corpus-stat normalization).
 
 ---
 
@@ -833,6 +833,50 @@ train corpus keeps the source's render process.
 useful post-render split cannot be a pure file copy — it has to re-render the held-out half. Doing that
 for only the test fraction keeps the operation cheap while producing a contract-correct test corpus,
 which is the whole point of holding data out.
+
+---
+
+### D-MELNORM — preset-gen-vae mel-dB front-end normalizes from corpus stats (LOCKED 2026-07-09)
+
+**Decision**: the preset-gen-vae port's mel-dB spectrogram front-end (`models/presetgen_vae/network.py`)
+min-max normalizes to [−1, 1] using the **actual min/max dB measured over the train corpus**, not a
+hardcoded dB range. The two endpoints are computed in one pass at the start of the family's `fit()`
+and folded into the checkpoint's `architecture_hparams` (exactly like `num_audio_samples` /
+`sample_rate`), so `load()` rebuilds the identical normalization offline with no corpus and no VST
+(D-SELFDESC-aligned). The dB **floor** stays a fixed constant (−120 dB); only the normalization
+endpoints are corpus-derived.
+
+**Why**: from Stage 2 on, the normalized spectrogram is also the decoder's **reconstruction target**.
+Real Dexed mel-dB values occupy only part of a fixed [−120, 0] dB range (nothing reaches 0 dBFS), so
+normalizing against fixed endpoints squashes the target into a sub-interval of [−1, 1] and wastes the
+decoder's `Hardtanh` output range, weakening the reconstruction gradient. Corpus-derived endpoints
+make the target fill [−1, 1]. This is the framework-native form of the paper's cached-spectrogram-stats
+step (`utils/audio.py` + `data/abstractbasedataset.py` compute `spec_stats['min'/'max']` over the
+training set and cache them to a JSON sidecar); deriving-at-fit and folding into hparams reuses the
+existing corpus→hparams→checkpoint pattern instead of a separate cached file.
+
+**Alternatives considered**:
+
+- *Fixed [−120, 0] dB* (the Stage-1 placeholder, comment: "Stage 2 may swap in corpus stats") —
+  rejected: squashed target, poorly-scaled reconstruction.
+- *Full paper-faithful front-end* (corpus stats **plus** window-energy normalization ÷`rfft(hann).max()`,
+  a linear-domain floor, dropping the upper clamp, non-periodic Hann, constant padding) — rejected.
+  Every element beyond the corpus stats is either **absorbed** by the normalization (the window factor
+  is a constant dB offset the corpus min/max cancel), **practically identical** (floor method),
+  **dead code** once the endpoints are real (the upper clamp never fires below 0 dBFS), or **sub-percent**
+  (periodic-vs-not window, reflect-vs-constant pad, at the signal edges only). It is more churn to the
+  shared front-end for no change in what the network sees. Since the thesis reproduces the paper's
+  *method*, not its *numbers* (different renderer / corpus / 103-vs-144 param space / categorical scheme
+  already guarantee non-matching numbers — see D1, D-METRIC-SR), byte-faithfulness buys nothing here.
+
+**Consequences**: `PresetGenVAENetwork` keeps `spectrogram_min_db` / `spectrogram_max_db`
+as constructor args (the fixed floor stays the default lower value), but `PresetGenVAEMLPRegressor.fit()`
+overwrites the normalization endpoints with the measured corpus values before building the network and
+recording hparams. The −120 dB floor and the minor front-end details (eps-in-log floor, upper clamp,
+periodic Hann, reflect pad) are unchanged and explicitly **not** pursued.
+
+(An earlier Stage-1 no-VAE regressor shared this same corpus-stat wiring for input parity; it was
+removed as out of scope, so the endpoints are now measured for the one VAE family only.)
 
 ---
 

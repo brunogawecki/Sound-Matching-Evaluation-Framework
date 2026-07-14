@@ -16,6 +16,32 @@ from models.training.config import OptimizerConfig
 from models.training.loss import ParameterLoss
 
 
+def build_optimizers(network: nn.Module, config: OptimizerConfig) -> Dict[str, Any]:
+    """The optimizer (+ optional cosine scheduler) dict Lightning expects. Shared by every
+    training module so the recipe lives in one place."""
+    if config.name.lower() == "adamw":
+        optimizer: torch.optim.Optimizer = torch.optim.AdamW(
+            network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+        )
+    elif config.name.lower() == "adam":
+        optimizer = torch.optim.Adam(
+            network.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer '{config.name}' (use 'adamw' or 'adam').")
+
+    if config.scheduler is None:
+        return {"optimizer": optimizer}
+    if config.scheduler.lower() == "cosine":
+        if not config.scheduler_max_epochs:
+            raise ValueError("scheduler='cosine' requires optimizer.scheduler_max_epochs.")
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=config.scheduler_max_epochs
+        )
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
+    raise ValueError(f"Unsupported scheduler '{config.scheduler}' (use 'cosine' or null).")
+
+
 class LightningRegressor(pl.LightningModule):
     """Wraps a network + :class:`ParameterLoss` into a trainable module.
 
@@ -51,41 +77,26 @@ class LightningRegressor(pl.LightningModule):
         audio, targets = batch
         predictions = self.network(audio)
         losses = self.parameter_loss(predictions, targets)
-        batch_size = audio.shape[0]
         # Epoch aggregates: {stage}_loss is what ModelCheckpoint/EarlyStopping monitor.
-        log = dict(on_step=False, on_epoch=True, batch_size=batch_size)
+        log = dict(on_step=False, on_epoch=True, batch_size=audio.shape[0])
         self.log(f"{stage}_loss", losses["loss"], prog_bar=True, **log)
-        self.log(f"{stage}_continuous_loss", losses["continuous_loss"], **log)
-        self.log(f"{stage}_categorical_loss", losses["categorical_loss"], **log)
-        if self.parameter_loss.has_categorical:
-            accuracy = self.parameter_loss.categorical_accuracy(predictions, targets)
-            self.log(f"{stage}_categorical_accuracy", accuracy, **log)
+        self._log_parameter_losses(predictions, targets, losses, stage, log)
         return losses["loss"]
 
-    def configure_optimizers(self) -> Dict[str, Any]:
-        config = self._optimizer_config
-        if config.name.lower() == "adamw":
-            optimizer: torch.optim.Optimizer = torch.optim.AdamW(
-                self.network.parameters(),
-                lr=config.learning_rate,
-                weight_decay=config.weight_decay,
-            )
-        elif config.name.lower() == "adam":
-            optimizer = torch.optim.Adam(
-                self.network.parameters(),
-                lr=config.learning_rate,
-                weight_decay=config.weight_decay,
-            )
-        else:
-            raise ValueError(f"Unsupported optimizer '{config.name}' (use 'adamw' or 'adam').")
+    def _log_parameter_losses(
+        self,
+        predictions: torch.Tensor,
+        targets: torch.Tensor,
+        losses: Dict[str, torch.Tensor],
+        stage: str,
+        log_kwargs: Dict[str, Any],
+    ) -> None:
+        """Log the :class:`ParameterLoss` components (shared with subclasses)."""
+        self.log(f"{stage}_continuous_loss", losses["continuous_loss"], **log_kwargs)
+        self.log(f"{stage}_categorical_loss", losses["categorical_loss"], **log_kwargs)
+        if self.parameter_loss.has_categorical:
+            accuracy = self.parameter_loss.categorical_accuracy(predictions, targets)
+            self.log(f"{stage}_categorical_accuracy", accuracy, **log_kwargs)
 
-        if config.scheduler is None:
-            return {"optimizer": optimizer}
-        if config.scheduler.lower() == "cosine":
-            if not config.scheduler_max_epochs:
-                raise ValueError("scheduler='cosine' requires optimizer.scheduler_max_epochs.")
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=config.scheduler_max_epochs
-            )
-            return {"optimizer": optimizer, "lr_scheduler": scheduler}
-        raise ValueError(f"Unsupported scheduler '{config.scheduler}' (use 'cosine' or null).")
+    def configure_optimizers(self) -> Dict[str, Any]:
+        return build_optimizers(self.network, self._optimizer_config)

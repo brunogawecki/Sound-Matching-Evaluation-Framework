@@ -13,16 +13,16 @@ imported lazily in ``fit`` so the eval path (load/predict) needs no training dep
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
 from torch import nn
 
 from dataset.torch_dataset import RenderedCorpusDataset
 from models.base_deep_model import BaseDeepModel
-from models.training.checkpoint import network_state_dict_from_lightning_checkpoint
 from models.training.config import TrainingConfig
 from models.training.loss import ParameterLoss
+from synth.parameter_space import ParameterSpace
 
 # Fixed architecture constants: LeakyReLU slope and the log-power floor.
 _NEGATIVE_SLOPE = 0.01
@@ -121,9 +121,10 @@ class Sound2SynthSpectrogramNetwork(nn.Module):
 class Sound2SynthSpectrogramRegressor(BaseDeepModel):
     """The :class:`BaseDeepModel` family wrapping :class:`Sound2SynthSpectrogramNetwork`.
 
-    Only ``_build_network`` and ``fit`` are family-specific (save/load/predict are inherited).
-    The spectrogram + architecture knobs flow into ``architecture_hparams`` at ``fit`` time so
-    ``load`` can rebuild the exact network before restoring weights (no VST, no Lightning).
+    Only the ``_build_*`` hooks are family-specific (``fit``/save/load/predict are
+    inherited). The spectrogram + architecture knobs flow into ``architecture_hparams``
+    at ``fit`` time so ``load`` can rebuild the exact network before restoring weights
+    (no VST, no Lightning).
     """
 
     def __init__(
@@ -135,13 +136,12 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
         dropout: float = 0.3,
         default_root_dir: str = "lightning_logs",
     ) -> None:
-        super().__init__()
+        super().__init__(default_root_dir=default_root_dir)
         self._n_fft = n_fft
         self._hop_length = hop_length
         self._win_length = win_length
         self._head_hidden_dim = head_hidden_dim
         self._dropout = dropout
-        self._default_root_dir = default_root_dir
 
     def _build_network(self, architecture_hparams: Dict[str, Any]) -> nn.Module:
         return Sound2SynthSpectrogramNetwork(
@@ -153,24 +153,10 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
             dropout=architecture_hparams["dropout"],
         )
 
-    def fit(
-        self,
-        train_dataset: RenderedCorpusDataset,
-        validation_dataset: Optional[RenderedCorpusDataset] = None,
-        config: Optional[Dict[str, object]] = None,
-    ) -> None:
-        # Lazy: the training-only Lightning stack (D-FRAMEWORK) stays off the eval path.
-        import lightning.pytorch as pl
-
-        from models.training.data_module import CorpusDataModule
-        from models.training.lightning_module import LightningRegressor
-        from models.training.trainer_factory import build_trainer
-
-        training_config = TrainingConfig.from_dict(config)
-        pl.seed_everything(training_config.seed, workers=True)
-
-        parameter_space = train_dataset.parameter_space
-        architecture_hparams = {
+    def _build_architecture_hparams(
+        self, train_dataset: RenderedCorpusDataset, parameter_space: ParameterSpace
+    ) -> Dict[str, Any]:
+        return {
             "ml_dimension": parameter_space.ml_dimension,
             "n_fft": self._n_fft,
             "hop_length": self._hop_length,
@@ -178,32 +164,11 @@ class Sound2SynthSpectrogramRegressor(BaseDeepModel):
             "head_hidden_dim": self._head_hidden_dim,
             "dropout": self._dropout,
         }
-        network = self._build_network(architecture_hparams)
-        parameter_loss = ParameterLoss(parameter_space, training_config.loss)
-        lightning_regressor = LightningRegressor(network, parameter_loss, training_config.optimizer)
-        data_module = CorpusDataModule(
-            train_dataset, validation_dataset, training_config.data, seed=training_config.seed
-        )
 
-        will_validate = data_module.will_validate
-        monitor = "val_loss" if will_validate else "train_loss"
-        trainer = build_trainer(
-            training_config,
-            default_root_dir=self._default_root_dir,
-            monitor=monitor,
-            run_validation=will_validate,
-        )
+    def _build_lightning_module(
+        self, network: nn.Module, parameter_loss: ParameterLoss, training_config: TrainingConfig
+    ):
+        # Lazy: the training-only Lightning stack (D-FRAMEWORK) stays off the eval path.
+        from models.training.lightning_module import LightningRegressor
 
-        run_metadata = {
-            "architecture": type(self).__name__,
-            "dataset": train_dataset.corpus_dir.name,
-        }
-        for logger in trainer.loggers:
-            logger.log_hyperparams({**run_metadata, **training_config.to_dict()})
-        trainer.fit(lightning_regressor, datamodule=data_module)
-
-        # Load the best checkpoint's weights, then register the trained network.
-        best_path = trainer.checkpoint_callback.best_model_path
-        if best_path:
-            network.load_state_dict(network_state_dict_from_lightning_checkpoint(best_path))
-        self._set_trained_network(network, architecture_hparams, parameter_space)
+        return LightningRegressor(network, parameter_loss, training_config.optimizer)
