@@ -146,6 +146,33 @@ def test_mismatched_parameter_space_raises(tmp_path):
         RenderedCorpusDataset(corpus_dir, wrong_space)
 
 
+def test_load_reads_expected_length_from_the_render_contract(tmp_path):
+    corpus_dir = build_corpus(tmp_path, count=2)
+    dataset = RenderedCorpusDataset.load(corpus_dir)
+    assert dataset.expected_num_samples == EXPECTED_SAMPLES
+
+
+def test_truncated_wav_raises_a_clear_error(tmp_path):
+    """A short WAV (an interrupted corpus transfer) must name itself, not die in collate."""
+    corpus_dir = build_corpus(tmp_path, count=4)
+    dataset = RenderedCorpusDataset.load(corpus_dir)
+    audio_path = corpus_dir / dataset.metadata.iloc[2]["audio_path"]
+    _, audio = wavfile.read(audio_path)
+    wavfile.write(str(audio_path), SAMPLE_RATE, audio[: EXPECTED_SAMPLES // 2])
+
+    with pytest.raises(ValueError, match="sample_000002.wav"):
+        dataset[2]
+
+
+def test_injected_dataset_without_an_expected_length_does_not_check(tmp_path):
+    """__init__ without the contract keeps its old behavior: read the WAV as-is."""
+    corpus_dir = build_corpus(tmp_path, count=2)
+    dataset = RenderedCorpusDataset(corpus_dir, make_space())
+    assert dataset.expected_num_samples is None
+    audio, _ = dataset[0]
+    assert audio.shape == (EXPECTED_SAMPLES,)
+
+
 # -- batching ----------------------------------------------------------------
 
 def test_default_collate_batches_cleanly(tmp_path):

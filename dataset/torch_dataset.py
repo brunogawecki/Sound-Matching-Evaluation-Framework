@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -35,6 +35,15 @@ from scipy.io import wavfile
 from torch.utils.data import Dataset
 
 from synth.parameter_space import ParameterSpace
+
+
+def _expected_num_samples(summary: dict) -> Optional[int]:
+    """The corpus's audio length from its render contract, or None if it predates them."""
+    sample_rate = summary.get("sample_rate")
+    duration_sec = (summary.get("render_settings") or {}).get("duration_sec")
+    if sample_rate is None or duration_sec is None:
+        return None
+    return round(float(duration_sec) * int(sample_rate))
 
 
 class RenderedCorpusDataset(Dataset):
@@ -48,15 +57,23 @@ class RenderedCorpusDataset(Dataset):
 
     Target-only consumers (e.g. the mean-parameter baseline, #7) use the
     :attr:`targets` matrix and never touch the audio.
+
+    Args (cont.):
+        expected_num_samples: the render contract's audio length. When set, every WAV
+            read is checked against it, so a corrupt (e.g. half-transferred) file fails
+            immediately and by name. :meth:`load` fills this in from the corpus's own
+            ``run_summary.json``; ``None`` disables the check.
     """
 
     def __init__(
         self,
         corpus_dir: Union[str, Path],
         parameter_space: ParameterSpace,
+        expected_num_samples: Optional[int] = None,
     ):
         self.corpus_dir = Path(corpus_dir)
         self.parameter_space = parameter_space
+        self.expected_num_samples = expected_num_samples
         self.metadata = pd.read_csv(self.corpus_dir / "metadata.csv")
 
         parameter_names = parameter_space.names
@@ -98,7 +115,7 @@ class RenderedCorpusDataset(Dataset):
                 "corpus with the current DatasetBuilder so it carries its parameter map."
             )
         parameter_space = ParameterSpace.from_dict(summary["parameter_space"])
-        return cls(corpus_dir, parameter_space)
+        return cls(corpus_dir, parameter_space, _expected_num_samples(summary))
 
     def __len__(self) -> int:
         return len(self.metadata)
@@ -111,7 +128,16 @@ class RenderedCorpusDataset(Dataset):
     def _read_audio(self, index: int) -> torch.Tensor:
         """Lazily read one sample's WAV as a ``float32`` mono tensor ``[num_samples]``."""
         relative_path = self.metadata.iloc[index]["audio_path"]
-        _, audio = wavfile.read(self.corpus_dir / relative_path)
+        audio_path = self.corpus_dir / relative_path
+        _, audio = wavfile.read(audio_path)
+        if self.expected_num_samples is not None and audio.shape[0] != self.expected_num_samples:
+            # Short of the render contract means the file is damaged, not a different
+            # setting -- silently padding it would train the model on corrupt audio.
+            raise ValueError(
+                f"{audio_path} holds {audio.shape[0]} samples, but this corpus's render "
+                f"contract is {self.expected_num_samples}. The WAV is corrupt (a truncated "
+                "copy is the usual cause). Re-copy the corpus and retry."
+            )
         return torch.from_numpy(audio.astype(np.float32))
 
     # -- target-only access (for the mean-parameter baseline, #7) ------------
