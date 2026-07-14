@@ -91,6 +91,7 @@ def main() -> None:
         out_dir=args.out,
         save_audio=args.save_audio,
         save_audio_n=args.save_audio_n,
+        show_progress=True,
     )
     _print_table(result)
 

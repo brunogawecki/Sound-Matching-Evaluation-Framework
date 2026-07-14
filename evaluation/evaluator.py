@@ -39,6 +39,7 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import pandas as pd
 from scipy.io import wavfile
+from tqdm import tqdm
 
 import config
 from dataset.render_backends import FreshProcessRenderBackend, RenderSettings
@@ -104,6 +105,7 @@ class Evaluator:
         save_audio: bool = False,
         save_audio_n: int = 20,
         save_audio_seed: int = 0,
+        show_progress: bool = False,
     ) -> EvaluationResult:
         """Score ``model`` on the corpus and persist the result.
 
@@ -124,6 +126,8 @@ class Evaluator:
                 when ``save_audio`` is ``False``.
             save_audio_seed: seed for the random sample selection, so which samples get
                 saved is reproducible but not biased by corpus ordering.
+            show_progress: draw a tqdm bar over the (slow, one-fresh-process-per-sample)
+                scoring loop.
 
         Returns:
             The :class:`EvaluationResult`, whose two files are also written to disk.
@@ -136,7 +140,7 @@ class Evaluator:
         audio_sample_indices = (
             self._select_audio_sample_indices(save_audio_n, save_audio_seed) if save_audio else frozenset()
         )
-        per_sample_rows = self._score_all_samples(model, run_dir, audio_sample_indices)
+        per_sample_rows = self._score_all_samples(model, run_dir, audio_sample_indices, show_progress)
         per_sample_metrics = pd.DataFrame(per_sample_rows, columns=["sample_id"] + [spec.name for spec in METRIC_PANEL])
 
         per_sample_metrics_path = run_dir / "per_sample.csv"
@@ -162,13 +166,16 @@ class Evaluator:
 
     # -- per-sample scoring --------------------------------------------------
     def _score_all_samples(
-        self, model, run_dir: Path, audio_sample_indices: frozenset
+        self, model, run_dir: Path, audio_sample_indices: frozenset, show_progress: bool = False
     ) -> List[Dict[str, object]]:
         """Predict + re-render + run the panel for every corpus sample.
 
         The fresh-process backend is built here and always closed, even if a render
         or metric raises midway. Samples in ``audio_sample_indices`` also get their
         re-rendered prediction written to ``<run_dir>/audio/<sample_id>.wav``.
+
+        Pass ``show_progress=True`` to draw a tqdm bar over the loop. One tick is one
+        sample: predict, re-render in a fresh process, run the whole panel.
         """
         target_matrix = self._corpus.targets.numpy()
         backend = FreshProcessRenderBackend(self._render_settings, renderer=self._renderer)
@@ -177,7 +184,11 @@ class Evaluator:
             audio_dir.mkdir(parents=True, exist_ok=True)
         rows: List[Dict[str, object]] = []
         try:
-            for index in range(len(self._corpus)):
+            indices = tqdm(
+                range(len(self._corpus)), desc="Evaluating",
+                unit="sample", disable=not show_progress,
+            )
+            for index in indices:
                 target_audio, _ = self._corpus[index]
                 target_waveform = target_audio.numpy()
                 target_vector = target_matrix[index]

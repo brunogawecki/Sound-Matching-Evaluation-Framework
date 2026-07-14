@@ -202,6 +202,24 @@ def test_save_audio_n_caps_at_corpus_size(corpus, tmp_path):
     assert len(list(audio_dir.glob("*.wav"))) == 3
 
 
+# -- progress reporting -------------------------------------------------------
+
+def test_show_progress_draws_a_bar_over_the_samples(corpus, tmp_path, capsys):
+    model = _FakeModel({"AMP": 0.6, "CAT": 1.0})
+    Evaluator(corpus).evaluate(model, out_dir=tmp_path / "results", show_progress=True)
+
+    # tqdm writes to stderr, which the dashboard merges into the log tail it shows.
+    progress_output = capsys.readouterr().err
+    assert "Evaluating" in progress_output
+    assert "3/3" in progress_output
+
+
+def test_no_progress_bar_by_default(corpus, tmp_path, capsys):
+    model = _FakeModel({"AMP": 0.6, "CAT": 1.0})
+    Evaluator(corpus).evaluate(model, out_dir=tmp_path / "results")
+    assert "Evaluating" not in capsys.readouterr().err
+
+
 # -- NaN handling + aggregation ----------------------------------------------
 
 def test_nan_valid_counts_reflect_silent_sample(corpus, tmp_path):

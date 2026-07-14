@@ -10,7 +10,10 @@ Two entry points share one behaviour:
   separate lines and animate the log tail.
 
 Commands run with ``cwd=PROJECT_ROOT`` so the scripts resolve their imports and
-relative paths exactly as they do from a terminal.
+relative paths exactly as they do from a terminal, and with ``PYTHONUNBUFFERED=1``
+so the child's ``print``s are not block-buffered on the pipe. Without it a script's
+stdout would arrive in chunks after the ``tqdm`` bar it interleaves with (tqdm writes
+to the line-buffered stderr), scrambling the order the log tail shows.
 """
 import codecs
 import os
@@ -83,6 +86,7 @@ def run_streaming(argv: List[str], placeholder) -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=0,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
     assert process.stdout is not None
     file_descriptor = process.stdout.fileno()
