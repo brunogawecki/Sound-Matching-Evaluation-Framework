@@ -89,3 +89,50 @@ item below names the claim, the source CSV, and a suggested form + caption stub.
 *per-render speed reuse 3.4 ms / reload 30.8 ms (~9× slower) / pedalboard 18.2 ms;*
 *within-engine leakage p90/p95 ≈ 6.9 / 8.5 dB (DawDreamer) and 7.1 / 8.5 dB (Pedalboard);*
 *0/1056 cartridge voices near-silent vs ~13% of uniform-random subset draws.*
+
+---
+
+**Topic: the preset-gen-vae port — what the Implementation chapter should say.** The generative
+family is a port of Le Vaillant et al. (DAFx 2021), implemented in `models/presetgen_vae/` as two
+registered families (`PresetGenVAEMLPRegressor` / `PresetGenVAEFlowRegressor` — the paper's two
+reported models, differing only in the regressor head). The authoritative source for this section is
+`docs/PRESETGEN_VAE_PORT.md`: the architecture explanation, the piece-by-piece code↔paper
+counterpart table, and every documented deviation. Rationale lives in `DECISIONS.md` (D-MELNORM,
+D-FRAMEWORK, D-METRIC-SR, D-SELFDESC). The angles below are what the write-up should not miss.
+
+## 1. The parity-test verification method is itself thesis material
+
+"Is the reimplementation faithful?" is usually answered by assertion. Here it is answered by test:
+`tests/test_paper_parity.py` builds each network component from *both* codebases, transplants the
+paper's randomly-initialized weights into ours, and asserts numerically equal outputs on identical
+inputs (flows additionally checked on their log-determinants, in train and eval mode). Worth a
+paragraph in Implementation (or a methodology aside): it turns port fidelity from a claim into a
+reproducible result, and it delimits exactly which parts are proven equal vs. documented-different
+(the mel front-end is documented, not parity-tested — see `PRESETGEN_VAE_PORT.md` for why).
+
+## 2. The dead-code finding — why verification against the *executed* code path matters
+
+The paper's published `'speccnn8l1_bn'` architecture listing ends in a 1024-wide bottleneck, but
+that layer is dead code under the paper's own shipped config: the composed encoder actually runs a
+2048-wide 1×1 mixer. Our port initially copied the listing and was wrong in exactly the way a
+faithful-looking port can be; the review caught and fixed it (details and file/line references in
+`PRESETGEN_VAE_PORT.md`, "Deviations found in review"). Good discussion material: reproducing a
+paper means reproducing what its code *ran*, not what its code *lists*. A second, smaller instance:
+the paper's declared mel band edges (30–11000 Hz) are marked TODO in its code and never applied.
+
+## 3. Intentional deviations — we reproduce the method, not the numbers
+
+State up front that reproduced numbers will not match the paper's tables, by design: 103 Dexed
+parameters (D1) instead of 144; our own categorical scheme (close to NumCat, not NumCat++); a
+single train/test split, not 5-fold; dawdreamer rendering, not RenderMan; no useless-parameter
+masking in the controls loss. All listed with rationale in `PRESETGEN_VAE_PORT.md` (Caveats +
+Deviations). The benchmark needs all families on one common protocol; per-paper protocol quirks are
+deliberately normalized away.
+
+## 4. The front-end moved inside the network — a framework-driven design choice
+
+The paper precomputes mel-dB spectrograms offline with dataset-wide min-max stats. Our corpora
+store raw audio and must stay self-describing (D-SELFDESC), so the same STFT → mel → dB → min-max
+math runs inside the network, with the normalization endpoints measured from the training corpus at
+fit time (D-MELNORM) — the exact analogue of the paper's `spec_stats` pass. Nice illustration of
+how a standardized benchmark reshapes a per-paper pipeline without changing its math.

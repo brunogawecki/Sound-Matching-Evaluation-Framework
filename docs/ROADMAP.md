@@ -14,24 +14,23 @@ ordering*; `DECISIONS.md` owns the *why*; GitHub issues own the *do*.** Open dec
 
 ## Where we are
 
-Built and run end-to-end once: Layer 2 (data), the Layer 3 `BaseModel` interface + trivial
-`MeanParameterBaseline`, and Layer 4 (evaluation). Corpora exist on disk; the baseline is fitted and
-scored; Phase 2 / Phase 3 milestones are closed. The Phase 4 **training harness** (PyTorch Lightning,
-`models/training/`) is now built, and the **first real deep family** is implemented — a *basic*
-Sound2Synth spectrogram regressor (`models/sound2synth.py`, `BaseDeepModel`, issue #19/#31) that
-trains through the harness and predicts through the `ParameterSpace` contract.
+Built and run end-to-end: Layer 2 (data), Layer 3 (models + training), and Layer 4 (evaluation).
+**Phase 4 is complete** — the Lightning training harness (#28), cluster packaging (#20, D-CLUSTER),
+the preset-gen-vae training corpus (SQLite loader + `full_preset-gen-vae*` corpora), and the basic
+Sound2Synth regressor (#19/#31), with the exit criterion met: models train on the PUT cluster,
+checkpoints come down, and the Evaluator has scored **three deep families** on a held-out corpus
+(`results/dexed_builtin_test/`). Phase 5's **generative family is also done**: the preset-gen-vae
+port (#23/#35/#36) — full VAE with latent RealNVP flow, two registered families
+(`PresetGenVAEMLPRegressor` / `PresetGenVAEFlowRegressor`), parity-tested against the paper's code
+(`docs/PRESETGEN_VAE_PORT.md`). Full preset-gen-vae training runs are in flight on the cluster.
 
 What does **not** exist yet:
 
-- **No cluster packaging.** Training is meant to run on an external Linux GPU cluster with no VST
-  (D-SELFDESC), but nothing splits dependencies, submits jobs, or moves corpora up / checkpoints
-  down.
-- **No first real results row yet.** The Sound2Synth regressor exists and trains locally, but the
-  Phase 4 exit criterion — train on cluster → pull checkpoint → Evaluator scores a held-out split —
-  has not been run.
+- **No neural-proxy baseline** — and whether it is built at all is the open half of D-FAMILIES.
 - **No fuller Sound2Synth architecture.** The landed model is a single-spectrogram-branch first cut;
   the paper's multi-modal encoder + grouped-FC parameter classifier is still future work.
-- **No human test set, no benchmark table.**
+- **No final human test set (D4), no benchmark orchestration, no benchmark table** — Phase 6. The
+  existing results rows are pipeline shakedowns, not benchmark numbers.
 
 ## Sequencing — vertical slice first
 
@@ -46,7 +45,7 @@ than discovering them family-by-family. It mirrors D-ORDER one level down.
 |---|---|---|---|
 | **D-FRAMEWORK** — PyTorch Lightning vs. raw PyTorch loop | LOCKED (Lightning) | — (unblocked) | Locked 2026-06-30; conventions for the harness recorded in `DECISIONS.md`. |
 | **D-FAMILIES** — final model-family set | OPEN (stub) | Phase 5 | Discriminative + generative (primary) + neural-proxy (baseline); evolutionary dropped. |
-| **D4** — human test-set composition | OPEN | Phase 6 | Importer built; final split unblocked once Phase 4 lands. |
+| **D4** — human test-set composition | OPEN | Phase 6 | Importer built; Phase 4 has landed, so the final split is unblocked and awaits the user's call. |
 
 ## Phase 4 — Training foundation, proven by one real model
 
@@ -68,26 +67,26 @@ and scoring it through the existing Evaluator.
   `pull_checkpoint.sh`, README walkthrough) for the PUT SLURM cluster. No library changes — the
   harness was already SLURM-aware. See **D-CLUSTER** in `DECISIONS.md`.
 - **Training corpus from preset-gen-vae** — the human DX7 collection at
-  `paper_repos/preset-gen-vae/synth/dexed_presets.sqlite`. Note: that path is currently a **Git LFS
-  pointer** (the ~25.6 MB DB is not pulled), and the data is stored as **parameter vectors, not
-  `.syx`** — the `preset` table holds one `pickled_params_np_array` per voice plus a `param` table of
-  index→name. So this needs a **name-based adapter** (map preset-gen-vae's parameter *names* onto our
-  wrapper's plugin-reported names — never by index, per D-NAMING; preset-gen-vae used a different
-  Dexed build), projected onto the D1 subset and rendered via the existing `DatasetBuilder` /
-  `FreshProcessRenderBackend` (D-REPRO). Reuse the dedup + voice-disjoint split logic from
-  `dataset/dexed_preset_loader.py`.
+  `paper_repos/preset-gen-vae/synth/dexed_presets.sqlite` (~30k voices, stored as parameter vectors,
+  not `.syx`). **DONE** (#21): a name-based adapter (`dataset/dexed_sqlite_preset_loader.py`,
+  D-NAMING) + `scripts/build_presetgen_corpus.py`; the `full_preset-gen-vae` corpus and its
+  D-SPLIT train/test derivatives exist on disk.
 
-**Exit criterion:** train on cluster → pull checkpoint → Evaluator scores it on a held-out split →
-first real results row. (The final human test set is finalized in Phase 6.)
+**Exit criterion: MET.** Train on cluster → pull checkpoint → Evaluator scores a held-out split —
+run end-to-end for Sound2Synth and both preset-gen-vae families (`results/dexed_builtin_test/`).
+(The final human test set is finalized in Phase 6.)
 
 ## Phase 5 — Remaining model families
 
 On the proven foundation; gated by **D-FAMILIES**. Each family is its own later sub-project reusing
 the Phase 4 harness + packaging.
 
-- **Generative family** (e.g. VAE — preset-gen-vae lineage) — trains on cluster.
+- **Generative family** (VAE — preset-gen-vae lineage) — **DONE** (#23/#35/#36): the full paper
+  architecture (latent RealNVP flow included) as two registered families,
+  `PresetGenVAEMLPRegressor` / `PresetGenVAEFlowRegressor`; trains on cluster. Map and port
+  fidelity: `docs/PRESETGEN_VAE_PORT.md`.
 - **Neural-proxy baseline** (differentiable synth proxy) — trains on cluster; **baseline, not a
-  primary family.**
+  primary family.** Whether it is built at all is the open half of D-FAMILIES.
 
 *(Evolutionary search is dropped pending D-FAMILIES. If ever reinstated it runs its per-target search
 locally with the live VST — it does not fit the cluster training harness.)*

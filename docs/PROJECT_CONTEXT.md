@@ -1,5 +1,12 @@
 # Sound Matching Evaluation Framework — Project Context
 
+> **STATUS: historical snapshot (early project handoff) — largely superseded.** Kept for the
+> record; large parts no longer match the project (old thesis title, decisions listed as open that
+> are long locked, a six-family plan that was narrowed). Current sources of truth: decisions in
+> [`DECISIONS.md`](DECISIONS.md), module map and pipeline in [`ARCHITECTURE.md`](ARCHITECTURE.md),
+> glossary in [`CONTEXT.md`](CONTEXT.md), phased plan in [`ROADMAP.md`](ROADMAP.md). On any
+> conflict, those win.
+
 > **Audience**: This document is a handoff to Claude Code. It captures the thesis context, decisions made so far, the current state of the codebase, the target architecture, and the recommended next steps. Read this before touching any code.
 
 ---
