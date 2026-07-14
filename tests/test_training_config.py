@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -123,6 +124,22 @@ def test_build_trainer_attaches_csv_logger_only_by_default(tmp_path):
 
     trainer = build_trainer(TrainingConfig.from_dict({}), default_root_dir=tmp_path)
     assert _logger_class_names(trainer) == {"CSVLogger"}
+
+
+def test_build_trainer_csv_logger_does_not_nest_a_second_lightning_logs(tmp_path):
+    """The CSV logger writes straight under default_root_dir (name="").
+
+    Its default name would append another ``lightning_logs/`` inside the root,
+    which under a per-job root (``lightning_logs/<job id>/``) reads as
+    ``lightning_logs/<job id>/lightning_logs/version_0``.
+    """
+    pytest.importorskip("lightning")
+    from models.training.trainer_factory import build_trainer
+
+    trainer = build_trainer(TrainingConfig.from_dict({}), default_root_dir=tmp_path)
+    log_dir = Path(trainer.loggers[0].log_dir)
+    assert log_dir.parent == tmp_path
+    assert "lightning_logs" not in log_dir.relative_to(tmp_path).parts
 
 
 def test_build_trainer_adds_wandb_logger_when_enabled(tmp_path, monkeypatch):

@@ -68,12 +68,18 @@ def list_corpora() -> List[Corpus]:
 
 
 def list_checkpoints() -> List[Path]:
-    """Saved model checkpoints under ``checkpoints/`` (``*.json`` and ``*.ckpt``)."""
+    """Saved model checkpoints under ``checkpoints/``.
+
+    Covers both layouts: flat files (locally trained models, and pulls that fell
+    back to the pre-job-scoping path) and one level of nesting, which is where a
+    job-scoped pull puts them (``checkpoints/<job_id>/<model>.pt``).
+    """
     if not CHECKPOINTS_DIR.exists():
         return []
     found: List[Path] = []
-    for pattern in ("*.json", "*.ckpt", "*.pt"):
-        found.extend(CHECKPOINTS_DIR.glob(pattern))
+    for extension in ("json", "ckpt", "pt"):
+        found.extend(CHECKPOINTS_DIR.glob(f"*.{extension}"))
+        found.extend(CHECKPOINTS_DIR.glob(f"*/*.{extension}"))
     return sorted(found)
 
 
