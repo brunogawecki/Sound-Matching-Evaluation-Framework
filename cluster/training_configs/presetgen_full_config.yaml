@@ -1,8 +1,13 @@
 # Full training config for the preset-gen-vae families (PresetGenVAEMLPRegressor /
-# PresetGenVAEFlowRegressor, issues #23/#35). Hyperparameters carried over from the
-# paper's own config.py (paper_repos/preset-gen-vae) where models/training/ supports
-# them; the loss knobs (beta warmup, categorical weight, normalized losses) also match
-# the paper but are set explicitly here so the run's echoed config is self-contained.
+# PresetGenVAEFlowRegressor, issues #23/#35/#36) — the paper's two reported models.
+# Hyperparameters carried over from the paper's own config.py (paper_repos/preset-gen-vae)
+# where models/training/ supports them; the loss knobs (beta warmup, categorical weight,
+# normalized losses) also match the paper but are set explicitly here so the run's echoed
+# config is self-contained.
+#
+# Both families carry the paper's latent RealNVP flow, so `beta` scales the Monte-Carlo
+# latent loss (-(log p(zK) - log q(z0) + log|det J|)), not a closed-form KL. Same knobs,
+# same values, same role in the objective.
 #
 # Deviations from the paper, both documented in docs/PRESETGEN_VAE_PORT.md caveats:
 # - Scheduler: the paper uses ReduceLROnPlateau (factor 0.2, patience 6, cooldown 6)

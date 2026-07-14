@@ -6,11 +6,15 @@ feeds both the same input in eval mode, and asserts numerically identical
 outputs. Passing means the two implementations compute the same function --
 not merely that they look alike. See docs/PRESETGEN_VAE_PORT.md.
 
-The paper's encoder/decoder and ``LinearDynamicParam`` are dependency-free and
-always tested. Its flow, regression, and loss modules import ``nflows`` at
-module level (not a project dependency -- ``models/presetgen_vae/realnvp.py``
+The paper's encoder/decoder, ``LinearDynamicParam`` and ``utils/probability.py`` are
+dependency-free and always tested. Its flow, VAE, regression, and loss modules import
+``nflows`` at module level (not a project dependency -- ``models/presetgen_vae/realnvp.py``
 exists to avoid it), so those tests skip unless nflows is installed
 (``pip install nflows --no-deps``; dev-only, keep it out of requirements).
+
+Note the paper uses *two* RealNVPs, built from different nflows classes: ``CustomRealNVP``
+for the regressor head, and ``SimpleRealNVP`` for the latent flow. Both are covered here,
+which is what licenses the single ported ``RealNVP`` serving both roles.
 
 The mel-dB front-end is deliberately not parity-tested: the paper's offline
 STFT uses a symmetric Hann window, constant padding, and a window-gain
@@ -31,7 +35,12 @@ from models.presetgen_vae.network import (
     _center_crop_or_pad,
 )
 from models.presetgen_vae.realnvp import RealNVP
-from models.training.loss import gaussian_kl_divergence
+from models.training.loss import (
+    flow_latent_loss,
+    gaussian_kl_divergence,
+    gaussian_log_probability,
+    standard_gaussian_log_probability,
+)
 
 # Appended (not prepended) so the paper's config.py cannot shadow ours. The paper's
 # package names (model, data, utils, logs) don't exist in this repo, so they resolve
@@ -42,6 +51,7 @@ if str(_PAPER_ROOT) not in sys.path:
 
 from model import decoder as paper_decoder_module  # noqa: E402
 from model import encoder as paper_encoder_module  # noqa: E402
+from utils import probability as paper_probability_module  # noqa: E402
 from utils.hparams import LinearDynamicParam  # noqa: E402
 
 # The paper's fixed geometry: 257-mel / 347-frame spectrograms (its decoder asserts
@@ -90,13 +100,20 @@ def our_network() -> PresetGenVAENetwork:
 
 
 def test_encoder_matches_paper(our_network: PresetGenVAENetwork) -> None:
-    """Our enc1..enc8 + mu/logvar MLP == the paper's composed SpectrogramEncoder."""
+    """Our enc1..enc8 + mu/logvar MLP == the paper's composed SpectrogramEncoder.
+
+    ``output_bn`` is the paper's ``lat_in_regularization`` batch-norm on the flat mu/logvar
+    vector, which its shipped config switches on whenever a latent flow is used
+    (``latent_flow_input_regularization = 'bn'``). Our network has a latent flow by default,
+    so it carries that batch-norm too.
+    """
     torch.manual_seed(1)
     paper_encoder = paper_encoder_module.SpectrogramEncoder(
         "speccnn8l1_bn",
         dim_z=256,
         input_tensor_size=(2, 1, *_SPECTROGRAM_SIZE),
         fc_dropout=0.3,
+        output_bn=True,  # the shipped config's setting, given a latent flow
         deepest_features_mix=False,  # the shipped config's setting
     )
     transplant_parameters(
@@ -253,4 +270,126 @@ def test_kl_divergence_matches_paper() -> None:
     for normalize in (True, False):
         ours = gaussian_kl_divergence(mu, logvar, normalize=normalize)
         paper = GaussianDkl(normalize=normalize)(mu, logvar)
+        assert torch.allclose(ours, paper, atol=1e-6)
+
+
+# -- latent flow (the paper's FlowVAE) ---------------------------------------------
+# The paper builds its *latent* flow from nflows' SimpleRealNVP, not the CustomRealNVP its
+# regressor head uses. These tests are what proves the two are the same network under the
+# paper's own settings, so one ported RealNVP can serve both roles.
+
+
+def build_paper_latent_flow(features: int, hidden_features: int, coupling_layers: int):
+    """The paper's latent flow, built exactly as ``VAE.FlowVAE.__init__`` builds it."""
+    from nflows.flows.realnvp import SimpleRealNVP
+
+    flow = SimpleRealNVP(
+        features=features,
+        hidden_features=hidden_features,
+        num_layers=coupling_layers,
+        num_blocks_per_layer=2,
+        batch_norm_within_layers=True,
+        batch_norm_between_layers=False,  # "True would prevent reversibility during train"
+    )
+    return flow._transform  # the paper drops the base distribution and keeps the transform
+
+
+def build_our_latent_flow(features: int, hidden_features: int, coupling_layers: int) -> RealNVP:
+    """Our latent flow, configured the way :class:`PresetGenVAENetwork` configures it."""
+    return RealNVP(
+        features=features,
+        hidden_features=hidden_features,
+        coupling_layers=coupling_layers,
+        dropout=0.0,
+        batch_norm_between_layers=False,
+        batch_norm_within_layers=True,
+    )
+
+
+def test_latent_flow_matches_paper() -> None:
+    """Our latent RealNVP == the paper's SimpleRealNVP transform, outputs and log-dets."""
+    pytest.importorskip("nflows")
+
+    torch.manual_seed(7)
+    paper_flow = build_paper_latent_flow(20, 32, 6)
+    our_flow = build_our_latent_flow(20, 32, 6)
+    transplant_parameters([paper_flow], our_flow)
+    our_flow.eval()
+    paper_flow.eval()
+
+    inputs = torch.randn(8, 20)
+    with torch.no_grad():
+        paper_outputs, paper_log_determinant = paper_flow(inputs)
+        our_outputs, our_log_determinant = our_flow.forward_with_log_determinant(inputs)
+    assert torch.allclose(our_outputs, paper_outputs, atol=1e-6)
+    assert torch.allclose(our_log_determinant, paper_log_determinant, atol=1e-6)
+
+
+def test_latent_flow_train_mode_matches_paper() -> None:
+    """Train-mode parity for the latent flow (the conditioners' batch-norm uses batch stats)."""
+    pytest.importorskip("nflows")
+
+    torch.manual_seed(8)
+    paper_flow = build_paper_latent_flow(20, 32, 6)
+    our_flow = build_our_latent_flow(20, 32, 6)
+    transplant_parameters([paper_flow], our_flow)
+    our_flow.train()
+    paper_flow.train()
+
+    inputs = torch.randn(16, 20)
+    paper_outputs, paper_log_determinant = paper_flow(inputs)
+    our_outputs, our_log_determinant = our_flow.forward_with_log_determinant(inputs)
+    assert torch.allclose(our_outputs, paper_outputs, atol=1e-5)
+    assert torch.allclose(our_log_determinant, paper_log_determinant, atol=1e-5)
+
+
+def test_gaussian_log_probabilities_match_paper() -> None:
+    """Our two log-densities == the paper's utils/probability.py (no nflows needed)."""
+    torch.manual_seed(9)
+    samples = torch.randn(8, 16)
+    mu = torch.randn(8, 16)
+    logvar = torch.randn(8, 16)
+    assert torch.allclose(
+        standard_gaussian_log_probability(samples),
+        paper_probability_module.standard_gaussian_log_probability(samples),
+        atol=1e-6,
+    )
+    assert torch.allclose(
+        gaussian_log_probability(samples, mu, logvar),
+        paper_probability_module.gaussian_log_probability(samples, mu, logvar),
+        atol=1e-6,
+    )
+
+
+def test_flow_latent_loss_matches_paper() -> None:
+    """flow_latent_loss == the paper's FlowVAE.latent_loss, both normalizations.
+
+    ``latent_loss`` only reads the tensors it is handed, so the FlowVAE is built with stand-in
+    encoder/decoder modules and its own flow is never exercised here (the flow itself is
+    covered by ``test_latent_flow_matches_paper``).
+    """
+    pytest.importorskip("nflows")  # model/VAE.py imports nflows at module level
+    from model import VAE as paper_vae_module
+
+    torch.manual_seed(10)
+    latent_dimension = 16
+    mu = torch.randn(8, latent_dimension)
+    logvar = torch.randn(8, latent_dimension)
+    latent_sample = torch.randn(8, latent_dimension)
+    transformed_latent_sample = torch.randn(8, latent_dimension)
+    log_abs_determinant = torch.randn(8)
+    # The paper packs mu and logvar into one [batch, 2, dim_z] tensor.
+    paper_mu_logvar = torch.stack([mu, logvar], dim=1)
+
+    for normalize in (True, False):
+        paper_flow_vae = paper_vae_module.FlowVAE(
+            nn.Identity(), latent_dimension, nn.Identity(), normalize, "realnvp_2l16"
+        )
+        ours = flow_latent_loss(
+            mu, logvar, latent_sample, transformed_latent_sample, log_abs_determinant,
+            normalize=normalize,
+        )
+        paper = paper_flow_vae.latent_loss(
+            paper_mu_logvar, latent_sample, transformed_latent_sample, log_abs_determinant
+        )
         assert torch.allclose(ours, paper, atol=1e-6)

@@ -1,9 +1,13 @@
-"""LightningModule that trains a Gaussian-latent VAE regressor (Stage 2).
+"""LightningModule that trains the preset-gen-vae VAE regressor.
 
-Objective: ``reconstruction_MSE + beta * KL(q(z|x) || N(0, I)) + controls_loss``. ``beta`` is
-warmed up linearly (preset-gen-vae's ``LinearDynamicParam``); the controls term reuses
-:class:`ParameterLoss` unchanged. Extends :class:`LightningRegressor` -- only the loss step
-differs; step routing, optimizers, and the ``ParameterLoss`` logging are inherited.
+Objective: ``reconstruction_MSE + beta * latent_loss + controls_loss``. ``beta`` is warmed up
+linearly (preset-gen-vae's ``LinearDynamicParam``) and scales the latent term either way, as
+the paper's ``train.py`` does; the controls term reuses :class:`ParameterLoss` unchanged.
+Extends :class:`LightningRegressor` -- only the loss step differs; step routing, optimizers,
+and the ``ParameterLoss`` logging are inherited.
+
+The latent term follows the network: the Monte-Carlo estimate when it has a latent flow (the
+paper's ``FlowVAE``, and both models it reports), the closed-form KL when it does not.
 """
 from __future__ import annotations
 
@@ -13,9 +17,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from models.presetgen_vae.network import VAENetworkOutput
 from models.training.config import LossConfig, OptimizerConfig
 from models.training.lightning_module import LightningRegressor
-from models.training.loss import ParameterLoss, gaussian_kl_divergence
+from models.training.loss import ParameterLoss, flow_latent_loss, gaussian_kl_divergence
 
 
 def linear_warmup(
@@ -66,23 +71,36 @@ class LightningVAERegressor(LightningRegressor):
             self.current_epoch, self._beta_start_value, self._beta, self._beta_warmup_epochs
         )
 
+    def _latent_loss(self, output: VAENetworkOutput) -> torch.Tensor:
+        """The latent regularization term, chosen by whether the network has a latent flow."""
+        if output.log_abs_determinant is None:
+            return gaussian_kl_divergence(
+                output.mu, output.logvar, normalize=self._normalize_latent_loss
+            )
+        return flow_latent_loss(
+            output.mu,
+            output.logvar,
+            output.latent_sample,
+            output.transformed_latent_sample,
+            output.log_abs_determinant,
+            normalize=self._normalize_latent_loss,
+        )
+
     def _shared_step(self, batch: List[torch.Tensor], stage: str) -> torch.Tensor:
         audio, targets = batch
         output = self.network.forward_training(audio)
         reconstruction_loss = F.mse_loss(
             output.reconstruction, output.target_spectrogram, reduction="mean"
         )
-        kl_loss = gaussian_kl_divergence(
-            output.mu, output.logvar, normalize=self._normalize_latent_loss
-        )
+        latent_loss = self._latent_loss(output)
         controls = self.parameter_loss(output.prediction, targets)
         beta = self._current_beta(stage)
-        total = reconstruction_loss + beta * kl_loss + controls["loss"]
+        total = reconstruction_loss + beta * latent_loss + controls["loss"]
 
         log = dict(on_step=False, on_epoch=True, batch_size=audio.shape[0])
         self.log(f"{stage}_loss", total, prog_bar=True, **log)
         self.log(f"{stage}_reconstruction_loss", reconstruction_loss, prog_bar=True, **log)
-        self.log(f"{stage}_kl_loss", kl_loss, **log)
+        self.log(f"{stage}_latent_loss", latent_loss, **log)
         self.log(f"{stage}_controls_loss", controls["loss"], **log)
         self._log_parameter_losses(output.prediction, targets, controls, stage, log)
         if stage == "train":

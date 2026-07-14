@@ -41,6 +41,8 @@ TINY_KWARGS = dict(
     mel_fmax=4000.0,
     latent_dimension=16,
     encoder_dropout=0.0,
+    latent_flow_layers=2,
+    latent_flow_hidden_features=16,
     regressor_hidden_layers=2,
     regressor_hidden_width=16,
     regressor_dropout=0.0,
@@ -100,10 +102,61 @@ def test_autoencoder_forward_training_returns_all_terms_with_correct_shapes():
     assert output.prediction.shape == (2, ml_dimension)
     assert output.mu.shape == (2, latent_dimension)
     assert output.logvar.shape == (2, latent_dimension)
+    assert output.latent_sample.shape == (2, latent_dimension)
+    assert output.transformed_latent_sample.shape == (2, latent_dimension)
     # The decoder reconstructs exactly the encoder's input spectrogram (its training target).
     assert output.reconstruction.shape == output.target_spectrogram.shape
     assert output.reconstruction.shape[1] == 1  # single spectrogram channel
     assert output.reconstruction.shape[2] == TINY_KWARGS["n_mels"]
+
+
+# -- latent flow (the paper's FlowVAE, issue #36) -----------------------------------
+
+
+def test_latent_flow_is_on_by_default_and_yields_a_log_determinant():
+    network = PresetGenVAENetwork(ml_dimension=9, **TINY_KWARGS)
+    assert network.latent_flow is not None
+    output = network.forward_training(torch.randn(4, NUM_AUDIO_SAMPLES))
+    # Per-sample log|det J|, the Monte-Carlo latent loss's third term.
+    assert output.log_abs_determinant.shape == (4,)
+    assert torch.all(torch.isfinite(output.log_abs_determinant))
+    # z0 -> zK is a real transform, not the identity.
+    assert not torch.allclose(output.latent_sample, output.transformed_latent_sample)
+
+
+def test_encoder_mlp_carries_the_latent_flow_input_batch_norm():
+    # The paper's 'lat_in_regularization': z0 has no KL pulling it to zero once a flow is used.
+    network = PresetGenVAENetwork(ml_dimension=9, **TINY_KWARGS)
+    batch_norms = [m for m in network.encoder_mlp if isinstance(m, torch.nn.BatchNorm1d)]
+    assert len(batch_norms) == 1
+    assert batch_norms[0].num_features == 2 * TINY_KWARGS["latent_dimension"]
+
+
+def test_latent_flow_can_be_disabled_back_to_the_closed_form_path():
+    kwargs = dict(TINY_KWARGS, latent_flow_layers=0)
+    network = PresetGenVAENetwork(ml_dimension=9, **kwargs)
+    assert network.latent_flow is None
+    # No batch-norm on the encoder output either: without a flow, the KL regularizes z0.
+    assert not any(isinstance(m, torch.nn.BatchNorm1d) for m in network.encoder_mlp)
+    output = network.forward_training(torch.randn(4, NUM_AUDIO_SAMPLES))
+    # None is the signal to the training step to use the closed-form KL.
+    assert output.log_abs_determinant is None
+    assert torch.allclose(output.latent_sample, output.transformed_latent_sample)
+
+
+def test_decoder_and_regressor_both_consume_the_transformed_latent():
+    network = PresetGenVAENetwork(ml_dimension=9, **TINY_KWARGS)
+    network.eval()
+    audio = torch.randn(2, NUM_AUDIO_SAMPLES)
+    output = network.forward_training(audio)
+    # Feeding zK by hand must reproduce both heads exactly (they are not fed z0).
+    with torch.no_grad():
+        assert torch.allclose(
+            network.regressor(output.transformed_latent_sample), output.prediction, atol=1e-6
+        )
+        assert torch.allclose(
+            network._decode(output.transformed_latent_sample), output.reconstruction, atol=1e-6
+        )
 
 
 def test_autoencoder_reconstruction_is_bounded_to_normalized_range():
@@ -163,8 +216,9 @@ def test_unknown_regressor_architecture_raises():
 
 
 # -- end-to-end family (fit -> save -> load -> predict) ----------------------------
-# The family constructor takes only architecture knobs; ml_dimension, num_audio_samples
-# and sample_rate come from the corpus at fit time. mel_fmax stays <= sample_rate / 2.
+# The family constructor takes only architecture knobs; ml_dimension, num_audio_samples,
+# sample_rate and latent_dimension come from the corpus at fit time. mel_fmax stays
+# <= sample_rate / 2.
 FAMILY_TINY_KWARGS = dict(
     n_fft=256,
     hop_length=128,
@@ -172,8 +226,9 @@ FAMILY_TINY_KWARGS = dict(
     n_mels=32,
     mel_fmin=0.0,
     mel_fmax=4000.0,
-    latent_dimension=16,
     encoder_dropout=0.0,
+    latent_flow_layers=2,
+    latent_flow_hidden_features=16,
     regressor_hidden_layers=2,
     regressor_hidden_width=16,
     regressor_dropout=0.0,
@@ -298,6 +353,11 @@ def test_vae_fit_save_load_predict_end_to_end(tmp_path):
     model = PresetGenVAEMLPRegressor(default_root_dir=str(log_dir), **FAMILY_TINY_KWARGS)
     model.fit(train_dataset, config=training_config())
 
+    # Table 1 pins the MLP model's latent to the flow model's, so the comparison of the two
+    # heads is not confounded by latent size.
+    space = train_dataset.parameter_space
+    assert model._architecture_hparams["latent_dimension"] == space.ml_dimension
+
     checkpoint_path = tmp_path / "presetgen_vae_mlp.pt"
     model.save(checkpoint_path)
     assert checkpoint_path.exists()
@@ -309,25 +369,13 @@ def test_vae_fit_save_load_predict_end_to_end(tmp_path):
     audio, _ = train_dataset[0]
     prediction = reloaded.predict(audio)
 
-    space = train_dataset.parameter_space
     assert set(prediction) == set(space.names)
     assert prediction["CAT"] in (0.0, 0.5, 1.0)
     assert 0.0 <= prediction["AMP"] <= 1.0
 
 
-# The flow family takes no latent_dimension knob (pinned to ml_dimension at fit time).
-FLOW_FAMILY_TINY_KWARGS = dict(
-    n_fft=256,
-    hop_length=128,
-    win_length=256,
-    n_mels=32,
-    mel_fmin=0.0,
-    mel_fmax=4000.0,
-    encoder_dropout=0.0,
-    regressor_hidden_layers=2,
-    regressor_hidden_width=16,
-    regressor_dropout=0.0,
-)
+# Same knobs: the two families differ only in the regressor head.
+FLOW_FAMILY_TINY_KWARGS = dict(FAMILY_TINY_KWARGS)
 
 
 def test_flow_fit_save_load_predict_end_to_end(tmp_path):

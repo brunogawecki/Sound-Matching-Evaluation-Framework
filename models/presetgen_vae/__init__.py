@@ -1,16 +1,17 @@
 """preset-gen-vae port (Le Vaillant et al., DAFx 2021; paper_repos/preset-gen-vae).
 
-A staged reimplementation of the paper's ``FlVAE2`` model as ``BaseDeepModel``
-families that predict this framework's D1 parameter space through ``ParameterSpace``
-(not the paper's 144-param / ``all<=32`` scheme), so they stay comparable to the other
-model families and train through the existing harness and ``ParameterLoss``.
-The stage map lives in ``docs/PRESETGEN_VAE_PORT.md``.
+A reimplementation of the two models the paper reports -- its Table 1 "MLP" and "Flow"
+rows, both the architecture of its Figure 1 -- as ``BaseDeepModel`` families that predict
+this framework's D1 parameter space through ``ParameterSpace`` (not the paper's 144-param /
+``all<=32`` scheme), so they stay comparable to the other model families and train through
+the existing harness and ``ParameterLoss``. The map lives in ``docs/PRESETGEN_VAE_PORT.md``.
 
 One paper, one package, one file per role:
 
-- ``network.py`` -- the mel-dB front-end and the paper's ``speccnn8l1_bn`` VAE
-  (:class:`PresetGenVAENetwork`), plus the D-MELNORM corpus measurement.
-- ``realnvp.py`` -- the paper's ``CustomRealNVP`` flow, ported as plain torch.
+- ``network.py`` -- the mel-dB front-end and the paper's ``speccnn8l1_bn`` VAE with its
+  latent RealNVP flow (:class:`PresetGenVAENetwork`), plus the D-MELNORM corpus measurement.
+- ``realnvp.py`` -- the paper's RealNVP flow, ported as plain torch. Used twice: on the
+  latent (z0 -> zK) and, for one family, as the regressor head.
 - ``families.py`` -- the benchmark wrappers: :class:`PresetGenVAEMLPRegressor` and
   :class:`PresetGenVAEFlowRegressor` (the paper's MLP-vs-Flow regression comparison).
 - ``lightning_module.py`` -- the training-only VAE loss recipe

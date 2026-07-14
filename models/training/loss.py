@@ -7,6 +7,7 @@ combine as ``continuous + categorical_loss_weight * categorical``.
 """
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Tuple
 
 import torch
@@ -130,9 +131,53 @@ def gaussian_kl_divergence(
     summed over the latent dimension and averaged over the batch. ``normalize`` also divides
     by the latent dimension so the term stays comparable to a mean-reduced reconstruction MSE.
     ``mu``/``logvar`` are ``[batch, latent_dimension]``.
+
+    Used only when a VAE has **no** latent flow; with one, see :func:`flow_latent_loss`.
     """
     per_sample = 0.5 * torch.sum(torch.exp(logvar) + mu.square() - logvar - 1.0, dim=1)
     divergence = per_sample.mean()
     if normalize:
         divergence = divergence / mu.shape[1]
     return divergence
+
+
+_LOG_2_PI = math.log(2.0 * math.pi)
+
+
+def standard_gaussian_log_probability(samples: torch.Tensor) -> torch.Tensor:
+    """Per-sample log-density under ``N(0, I)``. Ports preset-gen-vae's ``utils/probability.py``."""
+    return -0.5 * (samples.shape[1] * _LOG_2_PI + torch.sum(samples.square(), dim=1))
+
+
+def gaussian_log_probability(
+    samples: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor
+) -> torch.Tensor:
+    """Per-sample log-density under a diagonal Gaussian. Ports ``utils/probability.py``."""
+    return -0.5 * (
+        samples.shape[1] * _LOG_2_PI
+        + torch.sum(logvar + (samples - mu).square() / torch.exp(logvar), dim=1)
+    )
+
+
+def flow_latent_loss(
+    mu: torch.Tensor,
+    logvar: torch.Tensor,
+    latent_sample: torch.Tensor,
+    transformed_latent_sample: torch.Tensor,
+    log_abs_determinant: torch.Tensor,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Monte-Carlo latent term for a VAE with a latent normalizing flow (z0 -> zK).
+
+    Ports preset-gen-vae's ``FlowVAE.latent_loss``. With a flow, ``q(zK|x)`` has no closed
+    form, so the KL is replaced by a one-sample estimate of the negated ELBO latent terms:
+    ``-(log p(zK) - log q(z0) + log|det J|)``, averaged over the batch. ``normalize`` also
+    divides by the latent dimension, matching :func:`gaussian_kl_divergence`.
+    """
+    log_probability_prior = standard_gaussian_log_probability(transformed_latent_sample)
+    log_probability_posterior = gaussian_log_probability(latent_sample, mu, logvar)
+    per_sample = log_probability_prior - log_probability_posterior + log_abs_determinant
+    latent_loss = -per_sample.mean()
+    if normalize:
+        latent_loss = latent_loss / latent_sample.shape[1]
+    return latent_loss

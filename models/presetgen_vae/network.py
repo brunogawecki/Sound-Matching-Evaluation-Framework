@@ -1,12 +1,16 @@
-"""The paper's ``BasicVAE`` network: mel-dB front-end + ``speccnn8l1_bn`` VAE + regressor head.
+"""The paper's ``FlowVAE`` network: mel-dB front-end + ``speccnn8l1_bn`` VAE + regressor head.
 
 The mel-dB front-end and the paper's ``speccnn8l1_bn`` spectrogram encoder emit
-``mu``/``logvar``; a reparameterized sample feeds both the mirror-image ``speccnn8l1_bn``
-spectrogram decoder (reconstruction) and the regressor head (controls). The regression
-gradient flows into the encoder (joint training), exactly as the paper trains the VAE and
-regressor together. The head is either the paper's MLP (``3l1024``) or its RealNVP flow
-used feed-forward (``realnvp_6l300``, issue #35). The latent RealNVP flow completing
-``FlVAE2`` is issue #36.
+``mu``/``logvar``; a reparameterized sample ``z0`` is pushed through the **latent RealNVP
+flow** to ``zK``, which feeds both the mirror-image ``speccnn8l1_bn`` spectrogram decoder
+(reconstruction) and the regressor head (controls). The regression gradient flows into the
+encoder (joint training), exactly as the paper trains the VAE and regressor together.
+
+This is the architecture of the paper's Figure 1, i.e. both models it reports: the head is
+either its MLP (``3l1024``, the "MLP" rows of Table 1) or its RealNVP flow used feed-forward
+(``realnvp_6l300``, the "Flow" rows). Setting ``latent_flow_layers=0`` drops the latent flow
+back to the paper's plain-Gaussian ``BasicVAE`` code path -- a free ablation, but not a model
+the paper reports, so no family registers it.
 
 The head emits **raw** outputs (continuous floats + categorical logits), matching the
 ``ParameterSpace`` / ``ParameterLoss`` contract -- the paper's ``PresetActivation``
@@ -16,7 +20,7 @@ does. ``ParameterLoss`` applies softmax/cross-entropy to categorical blocks itse
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -222,11 +226,15 @@ def _build_regressor(
 
 @dataclass(frozen=True)
 class VAENetworkOutput:
-    """Everything the Stage 2 training loss needs from one ``forward_training`` pass.
+    """Everything the training loss needs from one ``forward_training`` pass.
 
-    ``prediction`` and ``reconstruction`` both come from the same reparameterized latent
-    sample; ``target_spectrogram`` is the mel-dB input the decoder is trained to reconstruct;
-    ``mu``/``logvar`` parameterize the approximate posterior for the KL term.
+    ``prediction`` and ``reconstruction`` both come from ``transformed_latent_sample`` (zK);
+    ``target_spectrogram`` is the mel-dB input the decoder is trained to reconstruct;
+    ``mu``/``logvar`` parameterize the approximate posterior.
+
+    ``log_abs_determinant`` is the latent flow's per-sample log|det J|, and is ``None`` when
+    the latent flow is disabled -- which is how the training step picks its latent term: the
+    Monte-Carlo estimate when a flow is present, the closed-form KL when it is not.
     """
 
     prediction: torch.Tensor  # [batch, ml_dimension] raw floats + categorical logits
@@ -234,24 +242,34 @@ class VAENetworkOutput:
     target_spectrogram: torch.Tensor  # [batch, 1, n_mels, frames] in [-1, 1]
     mu: torch.Tensor  # [batch, latent_dimension]
     logvar: torch.Tensor  # [batch, latent_dimension]
+    latent_sample: torch.Tensor  # z0: [batch, latent_dimension]
+    transformed_latent_sample: torch.Tensor  # zK: [batch, latent_dimension]
+    log_abs_determinant: Optional[torch.Tensor] = None  # [batch], None without a latent flow
 
 
 class PresetGenVAENetwork(nn.Module):
-    """Stage 2: the paper's ``BasicVAE`` -- a Gaussian-latent spectrogram autoencoder with a
-    regressor head, predicting the ML-side vector ``[batch, ml_dimension]``.
+    """The paper's ``FlowVAE`` -- a spectrogram autoencoder with a normalizing flow on its
+    latent and a regressor head, predicting the ML-side vector ``[batch, ml_dimension]``.
 
     The paper's ``speccnn8l1_bn`` encoder feeds an MLP emitting ``2 * latent_dimension``
     values (``mu`` and ``logvar``; ``latent_dimension`` is the paper's ``dim_z``). A
-    reparameterized sample ``z`` feeds both the
-    mirror-image ``speccnn8l1_bn`` decoder -- reconstructing the normalized mel-dB spectrogram --
-    and the regressor head. The head is ``regressor_architecture``: the paper's MLP, or its
-    RealNVP flow used feed-forward -- an invertible map, so ``latent_dimension`` must then equal
-    ``ml_dimension`` (the paper's build-time assert). For the flow,
-    ``regressor_hidden_layers`` / ``regressor_hidden_width`` mean coupling layers / hidden
-    features (the paper's ``6l300``). ``forward`` returns the regressor prediction only (from the posterior
-    mean, deterministic in eval), so the inherited ``BaseDeepModel.predict`` path is unchanged and
-    the decoder is skipped at inference. ``forward_training`` additionally runs the decoder and
-    returns the reconstruction, its target, and ``mu``/``logvar`` for the reconstruction + KL loss.
+    reparameterized sample ``z0`` is pushed through the latent RealNVP flow to ``zK``, which
+    feeds both the mirror-image ``speccnn8l1_bn`` decoder -- reconstructing the normalized
+    mel-dB spectrogram -- and the regressor head.
+
+    The head is ``regressor_architecture``: the paper's MLP, or its RealNVP flow used
+    feed-forward -- an invertible map, so ``latent_dimension`` must then equal ``ml_dimension``
+    (the paper's build-time assert). For the flow, ``regressor_hidden_layers`` /
+    ``regressor_hidden_width`` mean coupling layers / hidden features (the paper's ``6l300``).
+
+    ``latent_flow_layers`` / ``latent_flow_hidden_features`` size the latent flow (the paper's
+    ``realnvp_6l300``); ``latent_flow_layers=0`` disables it, restoring the plain-Gaussian
+    ``BasicVAE`` path with a closed-form KL.
+
+    ``forward`` returns the regressor prediction only (from the posterior mean, deterministic in
+    eval), so the inherited ``BaseDeepModel.predict`` path is unchanged and the decoder is skipped
+    at inference. ``forward_training`` additionally runs the decoder and returns everything the
+    reconstruction + latent + controls loss needs.
     """
 
     def __init__(
@@ -269,6 +287,8 @@ class PresetGenVAENetwork(nn.Module):
         spectrogram_max_db: float = 0.0,
         latent_dimension: int = 256,
         encoder_dropout: float = 0.3,
+        latent_flow_layers: int = 6,
+        latent_flow_hidden_features: int = 300,
         regressor_architecture: str = "mlp",
         regressor_hidden_layers: int = 3,
         regressor_hidden_width: int = 1024,
@@ -298,15 +318,37 @@ class PresetGenVAENetwork(nn.Module):
         self._target_spectrogram_size = target_size  # (n_mels, frames)
         cnn_output_items = int(np.prod(cnn_output_shape))
 
-        # Encoder MLP now emits mu and logvar (2 * latent_dimension), reshaped to [batch, 2, latent_dimension].
+        # Encoder MLP emits mu and logvar (2 * latent_dimension), reshaped to [batch, 2, latent_dimension].
         self.encoder_mlp = nn.Sequential(
             nn.Dropout(encoder_dropout), nn.Linear(cnn_output_items, 2 * latent_dimension)
         )
+        if latent_flow_layers > 0:
+            # The paper's 'lat_in_regularization': with a latent flow, z0 is no longer pulled
+            # towards N(0, I) by a KL term, so batch-norm keeps the flow's input near zero.
+            self.encoder_mlp.add_module(
+                "lat_in_regularization", nn.BatchNorm1d(2 * latent_dimension)
+            )
         # Decoder MLP mirrors it: latent -> flattened deepest feature map (paper drops the ReLU here).
         self.decoder_mlp = nn.Sequential(
             nn.Linear(latent_dimension, cnn_output_items), nn.Dropout(encoder_dropout)
         )
         self.decoder_cnn = _build_decoder_cnn(unmixer_in_channels=cnn_output_shape[0])
+        # The paper's latent flow is nflows' SimpleRealNVP, not the CustomRealNVP its regressor
+        # uses. Under the paper's own settings -- no dropout, no batch-norm *between* couplings
+        # ("True would prevent reversibility during train") -- the two build an identical stack,
+        # so the ported RealNVP covers both roles.
+        self.latent_flow = (
+            RealNVP(
+                features=latent_dimension,
+                hidden_features=latent_flow_hidden_features,
+                coupling_layers=latent_flow_layers,
+                dropout=0.0,
+                batch_norm_between_layers=False,
+                batch_norm_within_layers=True,
+            )
+            if latent_flow_layers > 0
+            else None
+        )
         if regressor_architecture == "mlp":
             self.regressor: nn.Module = _build_regressor(
                 latent_dimension, ml_dimension, regressor_hidden_layers, regressor_hidden_width, regressor_dropout
@@ -358,28 +400,45 @@ class PresetGenVAENetwork(nn.Module):
             return mu + standard_deviation * torch.randn_like(standard_deviation)
         return mu
 
+    def _apply_latent_flow(
+        self, latent_sample: torch.Tensor
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """z0 -> zK and its log|det J|. The identity (and no log-det) when the flow is disabled."""
+        if self.latent_flow is None:
+            return latent_sample, None
+        return self.latent_flow.forward_with_log_determinant(latent_sample)
+
     def _decode(self, latent: torch.Tensor) -> torch.Tensor:
         mixed_features = self.decoder_mlp(latent).view(-1, *self._cnn_output_shape)
         reconstruction = self.decoder_cnn(mixed_features)
         return _center_crop_or_pad(reconstruction, *self._target_spectrogram_size)
 
     def forward(self, audio: torch.Tensor) -> torch.Tensor:
-        """Predict path: regress from the posterior mean (deterministic in eval); no decoder."""
+        """Predict path: regress from zK, with the posterior mean as z0 (deterministic in eval).
+        No decoder."""
         spectrogram = self._mel_db_spectrogram(audio)
         mu, _ = self._encode(spectrogram)
-        return self.regressor(mu)
+        transformed_latent_sample, _ = self._apply_latent_flow(mu)
+        return self.regressor(transformed_latent_sample)
 
     def forward_training(self, audio: torch.Tensor) -> VAENetworkOutput:
-        """Full VAE pass for the training loss: prediction + reconstruction + latent params."""
+        """Full VAE pass for the training loss: prediction + reconstruction + latent terms.
+
+        Both the decoder and the regressor consume zK, as the paper's ``FlowVAE`` does.
+        """
         spectrogram = self._mel_db_spectrogram(audio)
         mu, logvar = self._encode(spectrogram)
-        latent = self._reparameterize(mu, logvar)
+        latent_sample = self._reparameterize(mu, logvar)
+        transformed_latent_sample, log_abs_determinant = self._apply_latent_flow(latent_sample)
         return VAENetworkOutput(
-            prediction=self.regressor(latent),
-            reconstruction=self._decode(latent),
+            prediction=self.regressor(transformed_latent_sample),
+            reconstruction=self._decode(transformed_latent_sample),
             target_spectrogram=spectrogram,
             mu=mu,
             logvar=logvar,
+            latent_sample=latent_sample,
+            transformed_latent_sample=transformed_latent_sample,
+            log_abs_determinant=log_abs_determinant,
         )
 
 
