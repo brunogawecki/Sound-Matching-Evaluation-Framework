@@ -147,7 +147,9 @@ if st.button("Push corpus"):
 
 model_name = st.selectbox("Model", list(MODEL_CHOICES))
 
-config_choice = st.selectbox("Training config", ("full", "presetgen_full", "smoke", "custom"))
+config_choice = st.selectbox(
+    "Training config", (*discovery.list_training_config_names(), "custom")
+)
 if config_choice == "custom":
     config_arg = st.text_input(
         "Config path (relative to repo root)",
