@@ -152,6 +152,7 @@ MODEL_CHOICES = (
     "Sound2SynthSpectrogramRegressor",
     "PresetGenVAEMLPRegressor",
     "PresetGenVAEFlowRegressor",
+    "IS",
 )
 
 EVALUATE = ScriptSpec(

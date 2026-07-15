@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Dict, Type
 
 from models.base_model import BaseModel
+from models.inversynth2 import IS
 from models.mean_parameter_baseline import MeanParameterBaseline
 from models.presetgen_vae import PresetGenVAEFlowRegressor, PresetGenVAEMLPRegressor
 from models.sound2synth import Sound2SynthSpectrogramRegressor
@@ -48,4 +49,5 @@ MODEL_REGISTRY: Dict[str, ModelRegistration] = {
     "PresetGenVAEFlowRegressor": ModelRegistration(
         PresetGenVAEFlowRegressor, "presetgen_vae_flow.pt"
     ),
+    "IS": ModelRegistration(IS, "inversynth_is.pt"),
 }
