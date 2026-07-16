@@ -1,11 +1,16 @@
-# Full training config for the InverSynth II `IS` model (Stage 1 of the neural-proxy family).
-# Hyperparameters carried over from the paper's Section 3.2 (Barkan et al., ISMIR 2023;
-# paper_repos/InverSynth2) where models/training/ supports them. `IS` is the paper's
-# parameters-loss-only encoder (no synthesizer-proxy, no ITF); Stages 2-3 (IS2xITF / IS2)
-# add the proxy's audio loss (paper's lambda = 1) and inference-time finetuning.
+# Full training config for the InverSynth II neural-proxy family (Barkan et al., ISMIR 2023;
+# paper_repos/InverSynth2). Shared by both the `IS` (Stage 1) and `IS2xITF` (Stage 2) runs:
+# they use the same Section 3.2 hyperparameters, so one recipe serves both.
+#   - `IS`: the parameters-loss-only encoder (no synthesizer-proxy, no ITF).
+#   - `IS2xITF`: the `IS` encoder plus a training-only differentiable synthesizer-proxy, trained
+#     on the combined loss parameters_loss + lambda * audio_loss (Eq. 4). ("x" = excluding ITF.)
+# `audio_loss_weight` below is the paper's lambda for `IS2xITF`; `IS` ignores it (its plain
+# regressor never reads it), so the same file is correct for both.
 #
 # The paper's parameters loss is the equal average of cross-entropy (categorical params) and
 # L2 (numerical params), so categorical_loss_weight is 1.0 here, not the harness default 0.2.
+# The audio loss (IS2xITF only) is the MAE between the proxy's reconstructed spectrogram and the
+# mel-dB input; the paper weights it with lambda = 1.
 #
 # Deviations from the paper, dictated by what models/training/ supports:
 # - Adam betas: the paper uses (0.9, 0.99); OptimizerConfig exposes no betas knob, so this
@@ -14,8 +19,11 @@
 #   supports cosine only, so this uses cosine decay from 1e-4 over the 100 epochs as the
 #   stand-in (same treatment as full_config.yaml / presetgen_full_config.yaml).
 # - Validation: a single seeded 10% split (framework convention), not the paper's 5-fold CV.
-#   Checkpoint selection is on parameter val_loss (the cluster is VST-free, D-SELFDESC), a
-#   documented deviation from the paper's real-synth model selection (its Eq. 5).
+#   Checkpoint selection is on val_loss, a documented deviation from the paper's real-synth
+#   model selection (its Eq. 5) forced by the VST-free cluster (D-SELFDESC). What val_loss means
+#   differs by model: for `IS` it is the parameter loss; for `IS2xITF` it is the combined loss
+#   (parameters loss + lambda * proxy audio loss), the same objective minimized in training,
+#   measured through the training-only proxy.
 seed: 0
 
 optimizer:
@@ -28,6 +36,7 @@ optimizer:
 loss:
   continuous_loss: mse
   categorical_loss_weight: 1.0  # paper: equal average of CE (categorical) and L2 (numerical)
+  audio_loss_weight: 1.0        # paper: proxy audio-loss lambda = 1 (Eq. 4); IS2xITF only, IS ignores it
 
 data:
   batch_size: 64            # paper: batch size 64
