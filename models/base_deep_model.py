@@ -142,6 +142,18 @@ class BaseDeepModel(BaseModel):
         self._architecture_hparams = dict(architecture_hparams)
         self._parameter_space = parameter_space
 
+    # -- optional per-family checkpoint payload ------------------------------
+    def _extra_checkpoint_state(self) -> Optional[Dict[str, Any]]:
+        """Family-specific data to persist alongside the network (default: none).
+
+        Override to stash extra tensors/plain-data a family needs at ``load`` time
+        beyond the network weights -- e.g. ``IS2``'s cached ITF training pool.
+        """
+        return None
+
+    def _restore_extra_checkpoint_state(self, extra_state: Optional[Dict[str, Any]]) -> None:
+        """Restore whatever :meth:`_extra_checkpoint_state` wrote (default: no-op)."""
+
     # -- BaseModel contract --------------------------------------------------
     def save(self, path: Path) -> None:
         """Export the trained network + hparams + ParameterSpace (a torch artifact)."""
@@ -156,6 +168,7 @@ class BaseDeepModel(BaseModel):
             self._architecture_hparams,
             self._parameter_space,
             Path(path),
+            extra_state=self._extra_checkpoint_state(),
         )
 
     def load(self, path: Path) -> None:
@@ -168,6 +181,7 @@ class BaseDeepModel(BaseModel):
         self._network = network
         self._architecture_hparams = dict(architecture_hparams)
         self._parameter_space = ParameterSpace.from_dict(payload["parameter_space"])
+        self._restore_extra_checkpoint_state(payload.get("extra_state"))
 
     def predict(self, audio: torch.Tensor) -> Dict[str, float]:
         """Predict a synth-side dict for one waveform ``[num_samples]``.

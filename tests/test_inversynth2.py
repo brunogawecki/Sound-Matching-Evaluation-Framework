@@ -1,10 +1,12 @@
-"""Tests for the InverSynth II ``IS`` (Stage 1) and ``IS2xITF`` (Stage 2) models.
+"""Tests for the InverSynth II ``IS`` (Stage 1), ``IS2xITF`` (Stage 2) and ``IS2`` (Stage 3) models.
 
 Forward-shape and rebuild-determinism checks on the encoder network, an ``IS2Network``
 forward_training shape check (encoder + training-only proxy), and end-to-end
-fit -> save -> load -> predict smoke tests on a tiny synthetic corpus for both models
-(mirroring ``tests/test_sound2synth.py``). A small STFT + few mels keep the deep conv stack
-from collapsing the tiny spectrogram and the run fast on CPU. Skips cleanly when
+fit -> save -> load -> predict smoke tests on a tiny synthetic corpus for every model
+(mirroring ``tests/test_sound2synth.py``). ``IS2``'s inference-time finetuning is covered both
+in its default proxy-monitored form and with an injected real-synth render callback (the paper's
+``L_t^f``) faked with an in-test waveform so no VST is needed. A small STFT + few mels keep the
+deep conv stack from collapsing the tiny spectrogram and the run fast on CPU. Skips cleanly when
 ``torch``/``lightning``/``librosa`` are absent (training-only deps).
 """
 import os
@@ -24,7 +26,7 @@ pytest.importorskip("librosa")  # mel filterbank (front-end dependency)
 from dataset.builder import DatasetBuilder, RenderSettings
 from dataset.preset_sources import SyntheticPresetSource
 from dataset.torch_dataset import RenderedCorpusDataset
-from models.inversynth2 import IS, IS2Network, IS2xITF, InverSynthEncoderNetwork
+from models.inversynth2 import IS, IS2, IS2Network, IS2xITF, InverSynthEncoderNetwork
 from synth.parameter_space import ParameterSpace, ParameterSpecification
 
 SAMPLE_RATE = 16000
@@ -200,6 +202,131 @@ def test_fit_export_load_predict_end_to_end(tmp_path):
     assert set(prediction) == set(space.names)              # all parameters present
     assert prediction["CAT"] in (0.0, 0.5, 1.0)             # categorical snapped to a grid option
     assert 0.0 <= prediction["AMP"] <= 1.0                  # continuous clipped into bounds
+
+
+# -- Stage 3: IS2 (inference-time finetuning) --------------------------------
+
+# Tiny ITF settings so the per-sample finetuning loop stays fast on CPU.
+TINY_ITF_KWARGS = dict(itf_steps=2, itf_batch_size=4, itf_pool_size=8)
+
+
+def test_is2_fit_export_load_predict_end_to_end(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    log_dir = tmp_path / "logs"
+
+    model = IS2(default_root_dir=str(log_dir), proxy_dropout=0.0, **TINY_ITF_KWARGS, **TINY_KWARGS)
+    model.fit(train_dataset, config=training_config())
+
+    checkpoint_path = tmp_path / "inversynth_is2.pt"
+    model.save(checkpoint_path)
+
+    reloaded = IS2(proxy_dropout=0.0, **TINY_ITF_KWARGS, **TINY_KWARGS)
+    reloaded.load(checkpoint_path)
+
+    # The checkpoint carries the cached ITF training pool (L_B needs it offline).
+    assert reloaded._itf_pool_audio is not None
+    assert reloaded._itf_pool_audio.shape[0] == TINY_ITF_KWARGS["itf_pool_size"]
+
+    audio, _ = train_dataset[0]
+    prediction = reloaded.predict(audio)
+
+    space = train_dataset.parameter_space
+    assert set(prediction) == set(space.names)              # all parameters present
+    assert prediction["CAT"] in (0.0, 0.5, 1.0)             # categorical snapped to a grid option
+    assert 0.0 <= prediction["AMP"] <= 1.0                  # continuous clipped into bounds
+
+
+def test_is2_restores_encoder_weights_after_predict(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    model = IS2(default_root_dir=str(tmp_path / "logs"), proxy_dropout=0.0,
+                **TINY_ITF_KWARGS, **TINY_KWARGS)
+    model.fit(train_dataset, config=training_config())
+
+    encoder = model._network.encoder
+    before = {name: tensor.clone() for name, tensor in encoder.state_dict().items()}
+    model.predict(train_dataset[0][0])
+    after = encoder.state_dict()
+
+    # ITF is per-sample: theta* is restored, so the model is unchanged for the next call.
+    for name, tensor in before.items():
+        assert torch.equal(tensor, after[name])
+
+
+def test_is2_zero_steps_falls_back_to_plain_encoder(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    model = IS2(default_root_dir=str(tmp_path / "logs"), proxy_dropout=0.0,
+                itf_steps=0, itf_batch_size=4, itf_pool_size=8, **TINY_KWARGS)
+    model.fit(train_dataset, config=training_config())
+
+    audio, _ = train_dataset[0]
+    space = train_dataset.parameter_space
+    encoder = model._network.encoder
+    encoder.eval()
+    with torch.no_grad():
+        plain_vector = encoder(audio.unsqueeze(0)).squeeze(0).cpu().numpy()
+    plain_prediction = space.ml_vector_to_synth_dict(plain_vector)
+
+    # With no ITF alternations, predict keeps theta* -- the plain-encoder prediction.
+    assert model.predict(audio) == plain_prediction
+
+
+def test_is2_render_callback_is_used_and_receives_synth_dicts(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    model = IS2(default_root_dir=str(tmp_path / "logs"), proxy_dropout=0.0,
+                **TINY_ITF_KWARGS, **TINY_KWARGS)
+    model.fit(train_dataset, config=training_config())
+
+    audio, _ = train_dataset[0]
+    space = train_dataset.parameter_space
+    calls = []
+
+    def fake_render(predicted_dict):
+        calls.append(predicted_dict)
+        return audio.numpy()  # any waveform of the corpus length; contents don't matter here
+
+    model.set_itf_render_callback(fake_render)
+    prediction = model.predict(audio)
+
+    # The real-synth monitor scores theta* once, then once per ITF alternation.
+    assert len(calls) == TINY_ITF_KWARGS["itf_steps"] + 1
+    # Each render request is a full, valid synth-side dict (default params merged in by the caller).
+    for predicted_dict in calls:
+        assert set(predicted_dict) == set(space.names)
+        assert predicted_dict["CAT"] in (0.0, 0.5, 1.0)
+    assert set(prediction) == set(space.names)
+
+
+def test_is2_render_callback_governs_step_selection(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    model = IS2(default_root_dir=str(tmp_path / "logs"), proxy_dropout=0.0,
+                **TINY_ITF_KWARGS, **TINY_KWARGS)
+    model.fit(train_dataset, config=training_config())
+
+    audio, _ = train_dataset[0]
+    space = train_dataset.parameter_space
+    encoder = model._network.encoder
+    encoder.eval()
+    with torch.no_grad():
+        plain_vector = encoder(audio.unsqueeze(0)).squeeze(0).cpu().numpy()
+    plain_prediction = space.ml_vector_to_synth_dict(plain_vector)
+
+    # A monitor that renders the target itself scores a perfect MAE 0 at theta*, so no ITF
+    # alternation can beat it: selection falls back to theta* -- the plain-encoder prediction.
+    # Proves the injected render (not the proxy) drives step selection and fallback.
+    model.set_itf_render_callback(lambda predicted_dict: audio.numpy())
+    assert model.predict(audio) == plain_prediction
+
+
+def test_is2_load_rejects_checkpoint_without_itf_pool(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    # An IS2xITF checkpoint trains the same network but carries no ITF pool.
+    is2xitf = IS2xITF(default_root_dir=str(tmp_path / "logs"), proxy_dropout=0.0, **TINY_KWARGS)
+    is2xitf.fit(train_dataset, config=training_config())
+    checkpoint_path = tmp_path / "inversynth_is2xitf.pt"
+    is2xitf.save(checkpoint_path)
+
+    with pytest.raises(RuntimeError, match="ITF training pool"):
+        IS2(proxy_dropout=0.0, **TINY_KWARGS).load(checkpoint_path)
 
 
 def test_is2xitf_fit_export_load_predict_end_to_end(tmp_path):

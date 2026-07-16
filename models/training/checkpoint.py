@@ -8,7 +8,7 @@ no training data and no VST: the network ``state_dict``, the ``architecture_hpar
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union
 
 import torch
 from torch import nn
@@ -23,6 +23,7 @@ def export_checkpoint(
     architecture_hparams: Dict[str, Any],
     parameter_space: ParameterSpace,
     path: Union[str, Path],
+    extra_state: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write the network + hparams + ParameterSpace as one ``torch`` file.
 
@@ -33,6 +34,10 @@ def export_checkpoint(
             rebuild ``network``'s structure (must be JSON-safe / picklable plain data).
         parameter_space: the corpus's space, serialized for offline decoding.
         path: destination file (parent directories are created).
+        extra_state: optional family-specific payload (plain data / tensors) that
+            ``load`` hands back to the family. Additive and optional -- families that
+            do not use it write ``None`` and older checkpoints simply lack the key.
+            InverSynth II's ``IS2`` stores its cached ITF training pool here.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,6 +46,7 @@ def export_checkpoint(
         "state_dict": {key: value.cpu() for key, value in network.state_dict().items()},
         "architecture_hparams": dict(architecture_hparams),
         "parameter_space": parameter_space.to_dict(),
+        "extra_state": extra_state,
     }
     torch.save(payload, path)
 

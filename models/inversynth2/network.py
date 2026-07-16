@@ -147,17 +147,28 @@ class InverSynthEncoderNetwork(nn.Module):
         """The mel-dB spectrogram size ``(n_mels, frames)`` the proxy decoder reconstructs."""
         return self._target_spectrogram_size
 
-    def _mel_db_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
+    def mel_db_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
+        """The normalized mel-dB spectrogram the encoder featurizes ``audio`` into.
+
+        Public accessor for the param-free front-end. Stage 3 ITF computes the training
+        pool's spectrograms once with this and then re-runs only the CNN + head (which do
+        carry the fine-tuned weights) via :meth:`forward_from_spectrogram`.
+        """
         return _compute_mel_db_spectrogram(
             audio, self._window, self._mel_filterbank,
             self._n_fft, self._hop_length, self._win_length, self._min_db, self._max_db,
         )
 
+    def forward_from_spectrogram(self, spectrogram: torch.Tensor) -> torch.Tensor:
+        """Prediction from a precomputed mel-dB spectrogram (skips the STFT front-end)."""
+        features = self.encoder_cnn(spectrogram)
+        return self.head(torch.flatten(features, start_dim=1))
+
     def _infer_cnn_output_shape(
         self, num_audio_samples: int
     ) -> Tuple[Tuple[int, int, int], Tuple[int, int]]:
         with torch.no_grad():
-            dummy_spectrogram = self._mel_db_spectrogram(torch.zeros(1, num_audio_samples))
+            dummy_spectrogram = self.mel_db_spectrogram(torch.zeros(1, num_audio_samples))
             cnn_output = self.encoder_cnn(dummy_spectrogram)
         channels, height, width = cnn_output.shape[1:]
         target_size = (int(dummy_spectrogram.shape[-2]), int(dummy_spectrogram.shape[-1]))
@@ -169,10 +180,8 @@ class InverSynthEncoderNetwork(nn.Module):
         Stage 2's training step needs that input spectrogram as the proxy's reconstruction
         target, so it is returned here instead of being recomputed with a second STFT.
         """
-        spectrogram = self._mel_db_spectrogram(audio)
-        features = self.encoder_cnn(spectrogram)
-        flattened = torch.flatten(features, start_dim=1)
-        return self.head(flattened), spectrogram
+        spectrogram = self.mel_db_spectrogram(audio)
+        return self.forward_from_spectrogram(spectrogram), spectrogram
 
     def forward(self, audio: torch.Tensor) -> torch.Tensor:
         prediction, _ = self.forward_with_spectrogram(audio)

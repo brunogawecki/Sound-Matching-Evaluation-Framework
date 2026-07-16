@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -42,7 +43,11 @@ from scipy.io import wavfile
 from tqdm import tqdm
 
 import config
-from dataset.render_backends import FreshProcessRenderBackend, RenderSettings
+from dataset.render_backends import (
+    FreshProcessRenderBackend,
+    InProcessRenderBackend,
+    RenderSettings,
+)
 from dataset.torch_dataset import RenderedCorpusDataset
 from evaluation.registry import METRIC_PANEL
 
@@ -174,11 +179,19 @@ class Evaluator:
         or metric raises midway. Samples in ``audio_sample_indices`` also get their
         re-rendered prediction written to ``<run_dir>/audio/<sample_id>.wav``.
 
+        A model that exposes ``set_itf_render_callback`` (InverSynth II's ``IS2``) is
+        additionally handed a reused-process Dexed renderer built from *this* corpus's
+        render contract, so its inference-time finetuning can select steps against the
+        real synth (the paper's ``L_t^f``). That monitor renderer reuses one process for
+        speed; the scored re-render above stays fresh-process (D-REPRO). It is torn down
+        and unhooked in ``finally``.
+
         Pass ``show_progress=True`` to draw a tqdm bar over the loop. One tick is one
         sample: predict, re-render in a fresh process, run the whole panel.
         """
         target_matrix = self._corpus.targets.numpy()
         backend = FreshProcessRenderBackend(self._render_settings, renderer=self._renderer)
+        monitor_backend = self._attach_itf_monitor(model)
         audio_dir = run_dir / "audio"
         if audio_sample_indices:
             audio_dir.mkdir(parents=True, exist_ok=True)
@@ -218,7 +231,40 @@ class Evaluator:
                 rows.append(row)
         finally:
             backend.close()
+            if monitor_backend is not None:
+                model.set_itf_render_callback(None)
+                monitor_backend.close()
         return rows
+
+    def _attach_itf_monitor(self, model) -> Optional[InProcessRenderBackend]:
+        """Give an ITF model a reused-process real-synth renderer for step selection.
+
+        Returns the backend to close (and unhook) later, or ``None`` for models with no
+        ``set_itf_render_callback`` hook. The callback renders the estimated dict under
+        this corpus's render contract -- default params merged in exactly as the scored
+        re-render does -- so the monitor and the metric agree on the note/contract (D-EVAL).
+        """
+        if not hasattr(model, "set_itf_render_callback"):
+            return None
+        # Reused process (not fresh-per-render): the monitor is a selection heuristic, so
+        # Dexed's voice-state leak is acceptable here (unlike the scored render). Built at the
+        # corpus sample rate and renderer, never config.py's, to match the contract.
+        from synth.dexed import DexedWrapper, suppressed_stderr
+
+        with suppressed_stderr():
+            synth = DexedWrapper(
+                plugin_path=os.path.expanduser(config.DEXED_PATH),
+                sample_rate=self._sample_rate,
+                buffer_size=config.BUFFER_SIZE,
+                renderer=self._renderer,
+            )
+        monitor_backend = InProcessRenderBackend(synth, self._render_settings)
+        model.set_itf_render_callback(
+            lambda predicted_dict: monitor_backend.render(
+                {**self._default_params, **predicted_dict}
+            )
+        )
+        return monitor_backend
 
     # -- aggregation + summary -----------------------------------------------
     def _build_eval_summary(
