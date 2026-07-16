@@ -53,7 +53,8 @@ class LossConfig:
 
     ``categorical_loss_weight`` defaults to ``0.2`` (preset-gen-vae's
     ``categorical_loss_factor``). The ``beta*``/``reconstruction_loss``/``normalize_latent_loss``
-    fields are read only by VAE families; plain regressors ignore them.
+    fields are read only by VAE families; ``audio_loss_weight`` only by the InverSynth II proxy
+    families (``IS2xITF`` / ``IS2``); plain regressors ignore them all.
     """
     continuous_loss: str = "mse"  # "mse" | "mae"
     categorical_loss_weight: float = 0.2
@@ -62,6 +63,7 @@ class LossConfig:
     beta_start_value: float = 0.1
     beta_warmup_epochs: int = 25
     normalize_latent_loss: bool = True
+    audio_loss_weight: float = 1.0  # InverSynth II proxy audio loss weight (paper's lambda)
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "LossConfig":

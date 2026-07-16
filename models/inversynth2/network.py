@@ -1,4 +1,4 @@
-"""The InverSynth II encoder network (Stage 1: the ``IS`` model).
+"""The InverSynth II networks: the encoder (``IS``) and the encoder + synthesizer-proxy (``IS2``).
 
 Ports the strided-CNN encoder of ``paper_repos/InverSynth2/Python code/FM Synth/encdec.py``
 (``Encoder``) and drives the mixed continuous+categorical head through this framework's
@@ -8,8 +8,10 @@ which matches InverSynth II's DX7 spectrogram configuration almost exactly. Feat
 lives inside ``forward`` (D-REPR).
 
 ``InverSynthEncoderNetwork`` is the ``IS`` model: a spectrogram -> parameters regressor with
-no synthesizer-proxy. Stage 2 (``IS2xITF``) adds the proxy decoder and the audio loss; the
-proxy is a training-only component, so the encoder here stays the whole eval path.
+no synthesizer-proxy. :class:`InverSynthProxyNetwork` is the paper's differentiable neural
+synthesizer-proxy (Decoder), a training-only component; :class:`IS2Network` pairs the two for
+the ``IS2xITF`` / ``IS2`` stages. The proxy never touches evaluation -- ``IS2Network.forward``
+is the encoder alone, so ``BaseDeepModel.predict`` re-renders with the real Dexed unchanged.
 
 The reference hardcodes the flattened-feature width (``Linear(12288, ...)``) for the FM/TAL
 input size. That is fragile across render lengths, so this port probes the conv stack with a
@@ -17,6 +19,7 @@ dummy render-length input at build time and sizes the head's ``Linear`` from the
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Tuple
 
 import numpy as np
@@ -24,8 +27,15 @@ import torch
 from torch import nn
 
 # Reuse the preset-gen-vae mel-dB front-end (the deliberate cross-paper reuse the plan calls
-# for). These helpers are engine-agnostic and paper-independent.
-from models.presetgen_vae.network import _build_mel_filterbank, _compute_mel_db_spectrogram
+# for). These helpers are engine-agnostic and paper-independent. ``_build_decoder_cnn`` /
+# ``_center_crop_or_pad`` are that port's shape-robust mirror of this same CNN, so the Stage 2
+# proxy reuses them rather than re-porting the reference Decoder's hardcoded reshape dims.
+from models.presetgen_vae.network import (
+    _build_decoder_cnn,
+    _build_mel_filterbank,
+    _center_crop_or_pad,
+    _compute_mel_db_spectrogram,
+)
 
 # Fixed architecture constant, faithful to the reference encoder.
 _NEGATIVE_SLOPE = 0.1  # LeakyReLU slope used throughout InverSynth's CNN
@@ -114,14 +124,28 @@ class InverSynthEncoderNetwork(nn.Module):
         self.register_buffer("_mel_filterbank", mel_filterbank, persistent=False)
 
         self.encoder_cnn = _build_encoder_cnn()
-        # Probe the flattened feature width from a dummy render-length input, rather than the
-        # reference's hardcoded 12288 (its FM/TAL input size).
-        cnn_output_items = self._infer_cnn_output_items(num_audio_samples)
+        # Probe the deepest feature-map shape from a dummy render-length input, rather than the
+        # reference's hardcoded 12288 (its FM/TAL input size). Keeping the full shape (not just
+        # the flattened width) also lets the Stage 2 proxy decoder invert this exact feature map.
+        self._cnn_output_shape, self._target_spectrogram_size = self._infer_cnn_output_shape(
+            num_audio_samples
+        )
+        cnn_output_items = int(np.prod(self._cnn_output_shape))
         self.head = nn.Sequential(
             nn.Dropout(dropout),
             nn.Linear(cnn_output_items, ml_dimension),
             nn.BatchNorm1d(ml_dimension),
         )
+
+    @property
+    def cnn_output_shape(self) -> Tuple[int, int, int]:
+        """The encoder CNN's deepest feature-map shape ``(channels, height, width)``."""
+        return self._cnn_output_shape
+
+    @property
+    def target_spectrogram_size(self) -> Tuple[int, int]:
+        """The mel-dB spectrogram size ``(n_mels, frames)`` the proxy decoder reconstructs."""
+        return self._target_spectrogram_size
 
     def _mel_db_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
         return _compute_mel_db_spectrogram(
@@ -129,14 +153,144 @@ class InverSynthEncoderNetwork(nn.Module):
             self._n_fft, self._hop_length, self._win_length, self._min_db, self._max_db,
         )
 
-    def _infer_cnn_output_items(self, num_audio_samples: int) -> int:
+    def _infer_cnn_output_shape(
+        self, num_audio_samples: int
+    ) -> Tuple[Tuple[int, int, int], Tuple[int, int]]:
         with torch.no_grad():
             dummy_spectrogram = self._mel_db_spectrogram(torch.zeros(1, num_audio_samples))
             cnn_output = self.encoder_cnn(dummy_spectrogram)
-        return int(np.prod(cnn_output.shape[1:]))
+        channels, height, width = cnn_output.shape[1:]
+        target_size = (int(dummy_spectrogram.shape[-2]), int(dummy_spectrogram.shape[-1]))
+        return (int(channels), int(height), int(width)), target_size
 
-    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+    def forward_with_spectrogram(self, audio: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """The prediction and the mel-dB spectrogram it was computed from.
+
+        Stage 2's training step needs that input spectrogram as the proxy's reconstruction
+        target, so it is returned here instead of being recomputed with a second STFT.
+        """
         spectrogram = self._mel_db_spectrogram(audio)
         features = self.encoder_cnn(spectrogram)
         flattened = torch.flatten(features, start_dim=1)
-        return self.head(flattened)
+        return self.head(flattened), spectrogram
+
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+        prediction, _ = self.forward_with_spectrogram(audio)
+        return prediction
+
+
+class InverSynthProxyNetwork(nn.Module):
+    """The paper's differentiable neural synthesizer-proxy ``d_phi`` (``encdec.py::Decoder``).
+
+    A transposed-CNN mapping the encoder's predicted ML-side vector back to a normalized mel-dB
+    spectrogram, so an audio (spectrogram) loss can supply gradients to the encoder during
+    training (Stage 2 onward). It is **training-only**: ``predict`` re-renders with the real
+    Dexed, so the proxy never runs at evaluation.
+
+    The reference ``Decoder`` hardcodes ``Linear(104, 24576)`` and ``view(-1, 2048, 3, 4)`` for
+    its FM/TAL shape. This port instead reuses the preset-gen-vae port's shape-robust mirror
+    decoder (``_build_decoder_cnn`` inverts the identical CNN topology), sizing the un-mixer
+    ``Linear`` from the encoder's probed feature-map shape and cropping/padding the output to the
+    exact ``(n_mels, frames)`` target, so the audio loss is well-defined at any render length.
+
+    The proxy consumes the encoder's **raw** ML-side vector (continuous floats + categorical
+    logits), not the paper's activated preset (Hardtanh + softmax) -- the same raw contract the
+    encoder head emits for :class:`ParameterLoss`. The initial ``Linear`` absorbs the scale.
+    """
+
+    def __init__(
+        self,
+        ml_dimension: int,
+        cnn_output_shape: Tuple[int, int, int],
+        target_spectrogram_size: Tuple[int, int],
+        dropout: float = 0.3,
+    ) -> None:
+        super().__init__()
+        self._cnn_output_shape = cnn_output_shape
+        self._target_spectrogram_size = target_spectrogram_size
+        cnn_output_items = int(np.prod(cnn_output_shape))
+        # Reference Decoder.mlp: Linear -> Dropout (dropout after, unlike the encoder head).
+        self.mlp = nn.Sequential(nn.Linear(ml_dimension, cnn_output_items), nn.Dropout(dropout))
+        self.decoder_cnn = _build_decoder_cnn(unmixer_in_channels=cnn_output_shape[0])
+
+    def forward(self, prediction: torch.Tensor) -> torch.Tensor:
+        mixed_features = self.mlp(prediction).view(-1, *self._cnn_output_shape)
+        reconstruction = self.decoder_cnn(mixed_features)
+        return _center_crop_or_pad(reconstruction, *self._target_spectrogram_size)
+
+
+@dataclass(frozen=True)
+class IS2NetworkOutput:
+    """Everything the Stage 2 training loss needs from one ``forward_training`` pass.
+
+    ``proxy_spectrogram`` is the proxy's reconstruction of ``target_spectrogram`` (the encoder's
+    mel-dB input); the audio loss is their MAE. ``prediction`` feeds :class:`ParameterLoss`.
+    """
+
+    prediction: torch.Tensor  # [batch, ml_dimension] raw floats + categorical logits
+    proxy_spectrogram: torch.Tensor  # [batch, 1, n_mels, frames] in [-1, 1]
+    target_spectrogram: torch.Tensor  # [batch, 1, n_mels, frames] in [-1, 1]
+
+
+class IS2Network(nn.Module):
+    """The encoder + training-only synthesizer-proxy of the ``IS2xITF`` / ``IS2`` stages.
+
+    ``forward(audio)`` is the encoder alone (the whole eval path), so the inherited
+    ``BaseDeepModel.predict`` is unchanged and the proxy is skipped at inference.
+    ``forward_training(audio)`` additionally runs the proxy and returns everything the combined
+    parameters + audio loss needs. Both networks are optimized by the single optimizer, jointly,
+    as the paper trains them (its Eq. 4). The proxy is sized from the encoder's probed feature-map
+    shape, so it inverts that exact map.
+    """
+
+    def __init__(
+        self,
+        ml_dimension: int,
+        num_audio_samples: int,
+        sample_rate: int = 22050,
+        n_fft: int = 1024,
+        hop_length: int = 256,
+        win_length: int = 1024,
+        n_mels: int = 257,
+        mel_fmin: float = 30.0,
+        mel_fmax: float = 11000.0,
+        spectrogram_min_db: float = -120.0,
+        spectrogram_max_db: float = 0.0,
+        dropout: float = 0.3,
+        proxy_dropout: float = 0.3,
+    ) -> None:
+        super().__init__()
+        self.encoder = InverSynthEncoderNetwork(
+            ml_dimension=ml_dimension,
+            num_audio_samples=num_audio_samples,
+            sample_rate=sample_rate,
+            n_fft=n_fft,
+            hop_length=hop_length,
+            win_length=win_length,
+            n_mels=n_mels,
+            mel_fmin=mel_fmin,
+            mel_fmax=mel_fmax,
+            spectrogram_min_db=spectrogram_min_db,
+            spectrogram_max_db=spectrogram_max_db,
+            dropout=dropout,
+        )
+        self.proxy = InverSynthProxyNetwork(
+            ml_dimension=ml_dimension,
+            cnn_output_shape=self.encoder.cnn_output_shape,
+            target_spectrogram_size=self.encoder.target_spectrogram_size,
+            dropout=proxy_dropout,
+        )
+
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
+        """Eval path: the encoder only (the proxy is training-only)."""
+        return self.encoder(audio)
+
+    def forward_training(self, audio: torch.Tensor) -> IS2NetworkOutput:
+        """Full pass for the training loss: prediction + proxy reconstruction + its target."""
+        prediction, target_spectrogram = self.encoder.forward_with_spectrogram(audio)
+        proxy_spectrogram = self.proxy(prediction)
+        return IS2NetworkOutput(
+            prediction=prediction,
+            proxy_spectrogram=proxy_spectrogram,
+            target_spectrogram=target_spectrogram,
+        )

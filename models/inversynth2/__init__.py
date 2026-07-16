@@ -11,17 +11,24 @@ models, built in stages under the paper's own names (note the "xITF = *excluding
 
 One paper, one package, one file per role:
 
-- ``network.py``  -- the mel-dB front-end (reused from the preset-gen-vae port) and the ported
-  strided-CNN encoder (:class:`InverSynthEncoderNetwork`). Later stages add the proxy decoder.
-- ``families.py`` -- the benchmark wrappers (:class:`IS`; later ``IS2xITF`` / ``IS2``).
-- ``lightning_module.py`` (Stage 2+) -- the training-only proxy loss recipe. It will stay behind
-  the families' lazy import so the eval path needs no Lightning (D-FRAMEWORK), and so is never
-  imported here.
+- ``network.py``  -- the mel-dB front-end (reused from the preset-gen-vae port), the ported
+  strided-CNN encoder (:class:`InverSynthEncoderNetwork`), the training-only proxy decoder
+  (:class:`InverSynthProxyNetwork`) and the paired :class:`IS2Network`.
+- ``families.py`` -- the benchmark wrappers (:class:`IS`, :class:`IS2xITF`; later ``IS2``).
+- ``lightning_module.py`` -- the training-only proxy loss recipe. It stays behind the families'
+  lazy import so the eval path needs no Lightning (D-FRAMEWORK), and so is never imported here.
 """
-from models.inversynth2.families import IS
-from models.inversynth2.network import InverSynthEncoderNetwork
+from models.inversynth2.families import IS, IS2xITF
+from models.inversynth2.network import (
+    InverSynthEncoderNetwork,
+    InverSynthProxyNetwork,
+    IS2Network,
+)
 
 __all__ = [
     "IS",
+    "IS2xITF",
     "InverSynthEncoderNetwork",
+    "InverSynthProxyNetwork",
+    "IS2Network",
 ]

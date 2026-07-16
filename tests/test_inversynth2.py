@@ -1,9 +1,10 @@
-"""Tests for the InverSynth II ``IS`` model (Stage 1 of the neural-proxy family).
+"""Tests for the InverSynth II ``IS`` (Stage 1) and ``IS2xITF`` (Stage 2) models.
 
-A forward-shape and rebuild-determinism check on the encoder network, plus an end-to-end
-fit -> save -> load -> predict smoke test on a tiny synthetic corpus (mirroring
-``tests/test_sound2synth.py``). A small STFT + few mels keep the deep conv stack from
-collapsing the tiny spectrogram and the run fast on CPU. Skips cleanly when
+Forward-shape and rebuild-determinism checks on the encoder network, an ``IS2Network``
+forward_training shape check (encoder + training-only proxy), and end-to-end
+fit -> save -> load -> predict smoke tests on a tiny synthetic corpus for both models
+(mirroring ``tests/test_sound2synth.py``). A small STFT + few mels keep the deep conv stack
+from collapsing the tiny spectrogram and the run fast on CPU. Skips cleanly when
 ``torch``/``lightning``/``librosa`` are absent (training-only deps).
 """
 import os
@@ -23,7 +24,7 @@ pytest.importorskip("librosa")  # mel filterbank (front-end dependency)
 from dataset.builder import DatasetBuilder, RenderSettings
 from dataset.preset_sources import SyntheticPresetSource
 from dataset.torch_dataset import RenderedCorpusDataset
-from models.inversynth2 import IS, InverSynthEncoderNetwork
+from models.inversynth2 import IS, IS2Network, IS2xITF, InverSynthEncoderNetwork
 from synth.parameter_space import ParameterSpace, ParameterSpecification
 
 SAMPLE_RATE = 16000
@@ -131,6 +132,24 @@ def test_forward_maps_audio_batch_to_ml_dimension():
     assert output.shape == (3, ml_dimension)
 
 
+def test_is2_network_forward_training_shapes():
+    ml_dimension = 41
+    network = IS2Network(
+        ml_dimension=ml_dimension, num_audio_samples=EXPECTED_SAMPLES,
+        sample_rate=SAMPLE_RATE, proxy_dropout=0.0, **TINY_KWARGS,
+    )
+    network.eval()  # BatchNorm in the head + proxy needs eval mode (or batch > 1)
+    audio = torch.randn(2, EXPECTED_SAMPLES)
+
+    output = network.forward_training(audio)
+    assert output.prediction.shape == (2, ml_dimension)
+    # The proxy reconstructs the encoder's mel-dB input, so their shapes match exactly.
+    assert output.proxy_spectrogram.shape == output.target_spectrogram.shape
+    assert output.target_spectrogram.shape[-2] == TINY_KWARGS["n_mels"]
+    # The eval path (forward) is the encoder alone -- same prediction width, proxy skipped.
+    assert network(audio).shape == (2, ml_dimension)
+
+
 def test_build_network_is_deterministic_in_hparams():
     model = IS(**TINY_KWARGS)
     hparams = {
@@ -173,6 +192,39 @@ def test_fit_export_load_predict_end_to_end(tmp_path):
     # Fresh instance loads with no dataset and no VST, then predicts.
     reloaded = IS(**TINY_KWARGS)
     reloaded.load(checkpoint_path)
+
+    audio, _ = train_dataset[0]
+    prediction = reloaded.predict(audio)
+
+    space = train_dataset.parameter_space
+    assert set(prediction) == set(space.names)              # all parameters present
+    assert prediction["CAT"] in (0.0, 0.5, 1.0)             # categorical snapped to a grid option
+    assert 0.0 <= prediction["AMP"] <= 1.0                  # continuous clipped into bounds
+
+
+def test_is2xitf_fit_export_load_predict_end_to_end(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
+    log_dir = tmp_path / "logs"
+
+    model = IS2xITF(default_root_dir=str(log_dir), proxy_dropout=0.0, **TINY_KWARGS)
+    model.fit(train_dataset, config=training_config())
+
+    # The combined loss actually fell, and the proxy's audio loss was part of training.
+    train_losses = logged_metric(log_dir, "train_loss")
+    assert train_losses[-1] < train_losses[0]
+    assert logged_metric(log_dir, "train_audio_loss")
+
+    checkpoint_path = tmp_path / "inversynth_is2xitf.pt"
+    model.save(checkpoint_path)
+    assert checkpoint_path.exists()
+
+    reloaded = IS2xITF(proxy_dropout=0.0, **TINY_KWARGS)
+    reloaded.load(checkpoint_path)
+
+    # The checkpoint carries both the encoder and the training-only proxy (Stage 3 needs it).
+    state_keys = reloaded._network.state_dict().keys()
+    assert any(key.startswith("encoder.") for key in state_keys)
+    assert any(key.startswith("proxy.") for key in state_keys)
 
     audio, _ = train_dataset[0]
     prediction = reloaded.predict(audio)
