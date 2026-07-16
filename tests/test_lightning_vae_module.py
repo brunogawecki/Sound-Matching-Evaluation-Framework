@@ -83,7 +83,7 @@ def make_module(loss_config: LossConfig, with_latent_flow: bool = False):
     return module, network, targets
 
 
-def test_step_total_is_reconstruction_plus_beta_latent_plus_controls():
+def test_step_total_is_reconstruction_plus_beta_latent_plus_parameters():
     loss_config = LossConfig()
     module, network, targets = make_module(loss_config)
     audio = torch.zeros(2, 8)
@@ -93,11 +93,11 @@ def test_step_total_is_reconstruction_plus_beta_latent_plus_controls():
 
     expected_recons = F.mse_loss(out.reconstruction, out.target_spectrogram)
     expected_latent = gaussian_kl_divergence(out.mu, out.logvar, normalize=True)
-    expected_controls = F.mse_loss(out.prediction, targets)
+    expected_parameters = F.mse_loss(out.prediction, targets)
     # current_epoch is 0 without a trainer -> beta is the warmup start value.
     beta = loss_config.beta_start_value
     assert total.item() == pytest.approx(
-        (expected_recons + beta * expected_latent + expected_controls).item()
+        (expected_recons + beta * expected_latent + expected_parameters).item()
     )
 
 
@@ -114,10 +114,10 @@ def test_step_uses_the_monte_carlo_latent_loss_when_the_network_has_a_latent_flo
         out.mu, out.logvar, out.latent_sample, out.transformed_latent_sample,
         out.log_abs_determinant, normalize=True,
     )
-    expected_controls = F.mse_loss(out.prediction, targets)
+    expected_parameters = F.mse_loss(out.prediction, targets)
     beta = loss_config.beta_start_value
     assert total.item() == pytest.approx(
-        (expected_recons + beta * expected_latent + expected_controls).item()
+        (expected_recons + beta * expected_latent + expected_parameters).item()
     )
     # The two latent terms really are different numbers, so the branch is load-bearing.
     assert not torch.isclose(
@@ -135,9 +135,9 @@ def test_validation_step_uses_final_beta():
 
     expected_recons = F.mse_loss(out.reconstruction, out.target_spectrogram)
     expected_latent = gaussian_kl_divergence(out.mu, out.logvar, normalize=True)
-    expected_controls = F.mse_loss(out.prediction, targets)
+    expected_parameters = F.mse_loss(out.prediction, targets)
     assert total.item() == pytest.approx(
-        (expected_recons + loss_config.beta * expected_latent + expected_controls).item()
+        (expected_recons + loss_config.beta * expected_latent + expected_parameters).item()
     )
 
 

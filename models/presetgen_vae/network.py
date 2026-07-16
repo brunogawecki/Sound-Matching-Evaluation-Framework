@@ -3,7 +3,7 @@
 The mel-dB front-end and the paper's ``speccnn8l1_bn`` spectrogram encoder emit
 ``mu``/``logvar``; a reparameterized sample ``z0`` is pushed through the **latent RealNVP
 flow** to ``zK``, which feeds both the mirror-image ``speccnn8l1_bn`` spectrogram decoder
-(reconstruction) and the regressor head (controls). The regression gradient flows into the
+(reconstruction) and the regressor head (parameters). The regression gradient flows into the
 encoder (joint training), exactly as the paper trains the VAE and regressor together.
 
 This is the architecture of the paper's Figure 1, i.e. both models it reports: the head is
@@ -269,7 +269,7 @@ class PresetGenVAENetwork(nn.Module):
     ``forward`` returns the regressor prediction only (from the posterior mean, deterministic in
     eval), so the inherited ``BaseDeepModel.predict`` path is unchanged and the decoder is skipped
     at inference. ``forward_training`` additionally runs the decoder and returns everything the
-    reconstruction + latent + controls loss needs.
+    reconstruction + latent + parameter loss needs.
     """
 
     def __init__(

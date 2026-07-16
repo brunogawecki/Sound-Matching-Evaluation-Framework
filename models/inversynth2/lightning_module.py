@@ -1,8 +1,8 @@
 """LightningModule that trains the InverSynth II proxy regressor (``IS2xITF``, Stage 2).
 
-Objective: ``controls_loss + audio_loss_weight * audio_loss`` -- the paper's parameters loss
+Objective: ``parameter_loss + audio_loss_weight * audio_loss`` -- the paper's parameters loss
 plus its synthesizer-proxy audio loss (its Eq. 4, ``lambda`` = ``audio_loss_weight``). The
-controls term reuses :class:`ParameterLoss` unchanged; the audio term is the MAE between the
+parameter term reuses :class:`ParameterLoss` unchanged; the audio term is the MAE between the
 proxy's reconstructed spectrogram and the encoder's mel-dB input. The single optimizer trains the
 encoder and the proxy jointly, as the paper does. Extends :class:`LightningRegressor` -- only the
 loss step differs; step routing, optimizer, and ``ParameterLoss`` logging are inherited.
@@ -45,13 +45,13 @@ class LightningIS2Regressor(LightningRegressor):
     def _shared_step(self, batch: List[torch.Tensor], stage: str) -> torch.Tensor:
         audio, targets = batch
         output: IS2NetworkOutput = self.network.forward_training(audio)
-        controls = self.parameter_loss(output.prediction, targets)
+        parameter_losses = self.parameter_loss(output.prediction, targets)
         audio_loss = F.l1_loss(output.proxy_spectrogram, output.target_spectrogram)
-        total = controls["loss"] + self._audio_loss_weight * audio_loss
+        total = parameter_losses["loss"] + self._audio_loss_weight * audio_loss
 
         log = dict(on_step=False, on_epoch=True, batch_size=audio.shape[0])
         self.log(f"{stage}_loss", total, prog_bar=True, **log)
-        self.log(f"{stage}_controls_loss", controls["loss"], prog_bar=True, **log)
+        self.log(f"{stage}_parameter_loss", parameter_losses["loss"], prog_bar=True, **log)
         self.log(f"{stage}_audio_loss", audio_loss, prog_bar=True, **log)
-        self._log_parameter_losses(output.prediction, targets, controls, stage, log)
+        self._log_parameter_losses(output.prediction, targets, parameter_losses, stage, log)
         return total

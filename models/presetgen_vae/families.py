@@ -5,7 +5,7 @@ Two registry entries share one base: :class:`PresetGenVAEMLPRegressor` (the pape
 regression) and :class:`PresetGenVAEFlowRegressor` (its flow regression) -- the two models
 the paper reports, i.e. the "MLP" and "Flow" rows of its Table 1. They differ **only** in the
 regressor head; both carry the latent RealNVP flow of the paper's Figure 1, and both train
-through the same ``LightningVAERegressor`` recipe (reconstruction + beta-latent + controls).
+through the same ``LightningVAERegressor`` recipe (reconstruction + beta-latent + parameters).
 
 Following Table 1, both also pin ``latent_dimension`` to ``ml_dimension``: the flow head needs
 it (invertibility), and the paper deliberately gives the MLP model the same latent width so the
@@ -31,7 +31,7 @@ class BasePresetGenVAERegressor(BaseDeepModel):
 
     The paper's ``FlowVAE``: a spectrogram autoencoder with a RealNVP flow on its latent and a
     regressor head, trained by :class:`LightningVAERegressor` (reconstruction + beta-latent +
-    controls). The mel/STFT/encoder/latent-flow/regressor knobs are constructor arguments;
+    parameters). The mel/STFT/encoder/latent-flow/regressor knobs are constructor arguments;
     ``ml_dimension``, ``num_audio_samples`` and ``sample_rate`` are read from the corpus at
     ``fit`` time and folded into ``architecture_hparams`` so ``load`` can rebuild the exact
     network before restoring weights (no VST, no Lightning). Reading the render length + sample
