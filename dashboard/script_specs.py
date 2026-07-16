@@ -154,6 +154,7 @@ MODEL_CHOICES = (
     "PresetGenVAEFlowRegressor",
     "IS",
     "IS2xITF",
+    "IS2",
 )
 
 EVALUATE = ScriptSpec(

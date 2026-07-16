@@ -1,9 +1,11 @@
 # Full training config for the InverSynth II neural-proxy family (Barkan et al., ISMIR 2023;
-# paper_repos/InverSynth2). Shared by both the `IS` (Stage 1) and `IS2xITF` (Stage 2) runs:
-# they use the same Section 3.2 hyperparameters, so one recipe serves both.
+# paper_repos/InverSynth2). Shared by all three stages -- `IS` (Stage 1), `IS2xITF` (Stage 2),
+# and `IS2` (Stage 3): they use the same Section 3.2 hyperparameters, so one recipe serves all.
 #   - `IS`: the parameters-loss-only encoder (no synthesizer-proxy, no ITF).
 #   - `IS2xITF`: the `IS` encoder plus a training-only differentiable synthesizer-proxy, trained
 #     on the combined loss parameters_loss + lambda * audio_loss (Eq. 4). ("x" = excluding ITF.)
+#   - `IS2`: `IS2xITF` with per-sample inference-time finetuning (ITF, Eq. 6). ITF is inference-only,
+#     so training is identical to `IS2xITF`; this same config trains it unchanged.
 # `audio_loss_weight` below is the paper's lambda for `IS2xITF`; `IS` ignores it (its plain
 # regressor never reads it), so the same file is correct for both.
 #
