@@ -85,8 +85,10 @@ the Phase 4 harness + packaging.
   architecture (latent RealNVP flow included) as two registered families,
   `PresetGenVAEMLPRegressor` / `PresetGenVAEFlowRegressor`; trains on cluster. Map and port
   fidelity: `docs/PRESETGEN_VAE_PORT.md`.
-- **Neural-proxy baseline** (differentiable synth proxy) — trains on cluster; **baseline, not a
-  primary family.** Whether it is built at all is the open half of D-FAMILIES.
+- **Neural-proxy family** (InverSynth II — differentiable synth proxy) — **DONE**: the paper's three
+  staged models as registered families, `IS` / `IS2xITF` / `IS2` (the last adds per-sample
+  inference-time finetuning); all train on cluster. A peer paper approach, not a baseline. Map and
+  port fidelity: `docs/INVERSYNTH2_PORT.md`.
 
 *(Evolutionary search is dropped pending D-FAMILIES. If ever reinstated it runs its per-target search
 locally with the live VST — it does not fit the cluster training harness.)*

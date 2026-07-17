@@ -622,7 +622,7 @@ it's an orthogonal side artifact of the same re-render already being computed.
 ### D-FRAMEWORK — Deep-model training framework: PyTorch Lightning (LOCKED 2026-06-30)
 
 **Decision**: the internal training harness shared by the deep families (discriminative — primary,
-generative VAE — primary, neural-proxy — baseline) is built on **PyTorch Lightning**, not a
+generative VAE — primary, neural-proxy — InverSynth II) is built on **PyTorch Lightning**, not a
 hand-written PyTorch loop. This fixes only the *internal* harness; it does **not** touch the
 `BaseModel` contract (`models/base_model.py`), which stays framework-agnostic — its docstring already
 states the loop-vs-`Trainer` choice "must never leak into this interface."
@@ -922,12 +922,14 @@ a **voice-disjoint split of that same human corpus** (Phase 6). Still the user's
 ### D-FAMILIES — Final model-family set (OPEN, stub)
 
 **What** model families enter the comparative benchmark. Working set: **discriminative** (primary) +
-**generative** (primary, VAE — preset-gen-vae lineage) + **neural-proxy** (baseline, not a primary
-family). **Evolutionary search is dropped** (user: "probably no evolutionary algorithms"); if ever
-reinstated, note it runs a per-target search locally with the live VST and does **not** fit the
-cluster training harness.
+**generative** (primary, VAE — preset-gen-vae lineage) + **neural-proxy** (InverSynth II lineage — a
+peer paper approach, **committed and built**: the staged `IS` / `IS2xITF` / `IS2` families, see
+`docs/INVERSYNTH2_PORT.md`). **Evolutionary search is dropped** (user: "probably no evolutionary
+algorithms"); if ever reinstated, note it runs a per-target search locally with the live VST and does
+**not** fit the cluster training harness.
 
-**Why it's open**: the exact generative architecture and whether the neural-proxy baseline is worth
-the build are not yet committed.
+**Why it's open**: the neural-proxy slot is now filled by InverSynth II, but the final family set is
+not frozen — the exact discriminative/generative architectures still evolve and a second synth
+(Surge XT) may add families.
 
 **Blocks**: Phase 5. Resolve here before the Phase 5 family tasks start.
