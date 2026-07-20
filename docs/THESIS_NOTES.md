@@ -136,3 +136,72 @@ store raw audio and must stay self-describing (D-SELFDESC), so the same STFT →
 math runs inside the network, with the normalization endpoints measured from the training corpus at
 fit time (D-MELNORM) — the exact analogue of the paper's `spec_stats` pass. Nice illustration of
 how a standardized benchmark reshapes a per-paper pipeline without changing its math.
+
+---
+
+**Topic: the flow-matching port — what the Implementation chapter should say, and one threat to
+validity.** The conditional-generative family is a port of Hayes, Saitis & Fazekas (ISMIR 2025),
+implemented in `models/flow_matching/` as two registered families (`FlowMatchingMLP` /
+`FlowMatchingParam2Tok` — the paper's own control and its equivariant model, differing only in the
+vector field). The authoritative source is `docs/FLOW_MATCHING_PORT.md`: the architecture
+explanation, the code↔paper counterpart table, and every documented deviation. Rationale lives in
+`DECISIONS.md` (D-FLOW-CORPUS, D-FLOW-PREDICT, D-MELNORM, D-REPR). The four angles below are what
+the write-up should not miss. **Note that as of this writing neither family has been trained — there
+are no numbers yet, only method and implementation.**
+
+## 1. The training corpus is part of the method — and it carries a documented confound
+
+Every other family trains on human presets. This one trains on a **synthetic-uniform** corpus
+(D-FLOW-CORPUS), because the paper's equivariance argument assumes a **G-invariant parameter
+prior**: one that respects the synth's operator-permutation symmetry. Uniform sampling gives that;
+curated human presets break it. Train Param2Tok on human presets and the reason it should win has
+been discarded. This is not a data-plumbing detail, it is a premise of the experiment, and the
+Methodology chapter should present it as one.
+
+**The threat to validity:** the corpus we can actually build is only *approximately* G-invariant.
+`scripts/build_dataset.py synthetic` always applies the D-AUDIBLE range overrides, which pin three
+**OP1** parameters so that draws are audible. Naming one operator makes the prior non-invariant
+under operator permutation — a partial break of exactly the property the family depends on. It is
+3 parameters of 103 and 1 operator of 6, which is why it was accepted, but it must be stated. The
+consequence for the results chapter: **if Param2Tok fails to separate from the MLP control, that is
+not evidence against the paper's premise until this confound is ruled out.** D-FLOW-CORPUS records
+the two rejected alternatives and their costs (unconstrained sampling rejects ~94% of draws under
+D-SILENCE; the principled fix needs a DX7 algorithm→carrier table we do not have).
+
+## 2. The MLP variant is a control, not a baseline — say so, or the result means nothing
+
+`FlowMatchingMLP` is easy to misread as a weak floor. It is not: it is the paper's own control, and
+the **MLP↔Param2Tok gap is the quantity the port exists to measure**. Both share the corpus, the
+encoder, the loss, and the sampler. Reporting Param2Tok's absolute score without the gap says
+nothing about symmetry, which is the entire contribution being tested. Worth framing explicitly,
+since the framework's other families genuinely *are* arranged as baselines-vs-approaches.
+
+## 3. `predict` returns one seeded sample — the generative variance is unmeasured
+
+This is the framework's first true **sampler**: `predict` integrates a learned ODE (200 RK4 steps,
+CFG strength 2.0) rather than doing a forward pass, so `BaseFlowMatchingModel` overrides the base
+`predict`. The draw is seeded per call (D-FLOW-PREDICT) so the Evaluator's re-render stays
+reproducible and the family sits in the same results table as the regressors.
+
+The honest limitation: a generative model has a per-target *distribution* of solutions, and one
+seeded draw does not measure its spread. Two runs of the same model could land at different table
+positions by sampling luck alone. Best-of-N and per-target sample statistics are deferred, and the
+limitations section should name this rather than let a single-draw number read as the model's
+capability. Related cost note, if run time is discussed: at 200 steps × 2 field evaluations,
+Param2Tok measured ~3.7× slower per sample than the MLP variant on CPU (13.9 s vs 3.8 s).
+
+## 4. No parity tests here — unlike preset-gen-vae, and for a reason worth one sentence
+
+Point 1 of the preset-gen-vae topic above makes the weight-transplant parity tests thesis material.
+This port has none, and the contrast should be explained rather than left as an apparent
+inconsistency: the reference ships **no trained checkpoints**, and its task is **Surge XT**, not
+Dexed. Fidelity is instead established by behavioral test (`tests/test_flow_matching.py`) — RK4
+checked against a closed-form ODE, and the permutation-equivariance property asserted directly on
+`DiffusionTransformerBlock` (permuting the tokens permutes the output identically). Choosing the
+verification method that the available artifacts permit is itself a defensible methodological
+point.
+
+*(Also for the Implementation chapter: the "AST" row in the paper's Table 1 is a separate
+discriminative model (Bruford et al. DAFx24) and is **deliberately not ported** — discriminative
+coverage already exists via `sound2synth` and `inversynth2`. Mind the name collision: our
+`AudioSpectrogramTransformer` is the flow's conditioning encoder, not that baseline.)*
