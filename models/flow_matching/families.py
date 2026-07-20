@@ -54,6 +54,9 @@ class BaseFlowMatchingModel(BaseDeepModel):
         patch_stride: int = 10,
         field_d_model: int = 768,
         field_num_layers: int = 9,
+        field_num_heads: int = 8,
+        num_parameter_tokens: int = 128,
+        projection_penalty: float = 0.01,
         time_encoding_dimension: int = 256,
         cfg_dropout_rate: float = 0.1,
         rectified_sigma_min: float = 0.0,
@@ -76,6 +79,9 @@ class BaseFlowMatchingModel(BaseDeepModel):
         self._patch_stride = patch_stride
         self._field_d_model = field_d_model
         self._field_num_layers = field_num_layers
+        self._field_num_heads = field_num_heads
+        self._num_parameter_tokens = num_parameter_tokens
+        self._projection_penalty = projection_penalty
         self._time_encoding_dimension = time_encoding_dimension
         self._cfg_dropout_rate = cfg_dropout_rate
         self._rectified_sigma_min = rectified_sigma_min
@@ -129,6 +135,9 @@ class BaseFlowMatchingModel(BaseDeepModel):
             "vector_field_architecture": self._vector_field_architecture,
             "field_d_model": self._field_d_model,
             "field_num_layers": self._field_num_layers,
+            "field_num_heads": self._field_num_heads,
+            "num_parameter_tokens": self._num_parameter_tokens,
+            "projection_penalty": self._projection_penalty,
             "time_encoding_dimension": self._time_encoding_dimension,
             "rectified_sigma_min": self._rectified_sigma_min,
             "sample_steps": self._sample_steps,
@@ -183,3 +192,31 @@ class FlowMatchingMLP(BaseFlowMatchingModel):
     """
 
     _vector_field_architecture = "mlp"
+
+
+class FlowMatchingParam2Tok(BaseFlowMatchingModel):
+    """The paper's CNF (Param2Tok) model: the approximately-equivariant DiT vector field.
+
+    Param2Tok maps the ML-side vector to 128 tokens, an 8-block Diffusion Transformer
+    (``d_model`` 512) with no positional encoding processes them permutation-equivariantly,
+    and Param2Tok maps back -- the paper's ``surge_flow.yaml``. Its assignment matrix picks
+    up an L1 penalty during training, so the learned parameters-to-token routing is pushed
+    to be sparse. This is the paper's headline model: the same corpus, encoder, loss and
+    sampler as :class:`FlowMatchingMLP`, differing only in the field, so the pair isolates
+    what the symmetry-aware architecture is worth.
+
+    Constructor defaults differ from the base's MLP-shaped ones (8 layers at 512 rather
+    than 9 at 768), matching the paper's config.
+    """
+
+    _vector_field_architecture = "param2tok"
+
+    def __init__(
+        self,
+        field_d_model: int = 512,
+        field_num_layers: int = 8,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            field_d_model=field_d_model, field_num_layers=field_num_layers, **kwargs
+        )

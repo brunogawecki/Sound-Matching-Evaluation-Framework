@@ -156,6 +156,7 @@ MODEL_CHOICES = (
     "IS2xITF",
     "IS2",
     "FlowMatchingMLP",
+    "FlowMatchingParam2Tok",
 )
 
 EVALUATE = ScriptSpec(

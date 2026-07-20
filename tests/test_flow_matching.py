@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 torch = pytest.importorskip("torch")
 
-from models.flow_matching import FlowMatchingMLP
+from models.flow_matching import FlowMatchingMLP, FlowMatchingParam2Tok
 from models.flow_matching.encoder import AudioSpectrogramTransformer
 from models.flow_matching.flow_matching import (
     optimal_transport_pairing,
@@ -27,7 +27,12 @@ from models.flow_matching.flow_matching import (
     rk4_sample,
 )
 from models.flow_matching.network import FlowMatchingNetwork
-from models.flow_matching.vector_field import ConditionalResidualMLPField
+from models.flow_matching.vector_field import (
+    ConditionalResidualMLPField,
+    DiffusionTransformerBlock,
+    EquivariantTransformerField,
+    Param2TokProjection,
+)
 from synth.parameter_space import ParameterSpace, ParameterSpecification
 
 SAMPLE_RATE = 8000
@@ -47,6 +52,8 @@ TINY_KWARGS = dict(
     patch_stride=10,
     field_d_model=32,
     field_num_layers=2,
+    field_num_heads=4,
+    num_parameter_tokens=8,
     time_encoding_dimension=16,
     sample_steps=8,
 )
@@ -133,6 +140,55 @@ def test_mlp_field_maps_state_to_velocity_with_per_layer_conditioning():
     assert field.penalty() == 0.0
 
 
+def test_param2tok_projection_maps_params_to_tokens_and_back():
+    projection = Param2TokProjection(d_model=16, d_token=16, num_params=9, num_tokens=5)
+    x = torch.randn(4, 9)
+    tokens = projection.param_to_token(x)
+    assert tokens.shape == (4, 5, 16)
+    assert projection.token_to_param(tokens).shape == (4, 9)
+    penalty = projection.penalty()
+    assert penalty.ndim == 0 and torch.isfinite(penalty) and penalty > 0.0
+
+
+def test_dit_block_is_permutation_equivariant_over_its_tokens():
+    """No positional encoding -> permuting the tokens permutes the output the same way.
+
+    This is the property the whole Param2Tok argument rests on, so it is asserted on the
+    block directly rather than inferred from the field's output.
+    """
+    block = DiffusionTransformerBlock(
+        d_model=16, conditioning_dim=16, num_heads=4, feedforward_dimension=16
+    )
+    block.eval()
+    tokens = torch.randn(2, 6, 16)
+    conditioning = torch.randn(2, 16)
+    permutation = torch.randperm(6)
+    with torch.no_grad():
+        straight = block(tokens, conditioning)[:, permutation]
+        permuted = block(tokens[:, permutation], conditioning)
+    assert torch.allclose(straight, permuted, atol=1e-5)
+
+
+def test_equivariant_field_maps_state_to_velocity_and_penalizes_the_assignment():
+    field = EquivariantTransformerField(
+        num_params=9,
+        d_model=16,
+        time_encoding_dimension=8,
+        conditioning_dim=6,
+        num_layers=3,
+        num_heads=4,
+        num_tokens=5,
+        projection_penalty=0.01,
+    )
+    x = torch.randn(4, 9)
+    t = torch.rand(4, 1)
+    per_layer_conditioning = torch.randn(4, 3, 6)
+    assert field(x, t, per_layer_conditioning).shape == (4, 9)
+    assert field(x, t, None).shape == (4, 9)  # unconditional (CFG) branch
+    # penalty() returns the *weighted* L1, so the training step can add it unscaled.
+    assert torch.allclose(field.penalty(), 0.01 * field.projection.assignment.abs().mean())
+
+
 def test_ast_encoder_emits_one_conditioning_vector_per_output_token():
     encoder = AudioSpectrogramTransformer(
         d_model=32,
@@ -187,10 +243,28 @@ def test_build_network_is_deterministic_in_hparams():
     assert first_shapes == second_shapes
 
 
-def test_predict_is_seeded_and_decodes_to_a_valid_synth_dict():
+def test_param2tok_network_samples_deterministically():
+    network = FlowMatchingNetwork(
+        ml_dimension=4, vector_field_architecture="param2tok", **TINY_NETWORK_KWARGS
+    )
+    network.eval()
+    audio = torch.randn(2, NUM_AUDIO_SAMPLES)
+    with torch.no_grad():
+        first = network.sample(audio, generator=torch.Generator().manual_seed(7))
+        second = network.sample(audio, generator=torch.Generator().manual_seed(7))
+    assert first.shape == (2, 4)
+    assert torch.equal(first, second)
+
+
+@pytest.mark.parametrize("model_class", [FlowMatchingMLP, FlowMatchingParam2Tok])
+def test_predict_is_seeded_and_decodes_to_a_valid_synth_dict(model_class):
     space = make_space()
-    model = FlowMatchingMLP(**TINY_KWARGS)
-    network = FlowMatchingNetwork(ml_dimension=space.ml_dimension, **TINY_NETWORK_KWARGS)
+    model = model_class(**TINY_KWARGS)
+    network = FlowMatchingNetwork(
+        ml_dimension=space.ml_dimension,
+        vector_field_architecture=model_class._vector_field_architecture,
+        **TINY_NETWORK_KWARGS,
+    )
     model._set_trained_network(network, {"ml_dimension": space.ml_dimension}, space)
 
     audio = torch.randn(NUM_AUDIO_SAMPLES)
@@ -256,14 +330,15 @@ def build_corpus(tmp_path, run_name, count, seed):
     return RenderedCorpusDataset.load(tmp_path / run_name)
 
 
-def test_fit_export_load_predict_end_to_end(tmp_path):
+@pytest.mark.parametrize("model_class", [FlowMatchingMLP, FlowMatchingParam2Tok])
+def test_fit_export_load_predict_end_to_end(tmp_path, model_class):
     pytest.importorskip("lightning")  # training-only dependency; skip locally if absent
     import pandas as pd
 
     train_dataset = build_corpus(tmp_path, "train", count=16, seed=0)
     log_dir = tmp_path / "logs"
 
-    model = FlowMatchingMLP(
+    model = model_class(
         default_root_dir=str(log_dir), validation_sample_steps=4, **TINY_KWARGS
     )
     model.fit(
@@ -289,12 +364,12 @@ def test_fit_export_load_predict_end_to_end(tmp_path):
     assert np.isfinite(metrics["train_loss"].dropna()).all()
     assert np.isfinite(metrics["val_loss"].dropna()).all()
 
-    checkpoint_path = tmp_path / "flow_matching_mlp.pt"
+    checkpoint_path = tmp_path / "flow_matching.pt"
     model.save(checkpoint_path)
     assert checkpoint_path.exists()
 
     # Fresh instance loads with no dataset, no VST, no Lightning -- then predicts.
-    reloaded = FlowMatchingMLP(**TINY_KWARGS)
+    reloaded = model_class(**TINY_KWARGS)
     reloaded.load(checkpoint_path)
 
     audio, _ = train_dataset[0]

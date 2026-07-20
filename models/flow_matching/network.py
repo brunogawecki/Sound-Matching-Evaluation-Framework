@@ -28,7 +28,10 @@ from torch import nn
 from dataset.torch_dataset import RenderedCorpusDataset
 from models.flow_matching.encoder import AudioSpectrogramTransformer
 from models.flow_matching.flow_matching import rk4_sample
-from models.flow_matching.vector_field import ConditionalResidualMLPField
+from models.flow_matching.vector_field import (
+    ConditionalResidualMLPField,
+    EquivariantTransformerField,
+)
 
 _DB_AMIN = 1e-10  # librosa.power_to_db amin
 _DB_TOP = 80.0  # librosa.power_to_db top_db
@@ -141,6 +144,9 @@ class FlowMatchingNetwork(nn.Module):
         vector_field_architecture: str = "mlp",
         field_d_model: int = 768,
         field_num_layers: int = 9,
+        field_num_heads: int = 8,
+        num_parameter_tokens: int = 128,
+        projection_penalty: float = 0.01,
         time_encoding_dimension: int = 256,
         rectified_sigma_min: float = 0.0,
         sample_steps: int = 200,
@@ -185,9 +191,21 @@ class FlowMatchingNetwork(nn.Module):
                 conditioning_dim=encoder_d_model,
                 num_layers=field_num_layers,
             )
+        elif vector_field_architecture == "param2tok":
+            self.vector_field = EquivariantTransformerField(
+                num_params=ml_dimension,
+                d_model=field_d_model,
+                time_encoding_dimension=time_encoding_dimension,
+                conditioning_dim=encoder_d_model,
+                num_layers=field_num_layers,
+                num_heads=field_num_heads,
+                num_tokens=num_parameter_tokens,
+                projection_penalty=projection_penalty,
+            )
         else:
             raise ValueError(
-                f"Unknown vector_field_architecture '{vector_field_architecture}' (use 'mlp')."
+                f"Unknown vector_field_architecture '{vector_field_architecture}' "
+                "(use 'mlp' or 'param2tok')."
             )
 
     def featurize(self, audio: torch.Tensor) -> torch.Tensor:
