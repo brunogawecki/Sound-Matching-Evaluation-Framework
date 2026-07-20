@@ -1,0 +1,74 @@
+# Full training config for the conditional-generative flow-matching family (Hayes, Saitis,
+# Fazekas, ISMIR 2025; paper_repos/synth-permutations). Shared by both registered families --
+# `FlowMatchingMLP` (non-equivariant control) and `FlowMatchingParam2Tok` (the equivariant
+# headline model): the paper gives them the same training recipe and they differ only in the
+# vector field, so one file trains both.
+#
+# Reference: configs/model/surge_flow.yaml + configs/model/surge_flowmlp.yaml (optimizer,
+# scheduler), configs/experiment/surge/base.yaml (trainer), configs/data/surge.yaml (batch).
+#
+# The flow knobs are NOT set here, and cannot be. cfg_dropout_rate (0.1), rectified_sigma_min (0),
+# OT pairing, and the 200-step / CFG-2.0 test sampler are constructor defaults on the family
+# classes, already matching the paper -- TrainingConfig has no fields for them, and
+# scripts/fit_model.py constructs the model with no kwargs but `default_root_dir`. Changing any of
+# them today means editing the defaults in models/flow_matching/families.py. Fine as long as they
+# stay at the paper's values; if a sweep over cfg_dropout_rate or sample_steps is ever needed, the
+# harness has to grow a model-kwargs path first.
+#
+# The whole `loss:` block is likewise absent: this family ignores the injected ParameterLoss.
+# Its objective is MSE on a velocity in flow space, where the continuous/categorical routing has
+# no meaning (see models/flow_matching/lightning_module.py). Setting categorical_loss_weight or
+# continuous_loss here would change nothing, so the block is omitted rather than written and
+# silently ignored.
+#
+# CORPUS: this family trains on a synthetic-uniform corpus, unlike every other family
+# (D-FLOW-CORPUS). The equivariance benefit needs a G-invariant parameter prior, which uniform
+# sampling gives and human presets break. Do not point this config at `full_preset-gen-vae_train`.
+#
+# Deviations from the paper, dictated by what models/training/ supports:
+# - Step budget -> epoch budget. The paper trains a flat `max_steps: 1_000_000` (batch 128).
+#   TrainerConfig exposes only `max_epochs`, so the budget below is an epoch count and the real
+#   step count depends on corpus size: steps = max_epochs * ceil(n_train / 128). At 300 epochs
+#   that is ~117k steps on a 50k corpus, ~235k on 100k. Both are well short of the paper's 1M.
+#   Raise max_epochs (and scheduler_max_epochs with it) if the loss is still moving, or add
+#   `max_steps` to TrainerConfig for a faithful budget. This is the biggest open deviation.
+# - Scheduler floor. The paper anneals cosine to `eta_min = lr * 1e-2`. build_optimizers
+#   hardcodes CosineAnnealingLR's default `eta_min=0`, so this run decays to 0. Minor, but it
+#   means the last epochs train at a lower LR than the reference.
+# - Adam betas: the reference uses PyTorch defaults (0.9, 0.999); no deviation here.
+# - Validation. The paper trains with `limit_val_batches: 0` and `model_checkpoint.monitor: null`
+#   -- no validation, keep the last checkpoint. We deviate deliberately and DO validate, because
+#   our validation_step implements the reference's own model-selection metric (sample with RK4+CFG,
+#   score parameter MSE in flow space = its `val/param_mse`), which makes checkpoint selection
+#   consistent with the other three families instead of a special case in the benchmark table.
+#   The cost is real: each val epoch runs 50 RK4 steps x 2 CFG evaluations per batch, so it is
+#   ~100x a forward pass. val_fraction is held to 0.05 to bound that, and validation still runs
+#   every epoch (TrainerConfig has no check_val_every_n_epoch). If val time dominates on the
+#   cluster, drop val_fraction further rather than raising it.
+seed: 3123123              # paper: configs/experiment/surge/base.yaml
+
+optimizer:
+  name: adam               # paper: torch.optim.Adam
+  learning_rate: 1.0e-4    # paper: lr 1e-4
+  weight_decay: 0.0        # paper: 0.0
+  scheduler: cosine        # paper: CosineAnnealingLR (eta_min differs, see header)
+  scheduler_max_epochs: 300  # matches trainer.max_epochs below
+
+data:
+  batch_size: 128          # paper: configs/data/surge.yaml
+  num_workers: 8           # matches #SBATCH --cpus-per-task=8
+  pin_memory: true
+  persistent_workers: true
+  val_fraction: 0.05       # small on purpose -- validation samples the ODE (see header)
+
+trainer:
+  max_epochs: 300             # stands in for the paper's 1M steps (see header)
+  precision: bf16-mixed       # paper: bf16-mixed
+  accelerator: gpu            # fail loud if no GPU is visible (we requested --gres=gpu:1)
+  devices: 1
+  strategy: auto
+  gradient_clip_val: 0.5      # paper: gradient_clip_val 0.5
+  log_every_n_steps: 50
+
+logger:
+  wandb: true
