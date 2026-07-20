@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-07-09 (D-MELNORM — preset-gen-vae mel-dB corpus-stat normalization).
+Last updated: 2026-07-20 (D-FLOW-CORPUS / D-FLOW-PREDICT — flow-matching corpus + generative predict).
 
 ---
 
@@ -889,6 +889,67 @@ removed as out of scope, so the endpoints are now measured for the one VAE famil
 
 ---
 
+### D-FLOW-CORPUS — The flow-matching families train on a synthetic-uniform corpus (LOCKED 2026-07-20)
+
+**Decision**: the flow-matching families (`FlowMatchingMLP`, `FlowMatchingParam2Tok`) train on a
+**synthetic-uniform** corpus (`ParameterSpace.sample_uniform` via `scripts/build_dataset.py
+synthetic`), not the human preset corpus every other deep family trains on. The **test** corpus is
+unchanged: the shared benchmark test set, same as every family (D4, Phase 6).
+
+**Why**: the paper's claim (Hayes et al., ISMIR 2025) is that building the synth's permutation
+symmetry into the vector field helps. That only holds if the training **parameter prior is
+G-invariant** — invariant under the symmetry group being exploited. Uniform sampling over the
+subset gives this for free: permuting an operator's parameters maps one uniform draw to another
+equally likely one. Curated human presets do not — they are heavily biased toward particular
+operator roles and algorithm choices, which breaks the invariance and removes the structure
+Param2Tok is built to exploit. The paper attributes its own VAE+RealNVP collapse to exactly this
+kind of preset bias. Training Param2Tok on human presets discards the reason it should win, so the
+MLP-vs-Param2Tok comparison would measure nothing.
+
+Note this is uniform in the D-AUDIBLE sense (per-parameter range overrides for audibility), not
+literally uniform over the raw subset — the audibility constraint pins parameters humans also pin
+and leaves the operator structure free, so the symmetry argument survives it.
+
+**Consequences**: this family deviates from the shared-training-corpus pattern deliberately, and
+that is a fact the Methodology chapter must state rather than gloss. It also makes "dataset
+construction method" a *usable comparison axis* for this family — training both flow-matching
+families across synthetic / human / hybrid corpora, all scored on the same test set, is a direct
+empirical test of the premise above. `FlowMatchingMLP` must be run alongside as the control on any
+such sweep: without it, a drop under human-trained data cannot be attributed to symmetry-breaking
+rather than to reduced training diversity.
+
+Map and port fidelity: `docs/FLOW_MATCHING_PORT.md`.
+
+---
+
+### D-FLOW-PREDICT — Generative `predict` returns one seeded sample (LOCKED 2026-07-20)
+
+**Decision**: `BaseFlowMatchingModel.predict` overrides the base single-forward-pass `predict` and
+returns **one** sample drawn by integrating the learned ODE (CFG-guided RK4, the paper's test-time
+protocol: 200 steps, guidance strength 2.0). The draw uses a **per-call seeded generator**
+(`_predict_seed`, default 0), so repeated predictions of the same clip are identical.
+
+**Why**: the base `predict` is a single forward pass, which is simply wrong for a sampler — the
+network's `forward` is `sample`, not a regression. Beyond that, two properties matter: the result
+must be **reproducible** (the Evaluator re-renders every prediction fresh-process and expects a
+deterministic input — D-EVAL / D-REPRO), and it must be **comparable** to the discriminative
+families, which emit exactly one parameter vector per target. One seeded sample gives both, and
+matches the paper's own Table 1 protocol.
+
+**Alternatives considered**:
+
+- *Best-of-N* (sample N, re-render each, keep the closest) — deferred, not rejected. It is cheap to
+  add because the Evaluator already re-renders, but it gives the generative families a re-ranking
+  budget the discriminative ones do not get, so it is a **separate reported condition**, not the
+  default.
+- *Unseeded sampling* — rejected: non-reproducible predictions break the eval contract.
+
+**Consequences**: a single draw does not measure the sampler's variance, which is a real property
+these families have and the regression families do not. Reporting per-target sample statistics is
+future work, noted in `docs/FLOW_MATCHING_PORT.md`.
+
+---
+
 ## OPEN
 
 ### D4 — Human preset source for the test set (deferred by user; importer built 2026-06-24)
@@ -924,12 +985,15 @@ a **voice-disjoint split of that same human corpus** (Phase 6). Still the user's
 **What** model families enter the comparative benchmark. Working set: **discriminative** (primary) +
 **generative** (primary, VAE — preset-gen-vae lineage) + **neural-proxy** (InverSynth II lineage — a
 peer paper approach, **committed and built**: the staged `IS` / `IS2xITF` / `IS2` families, see
-`docs/INVERSYNTH2_PORT.md`). **Evolutionary search is dropped** (user: "probably no evolutionary
+`docs/INVERSYNTH2_PORT.md`) + **conditional-generative flow matching** (Hayes et al. ISMIR 2025 —
+**committed and built**: `FlowMatchingMLP` / `FlowMatchingParam2Tok`, the paper's own control and
+its equivariant model, see `docs/FLOW_MATCHING_PORT.md`; trains on its own corpus per
+D-FLOW-CORPUS). **Evolutionary search is dropped** (user: "probably no evolutionary
 algorithms"); if ever reinstated, note it runs a per-target search locally with the live VST and does
 **not** fit the cluster training harness.
 
-**Why it's open**: the neural-proxy slot is now filled by InverSynth II, but the final family set is
-not frozen — the exact discriminative/generative architectures still evolve and a second synth
+**Why it's open**: the neural-proxy and flow-matching slots are now filled, but the final family set
+is not frozen — the exact discriminative/generative architectures still evolve and a second synth
 (Surge XT) may add families.
 
 **Blocks**: Phase 5. Resolve here before the Phase 5 family tasks start.

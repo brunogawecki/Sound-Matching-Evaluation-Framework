@@ -89,6 +89,14 @@ the Phase 4 harness + packaging.
   staged models as registered families, `IS` / `IS2xITF` / `IS2` (the last adds per-sample
   inference-time finetuning); all train on cluster. A peer paper approach, not a baseline. Map and
   port fidelity: `docs/INVERSYNTH2_PORT.md`.
+- **Conditional-generative flow-matching family** (Hayes et al. ISMIR 2025 — approximately
+  equivariant flow matching) — **DONE**: the paper's two Surge models as registered families,
+  `FlowMatchingMLP` (non-equivariant control) / `FlowMatchingParam2Tok` (equivariant, the headline
+  model). The only family built around synthesizer *symmetry*, and the first true sampler —
+  `predict` integrates an ODE rather than doing a forward pass (D-FLOW-PREDICT). Trains on its own
+  synthetic-uniform corpus (D-FLOW-CORPUS), unlike every other family. The paper's AST regression
+  baseline is deliberately not ported (discriminative coverage already exists). Map and port
+  fidelity: `docs/FLOW_MATCHING_PORT.md`.
 
 *(Evolutionary search is dropped pending D-FAMILIES. If ever reinstated it runs its per-target search
 locally with the live VST — it does not fit the cluster training harness.)*
