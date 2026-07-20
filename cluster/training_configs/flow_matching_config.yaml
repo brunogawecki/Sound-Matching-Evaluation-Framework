@@ -24,6 +24,11 @@
 # CORPUS: this family trains on a synthetic-uniform corpus, unlike every other family
 # (D-FLOW-CORPUS). The equivariance benefit needs a G-invariant parameter prior, which uniform
 # sampling gives and human presets break. Do not point this config at `full_preset-gen-vae_train`.
+# Build it with `scripts/build_dataset.py synthetic` (or the dashboard's Build dataset -> synthetic
+# page). Note that corpus is only approximately G-invariant: the builder always applies D-AUDIBLE's
+# range overrides, which pin three OP1 parameters and so break exact operator-permutation
+# invariance. Accepted confound, recorded under D-FLOW-CORPUS -- rule it out first if Param2Tok
+# fails to separate from the FlowMatchingMLP control.
 #
 # Deviations from the paper, dictated by what models/training/ supports:
 # - Step budget -> epoch budget. The paper trains a flat `max_steps: 1_000_000` (batch 128).

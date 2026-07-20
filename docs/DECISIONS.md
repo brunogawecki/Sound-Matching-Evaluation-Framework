@@ -906,9 +906,29 @@ Param2Tok is built to exploit. The paper attributes its own VAE+RealNVP collapse
 kind of preset bias. Training Param2Tok on human presets discards the reason it should win, so the
 MLP-vs-Param2Tok comparison would measure nothing.
 
-Note this is uniform in the D-AUDIBLE sense (per-parameter range overrides for audibility), not
-literally uniform over the raw subset — the audibility constraint pins parameters humans also pin
-and leaves the operator structure free, so the symmetry argument survives it.
+**Known confound — the corpus is not exactly G-invariant.** "Synthetic-uniform" here means uniform
+in the D-AUDIBLE sense: `scripts/build_dataset.py synthetic` always applies
+`synth.audible_sampling_ranges`, which for Dexed pins three OP1 parameters (`OP1 OUTPUT LEVEL` and
+`OP1 EG LEVEL 1` to [0.9, 1.0], `OP1 EG RATE 1` to [0.3, 1.0]). Because the constraint names **OP1
+specifically**, the prior is *not* invariant under permuting operators: a draw with OP1 swapped for
+OP4 is not equally likely. That is a partial break of the exact property this decision exists to
+secure, sitting directly on the axis the family is meant to demonstrate. D-AUDIBLE's own
+"Limitation / future" paragraph anticipates it ("the constraint always forces OP1 specifically, so
+its degeneracy lands on OP1").
+
+**Accepted anyway**, for now: the break is 3 of 103 parameters and one operator of six — the
+algorithm, all frequencies, sustain/decay, and the other five operators stay free, so the prior is
+*approximately* invariant. That is a defensible pairing with a model the paper itself only claims to
+be *approximately* equivariant. `FlowMatchingMLP` is the control that keeps this honest: it is
+non-equivariant, so if the OP1 pin were destroying the effect, the two families should converge.
+
+The alternatives were both rejected as disproportionate for now. Sampling with no audibility
+constraint restores exact invariance but sends the D-SILENCE rejection rate to ~94% (~15
+renders/sample, over the redraw cap), so it would mean bending two LOCKED decisions for one family.
+Spreading the constraint across each algorithm's real carriers is the principled fix — it restores
+invariance *and* improves D-AUDIBLE generally — but needs a sourced DX7 algorithm→carrier table and
+is its own piece of work. Revisit if Param2Tok fails to separate from the MLP control: this
+confound is then the first thing to rule out, before concluding against the paper's premise.
 
 **Consequences**: this family deviates from the shared-training-corpus pattern deliberately, and
 that is a fact the Methodology chapter must state rather than gloss. It also makes "dataset

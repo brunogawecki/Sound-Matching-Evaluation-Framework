@@ -132,6 +132,14 @@ human presets and you have discarded the reason it should win.
 The *test* corpus is the shared benchmark one, same as every family — that is what keeps the results
 table comparable. See `docs/DECISIONS.md` for the decision record.
 
+**The corpus we can actually build is not exactly G-invariant.** `scripts/build_dataset.py
+synthetic` always applies `synth.audible_sampling_ranges` (D-AUDIBLE), which for Dexed pins three
+**OP1** parameters. Naming one operator makes the prior non-invariant under operator permutation —
+a partial break of the very property this section relies on. It is 3 parameters of 103 and one
+operator of six, so the prior stays *approximately* invariant, which is why it is accepted for now;
+`FlowMatchingMLP` is the control that keeps the conclusion honest. Recorded in full, with the
+rejected alternatives, under **D-FLOW-CORPUS** in `docs/DECISIONS.md`.
+
 ## How the code maps onto this
 
 | Piece | File | Notes |
@@ -231,7 +239,9 @@ Intentional, dictated by our framework contract:
   22.05 kHz mono contract. We reproduce the *method*, not the *numbers*.
 - The equivariance claim depends on the **training corpus** being symmetry-respecting (above). A
   Param2Tok run on human presets losing to its own MLP control is not a broken result — it is
-  evidence about the premise, and should be reported as such.
+  evidence about the premise, and should be reported as such. But note the corpus we can build today
+  carries the OP1 audibility confound (above): if Param2Tok fails to separate from the MLP control
+  on the *synthetic* corpus, rule that out before concluding anything about the paper's premise.
 - `predict` returns **one** sample. Generative families have a variance the regression families do
   not, and a single seeded draw does not measure it. Best-of-N or per-target sample statistics would,
   and are deferred.
