@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Dict, Type
 
 from models.base_model import BaseModel
+from models.flow_matching import FlowMatchingMLP
 from models.inversynth2 import IS, IS2, IS2xITF
 from models.mean_parameter_baseline import MeanParameterBaseline
 from models.presetgen_vae import PresetGenVAEFlowRegressor, PresetGenVAEMLPRegressor
@@ -52,4 +53,5 @@ MODEL_REGISTRY: Dict[str, ModelRegistration] = {
     "IS": ModelRegistration(IS, "inversynth_is.pt"),
     "IS2xITF": ModelRegistration(IS2xITF, "inversynth_is2xitf.pt"),
     "IS2": ModelRegistration(IS2, "inversynth_is2.pt"),
+    "FlowMatchingMLP": ModelRegistration(FlowMatchingMLP, "flow_matching_mlp.pt"),
 }
