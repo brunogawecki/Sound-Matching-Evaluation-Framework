@@ -7,9 +7,13 @@ One paper, one package, one file per role (grows as the port lands):
   representation: continuous parameters binned into ordinal classes, categorical
   parameters kept native, plus the Gaussian-smoothed cross-entropy targets. Wraps
   (never modifies) the shared :class:`ParameterSpace`.
+- ``network.py`` -- :class:`SynthRLNetwork`: mel front-end -> strided conv reducer ->
+  transformer encoder -> DETR decoder (one query per parameter) -> per-parameter class
+  heads. Emits the flat class-logit vector the representation lays out.
 
 See ``docs/SYNTHRL_PORT.md`` for the paper->package mapping.
 """
+from models.synthrl.network import SynthRLNetwork
 from models.synthrl.representation import SynthRLRepresentation
 
-__all__ = ["SynthRLRepresentation"]
+__all__ = ["SynthRLNetwork", "SynthRLRepresentation"]
