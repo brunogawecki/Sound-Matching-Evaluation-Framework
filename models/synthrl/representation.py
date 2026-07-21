@@ -180,6 +180,23 @@ class SynthRLRepresentation:
         """Decode a flat class-logit vector straight to a synth-side dict."""
         return self.class_indices_to_synth_dict(self.class_logits_to_class_indices(class_vector))
 
+    def _smoothed_block(self, position: int, index: int) -> np.ndarray:
+        """The soft target distribution for class ``index`` of head ``position``.
+
+        Ordinal (binned) heads get a Gaussian centered on the target bin (width
+        :attr:`label_smoothing_sigma`); categorical heads (and ``sigma == 0``) get
+        a hard one-hot. Sums to 1.
+        """
+        count = self._class_counts[position]
+        spec = self._parameter_space.parameter_specs[position]
+        if spec.kind == "categorical" or self._label_smoothing_sigma == 0.0:
+            block = np.zeros(count, dtype=np.float64)
+            block[index] = 1.0
+            return block
+        positions = np.arange(count, dtype=np.float64)
+        block = np.exp(-((positions - index) ** 2) / (2.0 * self._label_smoothing_sigma ** 2))
+        return block / block.sum()
+
     def smoothed_target_vector(self, class_indices: np.ndarray) -> np.ndarray:
         """Build the flat soft-target vector for the cross-entropy parameter loss.
 
@@ -194,17 +211,21 @@ class SynthRLRepresentation:
                 f"Expected class indices of shape ({len(self._class_counts)},), got {class_indices.shape}"
             )
         target = np.zeros(self._total_class_dimension, dtype=np.float64)
-        for position, (spec, block_slice) in enumerate(
-            zip(self._parameter_space.parameter_specs, self._class_slices)
-        ):
-            index = int(class_indices[position])
-            count = self._class_counts[position]
-            if spec.kind == "categorical" or self._label_smoothing_sigma == 0.0:
-                block = np.zeros(count, dtype=np.float64)
-                block[index] = 1.0
-            else:
-                positions = np.arange(count, dtype=np.float64)
-                block = np.exp(-((positions - index) ** 2) / (2.0 * self._label_smoothing_sigma ** 2))
-                block /= block.sum()
-            target[block_slice] = block
+        for position, block_slice in enumerate(self._class_slices):
+            target[block_slice] = self._smoothed_block(position, int(class_indices[position]))
         return target
+
+    def smoothing_matrices(self) -> List[np.ndarray]:
+        """Per-head ``[count, count]`` soft-target lookup, in subset order.
+
+        Row ``c`` of head ``position`` is the soft target distribution for target
+        class ``c`` (:meth:`_smoothed_block`). The training loss gathers rows by
+        target class index, so the Gaussian smoothing is precomputed once.
+        """
+        matrices: List[np.ndarray] = []
+        for position, count in enumerate(self._class_counts):
+            matrix = np.zeros((count, count), dtype=np.float64)
+            for class_index in range(count):
+                matrix[class_index] = self._smoothed_block(position, class_index)
+            matrices.append(matrix)
+        return matrices

@@ -25,6 +25,7 @@ from models.inversynth2 import IS, IS2, IS2xITF
 from models.mean_parameter_baseline import MeanParameterBaseline
 from models.presetgen_vae import PresetGenVAEFlowRegressor, PresetGenVAEMLPRegressor
 from models.sound2synth import Sound2SynthSpectrogramRegressor
+from models.synthrl import SynthRLp
 
 
 @dataclass(frozen=True)
@@ -57,4 +58,5 @@ MODEL_REGISTRY: Dict[str, ModelRegistration] = {
     "FlowMatchingParam2Tok": ModelRegistration(
         FlowMatchingParam2Tok, "flow_matching_param2tok.pt"
     ),
+    "SynthRLp": ModelRegistration(SynthRLp, "synthrl_p.pt"),
 }

@@ -10,10 +10,15 @@ One paper, one package, one file per role (grows as the port lands):
 - ``network.py`` -- :class:`SynthRLNetwork`: mel front-end -> strided conv reducer ->
   transformer encoder -> DETR decoder (one query per parameter) -> per-parameter class
   heads. Emits the flat class-logit vector the representation lays out.
+- ``families.py`` -- the benchmark wrappers. :class:`SynthRLp` (stage 1, parameter loss
+  only) lands first; the RL stages follow.
+- ``lightning_module.py`` -- the parameter-stage training recipe (Gaussian-smoothed
+  per-parameter cross-entropy). Training-only, imported lazily by the families.
 
 See ``docs/SYNTHRL_PORT.md`` for the paper->package mapping.
 """
+from models.synthrl.families import BaseSynthRLModel, SynthRLp
 from models.synthrl.network import SynthRLNetwork
 from models.synthrl.representation import SynthRLRepresentation
 
-__all__ = ["SynthRLNetwork", "SynthRLRepresentation"]
+__all__ = ["BaseSynthRLModel", "SynthRLp", "SynthRLNetwork", "SynthRLRepresentation"]
