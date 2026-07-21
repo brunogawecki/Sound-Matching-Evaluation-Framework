@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-07-20 (D-FLOW-CORPUS / D-FLOW-PREDICT — flow-matching corpus + generative predict).
+Last updated: 2026-07-21 (D-SELFDESC — cluster Dexed feasibility spike: 1.0.1 fails on glibc, 0.9.8 confirmed working).
 
 ---
 
@@ -476,6 +476,32 @@ step and runs locally on the Mac — see the Evaluator record below.) Consequenc
 deliberately **not** re-exported from `dataset/__init__`, and `dataset/__init__` exposes the
 generation API lazily (PEP 562 `__getattr__`), so importing the Dataset never drags in the
 synth / render stack. `torch` is added as a dependency (the framework's first torch user).
+
+**Feasibility spike (2026-07-21)** — append-only; the decision above is unchanged. Tested whether the
+"setup choice, not a hard platform limit" claim actually holds, on the real PUT cluster
+(`slurm.cs.put.poznan.pl`, Ubuntu 22.04.5, glibc 2.35 / `libstdc++` `GLIBCXX_3.4.30` ceiling — no
+Apptainer/Singularity available).
+
+- **Dexed's current release (1.0.1) does not load.** Its prebuilt Linux binary requires
+  `GLIBC_2.38` / `GLIBCXX_3.4.32`, newer than the cluster ships. `dlopen` fails; JUCE's own error
+  reporting surfaces this as a misleading `attempt to map invalid URI` / `Unable to load plugin`
+  rather than a version-mismatch message, which cost most of the debugging time.
+- **Dexed 0.9.8 (Oct 2024) works.** It needs exactly `GLIBC_2.35` / `GLIBCXX_3.4.30` — an exact
+  ceiling match for this cluster. Confirmed both plugin load and actual rendering (`dawdreamer`
+  `RenderEngine` + `make_plugin_processor` + a held MIDI note) producing real, non-silent audio
+  (max amplitude 0.13 over a 3 s render), from `~/plugins/dexed/dexed-0.9.8-lnx/Dexed.vst3`.
+- **No X11/Xvfb workaround needed.** JUCE's known headless-display quirk was the original risk
+  hypothesis; it never materialized here — plain `pip install dawdreamer` plus the correct plugin
+  version was sufficient, with no virtual framebuffer in the loop.
+- **`dawdreamer` itself installs fine** on the cluster's Python 3.10 via a manylinux wheel
+  (`dawdreamer==0.8.3`).
+
+**Still open**: whether cluster-side Dexed rendering actually becomes part of the pipeline (e.g. for
+faster dataset generation) is a separate decision from this spike — this only establishes that it is
+technically possible and pins the version that works. Before relying on it: parameter-name parity
+between 0.9.8 and whatever Dexed build generated the existing Mac-side corpora is unverified (D-NAMING
+resolves names dynamically from the live plugin, so a renamed/missing parameter between builds would
+silently change the subset rather than error). Tracked as a follow-up issue.
 
 ### D-METRIC-SR — Sample rate vs. deep-embedding metrics (LOCKED 2026-06-27)
 
