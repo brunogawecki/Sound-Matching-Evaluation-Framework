@@ -149,7 +149,9 @@ def _build(synth: DexedWrapper, source, run_name: str, fresh_process: bool = Fal
     )
     if fresh_process:
         print("--- Rendering in fresh spawned processes (one per preset; D-REPRO) ---")
-    summary = DatasetBuilder(synth, render_backend=backend).build(source, run_name=run_name)
+    summary = DatasetBuilder(synth, render_backend=backend).build(
+        source, run_name=run_name, show_progress=True
+    )
     _report(summary, Path(config.DATASET_DIR) / run_name)
 
 

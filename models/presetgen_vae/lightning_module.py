@@ -1,8 +1,8 @@
 """LightningModule that trains the preset-gen-vae VAE regressor.
 
-Objective: ``reconstruction_MSE + beta * latent_loss + controls_loss``. ``beta`` is warmed up
+Objective: ``reconstruction_MSE + beta * latent_loss + parameter_loss``. ``beta`` is warmed up
 linearly (preset-gen-vae's ``LinearDynamicParam``) and scales the latent term either way, as
-the paper's ``train.py`` does; the controls term reuses :class:`ParameterLoss` unchanged.
+the paper's ``train.py`` does; the parameter term reuses :class:`ParameterLoss` unchanged.
 Extends :class:`LightningRegressor` -- only the loss step differs; step routing, optimizers,
 and the ``ParameterLoss`` logging are inherited.
 
@@ -93,16 +93,16 @@ class LightningVAERegressor(LightningRegressor):
             output.reconstruction, output.target_spectrogram, reduction="mean"
         )
         latent_loss = self._latent_loss(output)
-        controls = self.parameter_loss(output.prediction, targets)
+        parameter_losses = self.parameter_loss(output.prediction, targets)
         beta = self._current_beta(stage)
-        total = reconstruction_loss + beta * latent_loss + controls["loss"]
+        total = reconstruction_loss + beta * latent_loss + parameter_losses["loss"]
 
         log = dict(on_step=False, on_epoch=True, batch_size=audio.shape[0])
         self.log(f"{stage}_loss", total, prog_bar=True, **log)
         self.log(f"{stage}_reconstruction_loss", reconstruction_loss, prog_bar=True, **log)
         self.log(f"{stage}_latent_loss", latent_loss, **log)
-        self.log(f"{stage}_controls_loss", controls["loss"], **log)
-        self._log_parameter_losses(output.prediction, targets, controls, stage, log)
+        self.log(f"{stage}_parameter_loss", parameter_losses["loss"], **log)
+        self._log_parameter_losses(output.prediction, targets, parameter_losses, stage, log)
         if stage == "train":
             self.log("beta", beta, **log)
         return total

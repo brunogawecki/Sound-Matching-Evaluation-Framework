@@ -14,6 +14,9 @@ import config
 DATASET_DIR = Path(config.DATASET_DIR)
 CHECKPOINTS_DIR = Path(config.BASE_DIR) / "checkpoints"
 RESULTS_DIR = Path(config.BASE_DIR) / "results"
+TRAINING_CONFIGS_DIR = Path(config.BASE_DIR) / "cluster" / "training_configs"
+
+_CONFIG_SUFFIX = "_config.yaml"
 
 
 @dataclass(frozen=True)
@@ -103,6 +106,22 @@ def list_result_runs() -> List[ResultRun]:
                     )
                 )
     return runs
+
+
+def list_training_config_names() -> List[str]:
+    """Bare names of the training configs under ``cluster/training_configs/``.
+
+    Each ``<name>_config.yaml`` is offered as ``<name>`` on the Train page's config
+    dropdown; ``cluster/train.sbatch`` maps that bare name back to the file. Sorted, so
+    a newly added config shows up automatically without editing the page.
+    """
+    if not TRAINING_CONFIGS_DIR.exists():
+        return []
+    names = [
+        path.name[: -len(_CONFIG_SUFFIX)]
+        for path in TRAINING_CONFIGS_DIR.glob(f"*{_CONFIG_SUFFIX}")
+    ]
+    return sorted(names)
 
 
 def load_summary(path: Path) -> Dict:

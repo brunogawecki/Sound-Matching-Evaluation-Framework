@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-07-09 (D-MELNORM — preset-gen-vae mel-dB corpus-stat normalization).
+Last updated: 2026-07-20 (D-FLOW-CORPUS / D-FLOW-PREDICT — flow-matching corpus + generative predict).
 
 ---
 
@@ -622,7 +622,7 @@ it's an orthogonal side artifact of the same re-render already being computed.
 ### D-FRAMEWORK — Deep-model training framework: PyTorch Lightning (LOCKED 2026-06-30)
 
 **Decision**: the internal training harness shared by the deep families (discriminative — primary,
-generative VAE — primary, neural-proxy — baseline) is built on **PyTorch Lightning**, not a
+generative VAE — primary, neural-proxy — InverSynth II) is built on **PyTorch Lightning**, not a
 hand-written PyTorch loop. This fixes only the *internal* harness; it does **not** touch the
 `BaseModel` contract (`models/base_model.py`), which stays framework-agnostic — its docstring already
 states the loop-vs-`Trainer` choice "must never leak into this interface."
@@ -889,6 +889,87 @@ removed as out of scope, so the endpoints are now measured for the one VAE famil
 
 ---
 
+### D-FLOW-CORPUS — The flow-matching families train on a synthetic-uniform corpus (LOCKED 2026-07-20)
+
+**Decision**: the flow-matching families (`FlowMatchingMLP`, `FlowMatchingParam2Tok`) train on a
+**synthetic-uniform** corpus (`ParameterSpace.sample_uniform` via `scripts/build_dataset.py
+synthetic`), not the human preset corpus every other deep family trains on. The **test** corpus is
+unchanged: the shared benchmark test set, same as every family (D4, Phase 6).
+
+**Why**: the paper's claim (Hayes et al., ISMIR 2025) is that building the synth's permutation
+symmetry into the vector field helps. That only holds if the training **parameter prior is
+G-invariant** — invariant under the symmetry group being exploited. Uniform sampling over the
+subset gives this for free: permuting an operator's parameters maps one uniform draw to another
+equally likely one. Curated human presets do not — they are heavily biased toward particular
+operator roles and algorithm choices, which breaks the invariance and removes the structure
+Param2Tok is built to exploit. The paper attributes its own VAE+RealNVP collapse to exactly this
+kind of preset bias. Training Param2Tok on human presets discards the reason it should win, so the
+MLP-vs-Param2Tok comparison would measure nothing.
+
+**Known confound — the corpus is not exactly G-invariant.** "Synthetic-uniform" here means uniform
+in the D-AUDIBLE sense: `scripts/build_dataset.py synthetic` always applies
+`synth.audible_sampling_ranges`, which for Dexed pins three OP1 parameters (`OP1 OUTPUT LEVEL` and
+`OP1 EG LEVEL 1` to [0.9, 1.0], `OP1 EG RATE 1` to [0.3, 1.0]). Because the constraint names **OP1
+specifically**, the prior is *not* invariant under permuting operators: a draw with OP1 swapped for
+OP4 is not equally likely. That is a partial break of the exact property this decision exists to
+secure, sitting directly on the axis the family is meant to demonstrate. D-AUDIBLE's own
+"Limitation / future" paragraph anticipates it ("the constraint always forces OP1 specifically, so
+its degeneracy lands on OP1").
+
+**Accepted anyway**, for now: the break is 3 of 103 parameters and one operator of six — the
+algorithm, all frequencies, sustain/decay, and the other five operators stay free, so the prior is
+*approximately* invariant. That is a defensible pairing with a model the paper itself only claims to
+be *approximately* equivariant. `FlowMatchingMLP` is the control that keeps this honest: it is
+non-equivariant, so if the OP1 pin were destroying the effect, the two families should converge.
+
+The alternatives were both rejected as disproportionate for now. Sampling with no audibility
+constraint restores exact invariance but sends the D-SILENCE rejection rate to ~94% (~15
+renders/sample, over the redraw cap), so it would mean bending two LOCKED decisions for one family.
+Spreading the constraint across each algorithm's real carriers is the principled fix — it restores
+invariance *and* improves D-AUDIBLE generally — but needs a sourced DX7 algorithm→carrier table and
+is its own piece of work. Revisit if Param2Tok fails to separate from the MLP control: this
+confound is then the first thing to rule out, before concluding against the paper's premise.
+
+**Consequences**: this family deviates from the shared-training-corpus pattern deliberately, and
+that is a fact the Methodology chapter must state rather than gloss. It also makes "dataset
+construction method" a *usable comparison axis* for this family — training both flow-matching
+families across synthetic / human / hybrid corpora, all scored on the same test set, is a direct
+empirical test of the premise above. `FlowMatchingMLP` must be run alongside as the control on any
+such sweep: without it, a drop under human-trained data cannot be attributed to symmetry-breaking
+rather than to reduced training diversity.
+
+Map and port fidelity: `docs/FLOW_MATCHING_PORT.md`.
+
+---
+
+### D-FLOW-PREDICT — Generative `predict` returns one seeded sample (LOCKED 2026-07-20)
+
+**Decision**: `BaseFlowMatchingModel.predict` overrides the base single-forward-pass `predict` and
+returns **one** sample drawn by integrating the learned ODE (CFG-guided RK4, the paper's test-time
+protocol: 200 steps, guidance strength 2.0). The draw uses a **per-call seeded generator**
+(`_predict_seed`, default 0), so repeated predictions of the same clip are identical.
+
+**Why**: the base `predict` is a single forward pass, which is simply wrong for a sampler — the
+network's `forward` is `sample`, not a regression. Beyond that, two properties matter: the result
+must be **reproducible** (the Evaluator re-renders every prediction fresh-process and expects a
+deterministic input — D-EVAL / D-REPRO), and it must be **comparable** to the discriminative
+families, which emit exactly one parameter vector per target. One seeded sample gives both, and
+matches the paper's own Table 1 protocol.
+
+**Alternatives considered**:
+
+- *Best-of-N* (sample N, re-render each, keep the closest) — deferred, not rejected. It is cheap to
+  add because the Evaluator already re-renders, but it gives the generative families a re-ranking
+  budget the discriminative ones do not get, so it is a **separate reported condition**, not the
+  default.
+- *Unseeded sampling* — rejected: non-reproducible predictions break the eval contract.
+
+**Consequences**: a single draw does not measure the sampler's variance, which is a real property
+these families have and the regression families do not. Reporting per-target sample statistics is
+future work, noted in `docs/FLOW_MATCHING_PORT.md`.
+
+---
+
 ## OPEN
 
 ### D4 — Human preset source for the test set (deferred by user; importer built 2026-06-24)
@@ -922,12 +1003,17 @@ a **voice-disjoint split of that same human corpus** (Phase 6). Still the user's
 ### D-FAMILIES — Final model-family set (OPEN, stub)
 
 **What** model families enter the comparative benchmark. Working set: **discriminative** (primary) +
-**generative** (primary, VAE — preset-gen-vae lineage) + **neural-proxy** (baseline, not a primary
-family). **Evolutionary search is dropped** (user: "probably no evolutionary algorithms"); if ever
-reinstated, note it runs a per-target search locally with the live VST and does **not** fit the
-cluster training harness.
+**generative** (primary, VAE — preset-gen-vae lineage) + **neural-proxy** (InverSynth II lineage — a
+peer paper approach, **committed and built**: the staged `IS` / `IS2xITF` / `IS2` families, see
+`docs/INVERSYNTH2_PORT.md`) + **conditional-generative flow matching** (Hayes et al. ISMIR 2025 —
+**committed and built**: `FlowMatchingMLP` / `FlowMatchingParam2Tok`, the paper's own control and
+its equivariant model, see `docs/FLOW_MATCHING_PORT.md`; trains on its own corpus per
+D-FLOW-CORPUS). **Evolutionary search is dropped** (user: "probably no evolutionary
+algorithms"); if ever reinstated, note it runs a per-target search locally with the live VST and does
+**not** fit the cluster training harness.
 
-**Why it's open**: the exact generative architecture and whether the neural-proxy baseline is worth
-the build are not yet committed.
+**Why it's open**: the neural-proxy and flow-matching slots are now filled, but the final family set
+is not frozen — the exact discriminative/generative architectures still evolve and a second synth
+(Surge XT) may add families.
 
 **Blocks**: Phase 5. Resolve here before the Phase 5 family tasks start.
