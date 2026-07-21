@@ -17,16 +17,19 @@ re-applying parameters and in-process wrapper reloads; only a fresh OS process r
   * :class:`FreshProcessRenderBackend` -- one spawned worker per render at position 0 of a
     clean heap (never fork), slow but leak-free; used for test/eval corpora, where generation
     and evaluation render contexts must agree.
+  * :class:`ParallelFreshProcessRenderBackend` -- the same leak-free per-render isolation across
+    ``num_workers`` workers, with a batch API; used by the SynthRL RL stage, which renders a
+    batch of predicted patches for the reward each training step.
 
-The future Evaluator (#9) re-renders predictions through :class:`FreshProcessRenderBackend`
-so that target and re-render share an identical clean context.
+The Evaluator (#9) re-renders predictions through :class:`FreshProcessRenderBackend` so that
+target and re-render share an identical clean context.
 """
 from __future__ import annotations
 
 import multiprocessing as mp
 import os
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -86,6 +89,11 @@ def render_patch_in_fresh_process(
     return np.asarray(audio, dtype=np.float32)
 
 
+# A picklable ``(patch, settings, renderer) -> mono audio`` render worker. Top-level so
+# it survives the spawn pickle; the default is the real Dexed render above.
+RenderWorker = Callable[[Tuple[Dict[str, float], RenderSettings, str]], np.ndarray]
+
+
 class InProcessRenderBackend:
     """Render every patch through one reused wrapper (fast; the default training path).
 
@@ -139,6 +147,60 @@ class FreshProcessRenderBackend:
         self._pool.join()
 
     def __enter__(self) -> "FreshProcessRenderBackend":
+        return self
+
+    def __exit__(self, *exception) -> None:
+        self.close()
+
+
+class ParallelFreshProcessRenderBackend:
+    """The fresh-process backend widened to ``num_workers`` parallel workers (RL reward path).
+
+    Identical isolation to :class:`FreshProcessRenderBackend` -- same **spawn** start method,
+    same ``maxtasksperchild=1`` so every render lands on a clean OS heap (D-REPRO) -- but with
+    a pool of ``num_workers`` instead of one. The SynthRL RL stage renders a whole batch of
+    predicted patches per training step; :meth:`render_batch` fans that batch across the pool.
+    Each patch still gets its own single-use process, so parallelism changes only throughput,
+    not the per-render result.
+
+    ``render_worker`` is the picklable render function (defaults to the real Dexed render);
+    tests inject a VST-free stand-in. Serial ``render`` is kept for interface parity with
+    :class:`FreshProcessRenderBackend`.
+    """
+
+    process_mode = "fresh"
+
+    def __init__(
+        self,
+        settings: RenderSettings,
+        renderer: str = "dawdreamer",
+        num_workers: Optional[int] = None,
+        render_worker: RenderWorker = render_patch_in_fresh_process,
+    ):
+        self._settings = settings
+        self._renderer = renderer
+        self._render_worker = render_worker
+        self.num_workers = num_workers if num_workers is not None else (os.cpu_count() or 1)
+        self._pool = mp.get_context("spawn").Pool(
+            processes=self.num_workers, maxtasksperchild=1
+        )
+
+    def _payload(self, params: Dict[str, float]) -> Tuple[Dict[str, float], RenderSettings, str]:
+        return (params, self._settings, self._renderer)
+
+    def render(self, params: Dict[str, float]) -> np.ndarray:
+        return self._pool.apply(self._render_worker, (self._payload(params),))
+
+    def render_batch(self, params_batch: List[Dict[str, float]]) -> List[np.ndarray]:
+        """Render a list of patches in parallel, preserving input order."""
+        payloads = [self._payload(params) for params in params_batch]
+        return self._pool.map(self._render_worker, payloads)
+
+    def close(self) -> None:
+        self._pool.terminate()
+        self._pool.join()
+
+    def __enter__(self) -> "ParallelFreshProcessRenderBackend":
         return self
 
     def __exit__(self, *exception) -> None:
