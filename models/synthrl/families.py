@@ -36,7 +36,7 @@ from models.synthrl.representation import (
     DEFAULT_NUM_BINS,
     SynthRLRepresentation,
 )
-from models.synthrl.reward import DEFAULT_REWARD_WEIGHTS, RewardWeights
+from models.synthrl.reward import RewardWeights
 from models.training.checkpoint import load_checkpoint
 from models.training.config import TrainingConfig
 from models.training.loss import ParameterLoss
@@ -245,31 +245,21 @@ class SynthRLi(BaseSynthRLModel):
     it decodes class logits through the representation, no VST -- so the eval path is
     identical to SynthRL-p.
 
-    RL hyperparameters live here (family knobs, like the transformer knobs), not in the
-    shared ``TrainingConfig``: the reward weights, the per-target PER buffer capacity and
-    per-step sample count, the parameter-loss -> RL curriculum ramp length (epochs), and
-    the render-worker count.
+    RL hyperparameters come from the shared ``TrainingConfig``'s ``rl`` section
+    (:class:`~models.training.config.RLConfig`), read at build time like InverSynth II's
+    ``loss.audio_loss_weight``: the reward weights, the per-target PER buffer capacity and
+    per-step sample count, the parameter-loss -> RL curriculum ramp length (epochs), the
+    render engine, and the render-worker count. Only ``backend_factory`` (a test seam for
+    injecting a fake renderer) stays a constructor argument.
     """
 
     def __init__(
         self,
         *,
-        reward_weights: RewardWeights = DEFAULT_REWARD_WEIGHTS,
-        buffer_capacity: int = 8,
-        samples_per_target: int = 4,
-        ramp_epochs: int = 0,
-        num_render_workers: Optional[int] = None,
-        renderer: str = "dawdreamer",
         backend_factory: Optional[Callable[[], object]] = None,
         **base_kwargs: Any,
     ) -> None:
         super().__init__(**base_kwargs)
-        self._reward_weights = reward_weights
-        self._buffer_capacity = buffer_capacity
-        self._samples_per_target = samples_per_target
-        self._ramp_epochs = ramp_epochs
-        self._num_render_workers = num_render_workers
-        self._renderer = renderer
         self._backend_factory = backend_factory
 
     def _build_lightning_module(
@@ -278,18 +268,24 @@ class SynthRLi(BaseSynthRLModel):
         # Lazy: the training-only Lightning + render stack stays off the eval path.
         from models.synthrl.lightning_module import SynthRLReinforceRegressor
 
+        rl = training_config.rl
+        reward_weights = RewardWeights(
+            spectrogram=rl.reward_spectrogram_weight,
+            spectral_convergence=rl.reward_spectral_convergence_weight,
+            mfcc=rl.reward_mfcc_weight,
+        )
         return SynthRLReinforceRegressor(
             network,
             self._training_representation,
             training_config.optimizer,
             render_settings=self._training_render_settings,
             sample_rate=self._training_sample_rate,
-            renderer=self._renderer,
-            num_render_workers=self._num_render_workers,
-            reward_weights=self._reward_weights,
-            buffer_capacity=self._buffer_capacity,
-            samples_per_target=self._samples_per_target,
-            ramp_epochs=self._ramp_epochs,
+            renderer=rl.renderer,
+            num_render_workers=rl.num_render_workers,
+            reward_weights=reward_weights,
+            buffer_capacity=rl.buffer_capacity,
+            samples_per_target=rl.samples_per_target,
+            ramp_epochs=rl.ramp_epochs,
             seed=training_config.seed,
             backend_factory=self._backend_factory,
         )

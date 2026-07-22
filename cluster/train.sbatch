@@ -1,12 +1,15 @@
 #!/bin/bash
 # SLURM batch script — fit a sound-matching model on the PUT hgx partition.
-# Positional args: corpus name (under REMOTE_CORPORA_DIR), model family, and an
-# optional training config (default `full`). Submit from the repo root:
+# Positional args: corpus name (under REMOTE_CORPORA_DIR), model family, an optional
+# training config (default `full`), and an optional warm-start checkpoint for staged
+# families (SynthRLi from a SynthRLp checkpoint). Submit from the repo root:
 #
-#     sbatch -A "$SLURM_ACCOUNT" cluster/train.sbatch <corpus_name> <model_name> [config]
+#     sbatch -A "$SLURM_ACCOUNT" cluster/train.sbatch <corpus_name> <model_name> [config] [init_from]
 #
 # -A is a submission-time flag, so it's passed on the command line, not read from
 # cluster.env. [config] is `full`/`smoke` (bare names) or a literal .yaml path.
+# [init_from] is a checkpoint path relative to the remote repo (e.g. the -p run's
+# checkpoints/<jobid>/synthrl_p.pt); omit it for from-scratch families.
 #
 #SBATCH --job-name=smef-train
 #SBATCH --partition=hgx
@@ -33,6 +36,9 @@ case "$config_arg" in
   *)            TRAINING_CONFIG="cluster/training_configs/${config_arg}_config.yaml" ;;
 esac
 
+# Optional warm-start checkpoint (staged families only). Empty by default.
+INIT_FROM="${4:-}"
+
 # Defaults keep set -u happy when cluster.env omits these.
 export WANDB_API_KEY="${WANDB_API_KEY:-}"
 export WANDB_ENTITY="${WANDB_ENTITY:-}"
@@ -55,6 +61,7 @@ python scripts/fit_model.py \
     --model "$model" \
     --corpus "$REMOTE_CORPUS_DIR" \
     --config "$TRAINING_CONFIG" \
-    --run-id "$SLURM_JOB_ID"
+    --run-id "$SLURM_JOB_ID" \
+    ${INIT_FROM:+--init-from "$INIT_FROM"}
 
 echo "--- done; checkpoint under checkpoints/$SLURM_JOB_ID/ ---"

@@ -11,6 +11,7 @@ ML-side targets, no VST. Produces the checkpoint ``scripts/evaluate.py`` loads.
     python scripts/fit_model.py --model MeanParameterBaseline --corpus dataset/run_A_train
 """
 import argparse
+import inspect
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
@@ -44,6 +45,21 @@ def resolve_run_paths(model_name: str, run_id: Optional[str]) -> Tuple[Path, Pat
     return base_dir / "checkpoints" / filename, base_dir / "lightning_logs"
 
 
+def _accepts_init_from_checkpoint(model_class: type) -> bool:
+    """Whether the family takes ``init_from_checkpoint`` anywhere up its MRO.
+
+    Staged families (SynthRLi) declare it on a base ``__init__`` and forward it through
+    ``**kwargs`` on the leaf, so the leaf signature alone does not show it.
+    """
+    for klass in model_class.__mro__:
+        init = klass.__dict__.get("__init__")
+        if init is None:
+            continue
+        if "init_from_checkpoint" in inspect.signature(init).parameters:
+            return True
+    return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fit and save a sound-matching model.")
     parser.add_argument(
@@ -71,6 +87,12 @@ def main() -> None:
         help="scope this run's checkpoint and logs under checkpoints/<run-id>/ and "
              "lightning_logs/<run-id>/ (the cluster passes $SLURM_JOB_ID)",
     )
+    parser.add_argument(
+        "--init-from", default=None,
+        help="checkpoint to warm-start from, for staged families (e.g. SynthRLi from a "
+             "SynthRLp checkpoint); only families whose constructor accepts "
+             "init_from_checkpoint support it",
+    )
     args = parser.parse_args()
 
     registration = MODEL_REGISTRY[args.model]
@@ -93,6 +115,10 @@ def main() -> None:
         if issubclass(registration.model_class, BaseDeepModel)
         else {}
     )
+    if args.init_from:
+        if not _accepts_init_from_checkpoint(registration.model_class):
+            parser.error(f"{args.model} does not support --init-from (no warm-start hook)")
+        model_kwargs["init_from_checkpoint"] = args.init_from
     model = registration.model_class(**model_kwargs)
     model.fit(corpus, validation_dataset=validation_corpus, config=training_config)
 

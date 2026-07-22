@@ -129,14 +129,12 @@ def rl_config(max_epochs=12, seed=0):
             "max_epochs": max_epochs, "precision": "32-true", "accelerator": "cpu",
             "devices": 1, "log_every_n_steps": 1,
         },
+        "rl": {"buffer_capacity": 6, "samples_per_target": 4, "ramp_epochs": 0},
     }
 
 
 def make_synthrli(**overrides):
-    kwargs = dict(
-        buffer_capacity=6, samples_per_target=4, ramp_epochs=0,
-        backend_factory=_FakeRenderBackend, **TINY_KWARGS,
-    )
+    kwargs = dict(backend_factory=_FakeRenderBackend, **TINY_KWARGS)
     kwargs.update(overrides)
     return SynthRLi(**kwargs)
 

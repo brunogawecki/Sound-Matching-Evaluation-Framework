@@ -15,7 +15,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 pytest.importorskip("librosa")  # the reward reuses the librosa-backed metric callables
 
-from models.synthrl.reward import RewardWeights, sound_matching_reward
+from models.synthrl.reward import (
+    REWARD_DENOMINATOR_MAX,
+    REWARD_DENOMINATOR_MIN,
+    RewardWeights,
+    sound_matching_reward,
+)
 
 SAMPLE_RATE = 8000
 DURATION_SEC = 0.5
@@ -37,11 +42,13 @@ def test_perfect_match_beats_a_random_prediction():
     assert perfect > against_random
 
 
-def test_perfect_match_is_finite_and_large():
+def test_perfect_match_hits_the_clamped_ceiling():
     target = _tone(220.0)
     reward = sound_matching_reward(target, target, sample_rate=SAMPLE_RATE)
+    # Every distance is 0, so the denominator clamps up to REWARD_DENOMINATOR_MIN and the
+    # reward saturates at its ceiling 1 / REWARD_DENOMINATOR_MIN (10), never infinite.
     assert np.isfinite(reward)
-    assert reward > 0.0
+    assert reward == 1.0 / REWARD_DENOMINATOR_MIN
 
 
 def test_closer_prediction_scores_higher():
@@ -56,8 +63,10 @@ def test_closer_prediction_scores_higher():
 def test_silent_target_returns_the_floor():
     silent_target = np.zeros(int(DURATION_SEC * SAMPLE_RATE), dtype=np.float32)
     prediction = _tone(220.0)
-    # Spectral convergence is undefined against a silent target (nan) -> reward floors at 0.
-    assert sound_matching_reward(silent_target, prediction, sample_rate=SAMPLE_RATE) == 0.0
+    # Spectral convergence is undefined against a silent target (nan) -> reward floors at
+    # the worst clamped value, 1 / REWARD_DENOMINATOR_MAX (0.2).
+    reward = sound_matching_reward(silent_target, prediction, sample_rate=SAMPLE_RATE)
+    assert reward == 1.0 / REWARD_DENOMINATOR_MAX
 
 
 def test_weights_reweight_the_terms():

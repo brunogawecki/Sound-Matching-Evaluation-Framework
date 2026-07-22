@@ -73,6 +73,35 @@ class LossConfig:
 
 
 @dataclass(frozen=True)
+class RLConfig:
+    """Reinforcement-learning stage knobs, read only by the RL family (``SynthRLi``).
+
+    Defaults track the SynthRL repo's ``config/stage2.yaml`` + ``utils/buffer.py``:
+    per-target PER buffer capacity (``per_capacity`` = 5), one experience sampled per
+    target per update (``buffer.sample`` draws 1), the parameter-loss -> RL curriculum
+    ramp length in epochs (``rl_coef`` ramps over epochs 199->299, i.e. 100 epochs;
+    ``0`` disables the ramp for short runs), the render-worker count for the in-loop
+    reward (``None`` = ``os.cpu_count()``; the paper fixes ``synth_render_workers`` = 16),
+    the render engine, and the three reward-distance weights (paper Eq. 5 / repo
+    ``model/loss.py``: w1/w2/w3). Non-RL families ignore them all.
+    """
+    buffer_capacity: int = 5
+    samples_per_target: int = 1
+    ramp_epochs: int = 100
+    num_render_workers: Optional[int] = None
+    renderer: str = "dawdreamer"
+    reward_spectrogram_weight: float = 0.27
+    reward_spectral_convergence_weight: float = 0.7
+    reward_mfcc_weight: float = 0.03
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "RLConfig":
+        if data is None:
+            return cls()
+        return cls(**_reject_unknown_keys(cls, data))
+
+
+@dataclass(frozen=True)
 class DataConfig:
     """DataLoader + train/val split settings.
 
@@ -153,13 +182,14 @@ class TrainingConfig:
     data: DataConfig = field(default_factory=DataConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     logger: LoggerConfig = field(default_factory=LoggerConfig)
+    rl: RLConfig = field(default_factory=RLConfig)
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "TrainingConfig":
         """Build a config from a nested ``dict`` (the shape ``fit`` receives).
 
         Top-level keys: ``seed``, ``optimizer``, ``loss``, ``data``, ``trainer``,
-        ``logger``. Unknown keys at any level raise ``ValueError``.
+        ``logger``, ``rl``. Unknown keys at any level raise ``ValueError``.
         """
         data = dict(data or {})
         _reject_unknown_keys(cls, data)
@@ -170,6 +200,7 @@ class TrainingConfig:
             data=DataConfig.from_dict(data.get("data")),
             trainer=TrainerConfig.from_dict(data.get("trainer")),
             logger=LoggerConfig.from_dict(data.get("logger")),
+            rl=RLConfig.from_dict(data.get("rl")),
         )
 
     @classmethod
