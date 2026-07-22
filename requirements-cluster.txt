@@ -2,9 +2,9 @@
 # (issue #20, finalizing the stub left by the #22 training harness).
 #
 # This is the COMPLETE set to install on the GPU cluster: the base scientific
-# stack MINUS the VST/render/eval/dashboard packages, PLUS the training-only libs.
-# Training reads self-describing corpora and never touches a live plugin
-# (D-SELFDESC / D-EVAL), so none of dawdreamer / pyloudnorm / streamlit is needed.
+# stack MINUS the eval/dashboard packages, PLUS the training-only libs. Training
+# is VST-free for every family except SynthRLi (D-RL-RENDER) — hence dawdreamer.
+# pyloudnorm / streamlit stay out: eval + dashboard only, both local (D-EVAL).
 # librosa IS needed: the preset-gen-vae families build their mel filterbank with
 # librosa.filters.mel at fit time (models/presetgen_vae/network.py). PyTorch
 # Lightning is imported only under models/training/; pyyaml only by
@@ -22,6 +22,10 @@ pandas==3.0.3
 python-dotenv==1.2.2
 torch==2.12.1
 librosa==0.11.0  # mel filterbank for the preset-gen-vae front-end (fit-time)
+
+# In-training rendering — SynthRLi only (D-RL-RENDER). Version verified by the
+# D-SELFDESC spike; also needs Dexed 0.9.8 on the node (see cluster/README.md).
+dawdreamer==0.8.3
 
 # Training-only (models/training/): Lightning harness + YAML config parsing.
 lightning==2.6.5

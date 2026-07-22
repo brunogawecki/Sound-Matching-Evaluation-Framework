@@ -44,6 +44,21 @@ export WANDB_API_KEY="${WANDB_API_KEY:-}"
 export WANDB_ENTITY="${WANDB_ENTITY:-}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 
+# Dexed — SynthRLi only (D-RL-RENDER). Checked up front: unset, config.py falls back to a
+# macOS path and the render pool dies on JUCE's misleading "invalid URI".
+if [ -n "${DEXED_PATH:-}" ]; then
+  export DEXED_PATH
+fi
+case "$model" in
+  SynthRLi)
+    if [ ! -e "${DEXED_PATH:-}" ]; then
+      echo "$model renders during training and needs Dexed 0.9.8 on this node." >&2
+      echo "Set DEXED_PATH in cluster/cluster.env (got: '${DEXED_PATH:-unset}')." >&2
+      exit 1
+    fi
+    ;;
+esac
+
 cd "$REMOTE_REPO_DIR"
 
 # A batch shell has no `conda init`, so source it before activating.
