@@ -1,0 +1,64 @@
+# Full training config for SynthRL-i -- stage 2 of the SynthRL port (Shin & Lee, IJCAI-25;
+# github.com/argaaw/SynthRL). Hyperparameters follow the repo's `config/stage2.yaml`. Stage 2
+# fine-tunes the stage-1 network with REINFORCE against a re-rendered audio-similarity reward,
+# blending the parameter loss out over a linear ramp. It warm-starts from a SynthRL-p run:
+#
+#     sbatch -A "$SLURM_ACCOUNT" cluster/train.sbatch <corpus> SynthRLi synthrl_i \
+#         checkpoints/<synthrl_p_jobid>/synthrl_p.pt
+#
+# This stage renders with the real Dexed inside the training loop (one fresh process per patch,
+# batch_size patches per step), so it needs the plugin on the compute node and is far slower
+# per epoch than stage 1. Budget wall-clock accordingly -- the 12h #SBATCH --time in
+# train.sbatch will not cover 200 epochs on a large corpus.
+#
+# Deviations from the paper, dictated by what models/training/ supports:
+# - Scheduler: as in synthrl_p_config.yaml, plain cosine stands in for the repo's
+#   CosineAnnealingWarmRestarts + 10-epoch linear warmup.
+# - Precision: 32-true, not the cluster's usual bf16-mixed. The policy log-probability is a
+#   sum over 103 categorical heads and the REINFORCE gradient flows through it; bf16's ~3
+#   decimal digits of mantissa are not enough to keep that sum accurate. The repo trains fp32.
+# - Render workers: 8, bounded by #SBATCH --cpus-per-task=8. The repo sets
+#   `synth_render_workers: 16`. Throughput only -- each patch still gets its own fresh
+#   process, so the per-render result is unchanged (D-REPRO).
+# - Reward audio: raw, not peak-normalized. The repo normalizes both the target and the
+#   render before scoring, making its reward level-invariant; the panel here compares raw
+#   audio (D-METRIC-NORM), so level error is part of the reward. See docs/SYNTHRL_PORT.md.
+# - No early stopping: val_reward is a noisy single-sample estimate off a stochastic policy,
+#   and the repo does not early-stop either.
+seed: 0
+
+optimizer:
+  name: adamw
+  learning_rate: 2.0e-5     # repo stage2.yaml: optim.initial_lr (10x below stage 1)
+  weight_decay: 1.0e-4      # repo stage2.yaml: optim.weight_decay
+  scheduler: cosine
+  scheduler_max_epochs: 200 # matches trainer.max_epochs below
+
+rl:
+  buffer_capacity: 5        # repo stage2.yaml: loss.per_capacity
+  samples_per_target: 1     # repo utils/buffer.py: sample() draws one experience per target
+  prefill_epochs: 5         # repo finetune.py: per_capacity gradient-free epochs before training
+  ramp_epochs: 100          # repo stage2.yaml: rl_coef ramps 0->1 over epochs 199->299
+  num_render_workers: 8     # repo: 16; capped by --cpus-per-task (see header)
+  renderer: dawdreamer
+  reward_spectrogram_weight: 0.27           # paper Eq. 5 w1
+  reward_spectral_convergence_weight: 0.7   # paper Eq. 5 w2
+  reward_mfcc_weight: 0.03                  # paper Eq. 5 w3
+
+data:
+  batch_size: 32            # repo stage1.yaml: train.minibatch_size (stage 2 inherits it)
+  num_workers: 2            # kept low: the render pool above owns most of the 8 CPUs
+  pin_memory: true
+  persistent_workers: true
+  val_fraction: 0.1         # seeded sample-level split (repo: 5-fold CV; see header)
+
+trainer:
+  max_epochs: 200             # paper 4.2: 100 ramp epochs + 100 RL-only epochs
+  precision: 32-true          # see header
+  accelerator: gpu            # fail loud if no GPU is visible (we requested --gres=gpu:1)
+  devices: 1
+  strategy: auto
+  log_every_n_steps: 50
+
+logger:
+  wandb: true
