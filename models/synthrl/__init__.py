@@ -10,15 +10,17 @@ One paper, one package, one file per role (grows as the port lands):
 - ``network.py`` -- :class:`SynthRLNetwork`: mel front-end -> strided conv reducer ->
   transformer encoder -> DETR decoder (one query per parameter) -> per-parameter class
   heads. Emits the flat class-logit vector the representation lays out.
-- ``families.py`` -- the benchmark wrappers. :class:`SynthRLp` (stage 1, parameter loss
-  only) lands first; the RL stages follow.
-- ``lightning_module.py`` -- the parameter-stage training recipe (Gaussian-smoothed
-  per-parameter cross-entropy). Training-only, imported lazily by the families.
+- ``families.py`` -- the benchmark wrappers. :class:`SynthRLp` (stage 1, parameter loss)
+  and :class:`SynthRLi` (stage 2, in-domain RL, warm-started from ``-p``).
+- ``lightning_module.py`` -- the two training recipes (Gaussian-smoothed per-parameter
+  cross-entropy; REINFORCE + reward PER curriculum). Training-only, imported lazily.
+- ``reward.py`` / ``reward_buffer.py`` -- the RL stage's audio-similarity reward and its
+  per-target reward-based prioritized replay buffer.
 
 See ``docs/SYNTHRL_PORT.md`` for the paper->package mapping.
 """
-from models.synthrl.families import BaseSynthRLModel, SynthRLp
+from models.synthrl.families import BaseSynthRLModel, SynthRLi, SynthRLp
 from models.synthrl.network import SynthRLNetwork
 from models.synthrl.representation import SynthRLRepresentation
 
-__all__ = ["BaseSynthRLModel", "SynthRLp", "SynthRLNetwork", "SynthRLRepresentation"]
+__all__ = ["BaseSynthRLModel", "SynthRLp", "SynthRLi", "SynthRLNetwork", "SynthRLRepresentation"]

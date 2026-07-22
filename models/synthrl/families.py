@@ -12,17 +12,21 @@ than ``ParameterSpace.ml_vector_to_synth_dict``. And the parameter loss is the p
 Gaussian-smoothed per-parameter cross-entropy, so the injected :class:`ParameterLoss` is
 ignored (as in the flow-matching family).
 
-This step lands **SynthRL-p** only -- the RL-free stage, fully evaluable through the
-registry + ``Evaluator``. SynthRL-i / SynthRL-o (RL) arrive in later steps.
+Two stages land here: **SynthRL-p** (the RL-free parameter stage) and **SynthRL-i** (the
+in-domain RL stage, warm-started from a SynthRL-p checkpoint). SynthRL-o (out-of-domain
+RL) is deferred, gated on D-FAMILIES. Both stages are fully evaluable through the registry
++ ``Evaluator`` -- ``predict`` is identical and VST-free for both.
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
 import torch
 from torch import nn
 
+from dataset.render_backends import RenderSettings
 from dataset.torch_dataset import RenderedCorpusDataset
 from models.base_deep_model import BaseDeepModel
 from models.presetgen_vae.network import measure_corpus_mel_db_range
@@ -32,6 +36,8 @@ from models.synthrl.representation import (
     DEFAULT_NUM_BINS,
     SynthRLRepresentation,
 )
+from models.synthrl.reward import DEFAULT_REWARD_WEIGHTS, RewardWeights
+from models.training.checkpoint import load_checkpoint
 from models.training.config import TrainingConfig
 from models.training.loss import ParameterLoss
 from synth.parameter_space import ParameterSpace
@@ -68,8 +74,10 @@ class BaseSynthRLModel(BaseDeepModel):
         feedforward_dim: int = 1024,
         dropout: float = 0.1,
         default_root_dir: str = "lightning_logs",
+        init_from_checkpoint: Optional[str] = None,
     ) -> None:
         super().__init__(default_root_dir=default_root_dir)
+        self._init_from_checkpoint = init_from_checkpoint
         self._num_bins = num_bins
         self._label_smoothing_sigma = label_smoothing_sigma
         self._n_fft = n_fft
@@ -89,12 +97,32 @@ class BaseSynthRLModel(BaseDeepModel):
         self._dropout = dropout
         # Built in _build_architecture_hparams, consumed by _build_lightning_module (same fit call).
         self._training_representation: Optional[SynthRLRepresentation] = None
+        self._training_render_settings: Optional[RenderSettings] = None
+        self._training_sample_rate: Optional[int] = None
 
     @staticmethod
     def _corpus_sample_rate(train_dataset: RenderedCorpusDataset) -> int:
         """Read the render sample rate from the corpus's ``run_summary.json``."""
         with open(train_dataset.corpus_dir / "run_summary.json") as summary_file:
             return int(json.load(summary_file)["sample_rate"])
+
+    @staticmethod
+    def _corpus_render_settings(train_dataset: RenderedCorpusDataset) -> RenderSettings:
+        """Read the corpus's render contract (for re-rendering in the RL stage)."""
+        with open(train_dataset.corpus_dir / "run_summary.json") as summary_file:
+            return RenderSettings(**json.load(summary_file)["render_settings"])
+
+    def _warm_start_network(self, network: nn.Module, architecture_hparams: Dict[str, Any]) -> None:
+        """Load a prior SynthRL checkpoint's weights before training, if configured.
+
+        SynthRL-i warm-starts from a SynthRL-p checkpoint. The network is byte-identical
+        when the two stages share the corpus and discretization knobs, so ``load_state_dict``
+        (strict) both restores the weights and guards against a mismatched checkpoint.
+        """
+        if self._init_from_checkpoint is None:
+            return
+        payload = load_checkpoint(Path(self._init_from_checkpoint))
+        network.load_state_dict(payload["state_dict"])
 
     def _build_architecture_hparams(
         self, train_dataset: RenderedCorpusDataset, parameter_space: ParameterSpace
@@ -107,6 +135,9 @@ class BaseSynthRLModel(BaseDeepModel):
 
         example_audio, _ = train_dataset[0]
         sample_rate = self._corpus_sample_rate(train_dataset)
+        # Stashed for the RL stage's in-loop re-rendering (ignored by the parameter stage).
+        self._training_sample_rate = sample_rate
+        self._training_render_settings = self._corpus_render_settings(train_dataset)
         min_db, max_db = measure_corpus_mel_db_range(
             train_dataset, sample_rate=sample_rate, n_fft=self._n_fft,
             hop_length=self._hop_length, win_length=self._win_length, n_mels=self._n_mels,
@@ -200,4 +231,65 @@ class SynthRLp(BaseSynthRLModel):
 
         return SynthRLParameterRegressor(
             network, self._training_representation, training_config.optimizer
+        )
+
+
+class SynthRLi(BaseSynthRLModel):
+    """The paper's ``SynthRL-i`` model (stage 2): in-domain reinforcement learning.
+
+    Warm-starts from a SynthRL-p checkpoint (``init_from_checkpoint``) and fine-tunes the
+    same network with REINFORCE against a re-rendered audio-similarity reward
+    (:class:`SynthRLReinforceRegressor`). Training re-renders with the real Dexed via the
+    parallel fresh-process backend, so a SynthRL-i *training* run needs the plugin (a
+    documented, training-only deviation from D-SELFDESC). ``predict`` is unchanged --
+    it decodes class logits through the representation, no VST -- so the eval path is
+    identical to SynthRL-p.
+
+    RL hyperparameters live here (family knobs, like the transformer knobs), not in the
+    shared ``TrainingConfig``: the reward weights, the per-target PER buffer capacity and
+    per-step sample count, the parameter-loss -> RL curriculum ramp length (epochs), and
+    the render-worker count.
+    """
+
+    def __init__(
+        self,
+        *,
+        reward_weights: RewardWeights = DEFAULT_REWARD_WEIGHTS,
+        buffer_capacity: int = 8,
+        samples_per_target: int = 4,
+        ramp_epochs: int = 0,
+        num_render_workers: Optional[int] = None,
+        renderer: str = "dawdreamer",
+        backend_factory: Optional[Callable[[], object]] = None,
+        **base_kwargs: Any,
+    ) -> None:
+        super().__init__(**base_kwargs)
+        self._reward_weights = reward_weights
+        self._buffer_capacity = buffer_capacity
+        self._samples_per_target = samples_per_target
+        self._ramp_epochs = ramp_epochs
+        self._num_render_workers = num_render_workers
+        self._renderer = renderer
+        self._backend_factory = backend_factory
+
+    def _build_lightning_module(
+        self, network: nn.Module, parameter_loss: ParameterLoss, training_config: TrainingConfig
+    ):
+        # Lazy: the training-only Lightning + render stack stays off the eval path.
+        from models.synthrl.lightning_module import SynthRLReinforceRegressor
+
+        return SynthRLReinforceRegressor(
+            network,
+            self._training_representation,
+            training_config.optimizer,
+            render_settings=self._training_render_settings,
+            sample_rate=self._training_sample_rate,
+            renderer=self._renderer,
+            num_render_workers=self._num_render_workers,
+            reward_weights=self._reward_weights,
+            buffer_capacity=self._buffer_capacity,
+            samples_per_target=self._samples_per_target,
+            ramp_epochs=self._ramp_epochs,
+            seed=training_config.seed,
+            backend_factory=self._backend_factory,
         )

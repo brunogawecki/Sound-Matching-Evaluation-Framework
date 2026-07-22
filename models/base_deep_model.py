@@ -98,6 +98,7 @@ class BaseDeepModel(BaseModel):
         parameter_space = train_dataset.parameter_space
         architecture_hparams = self._build_architecture_hparams(train_dataset, parameter_space)
         network = self._build_network(architecture_hparams)
+        self._warm_start_network(network, architecture_hparams)
         parameter_loss = ParameterLoss(parameter_space, training_config.loss)
         lightning_module = self._build_lightning_module(network, parameter_loss, training_config)
         data_module = CorpusDataModule(
@@ -126,6 +127,16 @@ class BaseDeepModel(BaseModel):
         if best_path:
             network.load_state_dict(network_state_dict_from_lightning_checkpoint(best_path))
         self._set_trained_network(network, architecture_hparams, parameter_space)
+
+    def _warm_start_network(
+        self, network: nn.Module, architecture_hparams: Dict[str, Any]
+    ) -> None:
+        """Optionally initialize the freshly-built network before training (default: no-op).
+
+        Called by :meth:`fit` between building the untrained network and the trainer run.
+        Families that train in stages override this to load a compatible ``state_dict`` --
+        e.g. SynthRL-i warm-starting from a SynthRL-p checkpoint.
+        """
 
     def _set_trained_network(
         self,
