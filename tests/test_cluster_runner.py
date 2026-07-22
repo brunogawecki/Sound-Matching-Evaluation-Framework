@@ -150,6 +150,23 @@ def test_build_sbatch_command_shape():
     )
 
 
+def test_build_sbatch_command_appends_the_warm_start_checkpoint():
+    command = cluster_runner.build_sbatch_command(
+        "/home/me/repo", "acct123", "corpus_a", "SynthRLi", "synthrl_i",
+        "checkpoints/98765/synthrl_p.pt",
+    )
+    assert command.endswith(
+        "cluster/train.sbatch corpus_a SynthRLi synthrl_i checkpoints/98765/synthrl_p.pt"
+    )
+
+
+def test_build_sbatch_command_omits_a_blank_warm_start():
+    command = cluster_runner.build_sbatch_command(
+        "/home/me/repo", "acct123", "corpus_a", "SynthRLp", "synthrl_p", ""
+    )
+    assert command.endswith("cluster/train.sbatch corpus_a SynthRLp synthrl_p")
+
+
 def test_preview_submit_commands_match_what_submit_runs(monkeypatch):
     _stub_cluster_env(monkeypatch)
     sync, sbatch = cluster_runner.preview_submit_commands(
@@ -239,6 +256,41 @@ def test_submit_job_success_appends_and_returns_job(tmp_path, monkeypatch):
     assert job.config == "smoke"
     assert cluster_runner.load_jobs() == [job]
     assert len(capture_calls) == 3  # guard (test -d), git sync, sbatch
+
+
+def test_submit_job_forwards_and_records_the_warm_start(tmp_path, monkeypatch):
+    _stub_cluster_env(monkeypatch)
+    monkeypatch.setattr(cluster_runner, "JOBS_REGISTRY_PATH", tmp_path / "jobs.json")
+    sbatch_commands = []
+
+    def fake_run_capture(argv):
+        if "test -d" in argv[-1]:
+            return 0, ""
+        if "git pull" in argv[-1]:
+            return 0, ""
+        sbatch_commands.append(argv[-1])
+        return 0, "Submitted batch job 98765\n"
+
+    monkeypatch.setattr(command_runner, "run_capture", fake_run_capture)
+
+    job = cluster_runner.submit_job(
+        "corpus_a", "SynthRLi", "synthrl_i", _FakePlaceholder(),
+        init_from="checkpoints/111/synthrl_p.pt",
+    )
+
+    assert sbatch_commands[0].endswith("synthrl_i checkpoints/111/synthrl_p.pt")
+    assert job.init_from == "checkpoints/111/synthrl_p.pt"
+    assert cluster_runner.load_jobs() == [job]
+
+
+def test_load_jobs_defaults_warm_start_for_jobs_written_before_the_field(tmp_path, monkeypatch):
+    jobs_path = tmp_path / "jobs.json"
+    jobs_path.write_text(json.dumps([{
+        "job_id": "1", "corpus": "c", "model": "SynthRLp", "config": "synthrl_p",
+        "submitted_at": "2026-01-01T00:00:00+00:00",
+    }]))
+    monkeypatch.setattr(cluster_runner, "JOBS_REGISTRY_PATH", jobs_path)
+    assert cluster_runner.load_jobs()[0].init_from == ""
 
 
 def test_submit_job_missing_corpus_raises_and_does_not_register(tmp_path, monkeypatch):

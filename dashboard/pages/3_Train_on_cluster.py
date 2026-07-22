@@ -8,7 +8,7 @@ import streamlit as st
 import cluster_runner
 import command_runner
 import discovery
-from script_specs import MODEL_CHOICES
+from script_specs import MODEL_CHOICES, WARM_START_MODELS
 
 _TERMINAL_STATES = ("COMPLETED",)
 _RUNNING_STATES = ("PENDING", "RUNNING", "UNKNOWN")
@@ -86,6 +86,8 @@ def _live_job_fragment(job: cluster_runner.Job) -> None:
 
 
 def _render_job_status(job: cluster_runner.Job) -> None:
+    if job.init_from:
+        st.caption(f"Warm-started from `{job.init_from}`")
     # Serve a cached terminal state statically (no SSH); else poll via the fragment.
     cached_state = st.session_state.get(_cached_state_key(job.job_id))
     if cached_state is not None and cached_state not in _RUNNING_STATES:
@@ -159,6 +161,21 @@ if config_choice == "custom":
 else:
     config_arg = config_choice
 
+# Staged families continue from an earlier job's export (train.sbatch's 4th arg).
+init_from = ""
+if model_name in WARM_START_MODELS:
+    init_from = st.text_input(
+        "Warm-start checkpoint (optional)",
+        value="",
+        help="Path on the cluster, relative to the repo root — e.g. "
+             "`checkpoints/<job id>/synthrl_p.pt`. Job ids are in Submitted jobs below.",
+    )
+    if not init_from:
+        st.warning(
+            f"No checkpoint given, so {model_name} starts from random weights instead of "
+            "continuing a stage-1 run."
+        )
+
 st.caption(
     f"Target: `{cluster_env['CLUSTER_SSH']}:{cluster_env['REMOTE_REPO_DIR']}` "
     f"· account `{cluster_env['SLURM_ACCOUNT']}`"
@@ -193,7 +210,8 @@ if remote_branch is not None:
 if config_arg:
     st.caption("Commands sent to the cluster on Train (visual only, not run here):")
     for command in cluster_runner.preview_submit_commands(
-        corpus.name, model_name, config_arg, checkout_branch=checkout_branch
+        corpus.name, model_name, config_arg,
+        checkout_branch=checkout_branch, init_from=init_from,
     ):
         st.code(command, language="bash")
 
@@ -202,7 +220,8 @@ if st.button("Train", type="primary", disabled=(config_choice == "custom" and no
     with st.spinner("Submitting…"):
         try:
             job = cluster_runner.submit_job(
-                corpus.name, model_name, config_arg, placeholder, checkout_branch=checkout_branch
+                corpus.name, model_name, config_arg, placeholder,
+                checkout_branch=checkout_branch, init_from=init_from,
             )
         except (RuntimeError, KeyError) as exc:
             st.error(str(exc))

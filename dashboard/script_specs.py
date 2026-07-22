@@ -161,6 +161,10 @@ MODEL_CHOICES = (
     "SynthRLi",
 )
 
+# Staged families that accept a warm-start checkpoint (fit_model.py --init-from,
+# train.sbatch's 4th arg). Same mirror-don't-import rule as MODEL_CHOICES.
+WARM_START_MODELS = frozenset({"SynthRLi"})
+
 EVALUATE = ScriptSpec(
     key="evaluate",
     script="scripts/evaluate.py",

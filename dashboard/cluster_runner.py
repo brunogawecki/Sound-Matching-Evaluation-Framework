@@ -100,13 +100,21 @@ def build_sbatch_command(
     corpus_name: str,
     model_name: str,
     config_arg: str,
+    init_from: str = "",
 ) -> str:
-    """The remote shell command that submits the training job via ``sbatch``."""
-    return (
+    """The remote shell command that submits the training job via ``sbatch``.
+
+    ``init_from`` is train.sbatch's optional 4th arg: a warm-start checkpoint path
+    relative to the remote repo, for staged families (SynthRLi from SynthRLp).
+    """
+    command = (
         f"cd {shlex.quote(remote_repo_dir)} && "
         f"sbatch -A {shlex.quote(slurm_account)} cluster/train.sbatch "
         f"{shlex.quote(corpus_name)} {shlex.quote(model_name)} {shlex.quote(config_arg)}"
     )
+    if init_from:
+        command += f" {shlex.quote(init_from)}"
+    return command
 
 
 def preview_submit_commands(
@@ -114,6 +122,7 @@ def preview_submit_commands(
     model_name: str,
     config_arg: str,
     checkout_branch: Optional[str] = None,
+    init_from: str = "",
 ) -> List[str]:
     """The exact ``ssh`` commands :func:`submit_job` will run, for display only.
 
@@ -126,7 +135,7 @@ def preview_submit_commands(
     remote_repo_dir = cluster_env["REMOTE_REPO_DIR"]
     sync_command = build_sync_command(remote_repo_dir, checkout_branch)
     sbatch_command = build_sbatch_command(
-        remote_repo_dir, slurm_account, corpus_name, model_name, config_arg
+        remote_repo_dir, slurm_account, corpus_name, model_name, config_arg, init_from
     )
     return [
         shlex.join(["ssh", ssh_target, sync_command]),
@@ -141,6 +150,7 @@ class Job:
     model: str
     config: str
     submitted_at: str  # ISO 8601, UTC
+    init_from: str = ""  # warm-start checkpoint; defaulted so pre-existing jobs.json loads
 
 
 def load_jobs() -> List[Job]:
@@ -187,12 +197,14 @@ def submit_job(
     config_arg: str,
     placeholder,
     checkout_branch: Optional[str] = None,
+    init_from: str = "",
 ) -> Job:
     """Sync the remote checkout and ``sbatch`` a training job for an already-pushed corpus.
 
     Guards that the corpus is on the cluster (push it first with :func:`push_corpus`).
     With ``checkout_branch`` set, hard-syncs to that pushed branch (``git fetch`` +
-    ``checkout -B``); otherwise ``git pull``s. Streams output into ``placeholder``.
+    ``checkout -B``); otherwise ``git pull``s. ``init_from`` warm-starts a staged
+    family from an earlier job's checkpoint. Streams output into ``placeholder``.
     Raises ``RuntimeError`` on any failing step.
     """
     cluster_env = load_cluster_env()
@@ -212,7 +224,7 @@ def submit_job(
         raise RuntimeError(f"remote git sync exited {sync_code}:\n{sync_output}")
 
     sbatch_command = build_sbatch_command(
-        remote_repo_dir, slurm_account, corpus_name, model_name, config_arg
+        remote_repo_dir, slurm_account, corpus_name, model_name, config_arg, init_from
     )
     sbatch_code, sbatch_output = command_runner.run_capture(["ssh", ssh_target, sbatch_command])
     placeholder.code(sbatch_output or "(no output)")
@@ -229,6 +241,7 @@ def submit_job(
         model=model_name,
         config=config_arg,
         submitted_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        init_from=init_from,
     )
     append_job(job)
     return job
