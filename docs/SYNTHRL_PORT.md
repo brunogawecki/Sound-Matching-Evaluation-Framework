@@ -6,7 +6,7 @@ package — one paper, one package, one file per role: `representation.py` (the 
 `network.py` (the transformer), `families.py` (the registered model wrappers),
 `lightning_module.py` (the training-only loss recipes), and `reward.py` / `reward_buffer.py` (the
 RL reward and its replay buffer). Design rationale (D1, D2, D-MELNORM, D-FRAMEWORK, D-SELFDESC,
-D-EVAL, D-REPRO, D-METRIC-NORM) lives in `docs/DECISIONS.md`; this doc is just the map.
+D-EVAL, D-REPRO, D-METRIC-NORM, D-RL-RENDER) lives in `docs/DECISIONS.md`; this doc is just the map.
 
 SynthRL fills the benchmark's **reinforcement-learning** family slot. It is a peer-paper approach
 alongside the discriminative (Sound2Synth), generative (preset-gen-vae), neural-proxy
@@ -142,10 +142,23 @@ The RL stage renders every sampled patch inside the training loop through
 to a worker pool. So a **`SynthRLi` training run is not VST-free**, a deliberate deviation from
 D-SELFDESC. It is training-only: `predict` decodes class scores through the representation with no
 synth involved, so the eval path is identical for both families and unchanged from every other
-family in the benchmark.
+family in the benchmark. **D-RL-RENDER** records the decision and the alternatives.
 
-Practical consequence: stage 2 is far slower per epoch than stage 1 (one fresh VST process per
-patch per step, plus `prefill_epochs` full passes up front). Budget wall-clock accordingly.
+Practical consequences:
+
+- Stage 2 is far slower per epoch than stage 1 (one fresh VST process per patch per step, plus
+  `prefill_epochs` full passes up front). Budget wall-clock accordingly, and set
+  `rl.num_render_workers` to the job's `--cpus-per-task`.
+- The training environment needs **Dexed 0.9.8** — the version the D-SELFDESC cluster spike pinned.
+  Parameter-name parity between that build and the one that rendered the corpus is still unverified,
+  and it matters here: the backend sets patches by name, so a renamed parameter would silently
+  change what the reward scores.
+
+**Future optimization, not built:** reusing one in-process synth with a state reset between patches
+would be roughly two orders of magnitude faster per render. It is rejected for now because it
+reintroduces the context leakage D-REPRO excludes, which would leave the reward and the reported
+metric measuring different audio. Revisit only if stage 2 proves render-bound, and only with the
+leakage measured.
 
 ## How the code maps onto this
 

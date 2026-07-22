@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-07-21 (D-SELFDESC — cluster Dexed feasibility spike: 1.0.1 fails on glibc, 0.9.8 confirmed working).
+Last updated: 2026-07-22 (D-RL-RENDER — the SynthRL RL stage renders with the live VST in the training loop; D-FAMILIES gains the RL slot).
 
 ---
 
@@ -1006,6 +1006,66 @@ future work, noted in `docs/FLOW_MATCHING_PORT.md`.
 
 ---
 
+### D-RL-RENDER — The RL stage renders with the live VST inside the training loop (LOCKED 2026-07-22)
+
+**Decision**: `SynthRLi` (the SynthRL in-domain RL stage) renders every sampled patch with the real
+Dexed plugin **during training**, through `ParallelFreshProcessRenderBackend` — the D-REPRO
+fresh-process-per-render isolation widened to a worker pool (`rl.num_render_workers`). This is a
+deliberate, **scoped** deviation from D-SELFDESC: a `SynthRLi` *training* environment needs the VST.
+Nothing else moves. The renderer import is training-only and lazy (D-FRAMEWORK), `predict` decodes
+class scores with no synth involved, and the corpus/eval path is unchanged for every family
+including this one.
+
+**Why**: the reward *is* the render. SynthRL's contribution is that the training signal comes from
+audio similarity between the target and the render of the sampled action, which is what removes the
+need for ground-truth parameters and lets the same recipe fine-tune on out-of-domain sounds. There
+is no version of this family that does not render in the loop. Feasibility is not a guess: the
+D-SELFDESC feasibility spike established that Dexed **0.9.8** loads and renders real audio on the
+PUT cluster.
+
+**Why fresh-process-per-render, not a reused in-process synth**: it keeps the RL reward and the
+reported metric measuring the same thing. The Evaluator re-renders every prediction fresh-process at
+sequence position 0 (D-EVAL / D-REPRO); if training rendered in a reused context, the reward would
+be computed on context-leaked audio (D-REPRO quantifies this for LFO / S&H / noise voices) while the
+results table scored clean audio. Widening to N workers changes throughput only — each patch still
+gets its own single-use process (`spawn`, `maxtasksperchild=1`), so a parallel render equals a
+serial one.
+
+**Alternatives considered**:
+
+- *In-process renderer reuse with a state reset between patches* — roughly two orders of magnitude
+  faster per render, and the obvious optimization if stage 2 turns out to be render-bound. Rejected
+  for now: it reintroduces exactly the context leakage D-REPRO exists to exclude, and it would
+  desynchronize the reward from the evaluation contract. Documented as future work in
+  `docs/SYNTHRL_PORT.md`, not built.
+- *A differentiable synthesizer proxy in place of the real render* (the InverSynth II route) —
+  rejected. It replaces the paper's own mechanism with a second approximation layer, and that
+  approach is already represented in the benchmark as its own family (`IS2xITF` / `IS2`), so folding
+  it into SynthRL would blur two families into one.
+- *Precomputing / caching renders* — not applicable. The policy samples fresh actions every step, so
+  there is nothing to hit in a cache.
+
+**Consequences**:
+
+- The cluster training environment for this one family must install Dexed 0.9.8 + `dawdreamer`
+  (version pinned by the D-SELFDESC spike — 1.0.1 does not load there). Every other family still
+  trains VST-free.
+- Stage 2 wall-clock is dominated by rendering. `rl.num_render_workers` should be set to match the
+  job's `--cpus-per-task`, and `rl.prefill_epochs` (default 5) costs that many gradient-free full
+  passes over the training set before the first gradient step.
+- **Parameter-name parity between Dexed builds now bites.** The corpus's `ParameterSpace` is rebuilt
+  offline from `run_summary.json`, but the RL backend sets patches **by name** (D-NAMING) on the
+  cluster's 0.9.8 build, while the existing corpora were rendered by the Mac build. The D-SELFDESC
+  spike already flagged this parity as unverified; for this family it stops being cosmetic, because
+  a renamed or missing parameter would silently change the patch the reward is computed on. Verify
+  before the first stage 2 cluster run.
+- `SynthRL-o` (stage 3, out-of-domain) reuses this machinery unchanged — only the corpus and synth
+  differ — so this decision does not need revisiting when D-FAMILIES resolves.
+
+Map and port fidelity: `docs/SYNTHRL_PORT.md`.
+
+---
+
 ## OPEN
 
 ### D4 — Human preset source for the test set (deferred by user; importer built 2026-06-24)
@@ -1044,12 +1104,21 @@ peer paper approach, **committed and built**: the staged `IS` / `IS2xITF` / `IS2
 `docs/INVERSYNTH2_PORT.md`) + **conditional-generative flow matching** (Hayes et al. ISMIR 2025 —
 **committed and built**: `FlowMatchingMLP` / `FlowMatchingParam2Tok`, the paper's own control and
 its equivariant model, see `docs/FLOW_MATCHING_PORT.md`; trains on its own corpus per
-D-FLOW-CORPUS). **Evolutionary search is dropped** (user: "probably no evolutionary
+D-FLOW-CORPUS) + **reinforcement learning** (SynthRL, Shin & Lee IJCAI-25 — **committed and built**:
+the staged `SynthRLp` / `SynthRLi`, see `docs/SYNTHRL_PORT.md`; renders in the training loop per
+D-RL-RENDER). **Evolutionary search is dropped** (user: "probably no evolutionary
 algorithms"); if ever reinstated, note it runs a per-target search locally with the live VST and does
 **not** fit the cluster training harness.
 
-**Why it's open**: the neural-proxy and flow-matching slots are now filled, but the final family set
-is not frozen — the exact discriminative/generative architectures still evolve and a second synth
+**Why it's open**: the neural-proxy, flow-matching and RL slots are now filled, but the final family
+set is not frozen — the exact discriminative/generative architectures still evolve and a second synth
 (Surge XT) may add families.
+
+**Gated on this decision**: SynthRL's stage 3, `SynthRL-o` (RL-only fine-tuning on out-of-domain
+sounds), is the paper's headline cross-domain result and is **not ported**, because it needs a second
+synthesizer — the paper uses Surge XT. The RL machinery is corpus-agnostic and reused unchanged, so
+porting it later is "point stage 2 at a second synth's corpus with the parameter loss off". What it
+actually needs is the second-synth commitment here, plus a `BaseSynthesizer` wrapper, a corpus, and a
+cluster feasibility spike for that plugin.
 
 **Blocks**: Phase 5. Resolve here before the Phase 5 family tasks start.
