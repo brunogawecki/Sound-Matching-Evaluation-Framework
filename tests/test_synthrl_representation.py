@@ -37,7 +37,7 @@ def test_class_slices_partition_the_flat_vector_exactly():
     assert covered == list(range(representation.total_class_dimension))
 
 
-def test_roundtrip_decodes_within_one_bin_for_continuous_exact_for_categorical():
+def test_roundtrip_decodes_within_half_a_step_for_continuous_exact_for_categorical():
     space = make_space()
     num_bins = 25
     representation = SynthRLRepresentation(space, num_bins=num_bins)
@@ -54,15 +54,32 @@ def test_roundtrip_decodes_within_one_bin_for_continuous_exact_for_categorical()
                 assert recovered[name] == value
             else:
                 low, high = spec.bounds
-                half_bin = (high - low) / (2.0 * num_bins)
-                assert abs(recovered[name] - value) <= half_bin + 1e-12
+                half_step = (high - low) / (2.0 * (num_bins - 1))
+                assert abs(recovered[name] - value) <= half_step + 1e-12
 
 
-def test_bin_edges_map_to_first_and_last_bin():
+def test_bounds_map_to_first_and_last_class():
     space = ParameterSpace([ParameterSpecification(name="CONT", kind="continuous", bounds=(0.2, 0.8))])
     representation = SynthRLRepresentation(space, num_bins=10)
     assert representation.synth_dict_to_class_indices({"CONT": 0.2})[0] == 0
     assert representation.synth_dict_to_class_indices({"CONT": 0.8})[0] == 9
+
+
+def test_endpoint_classes_decode_back_to_the_exact_bounds():
+    """The paper's grid includes both endpoints -- an operator at level 0 must stay off."""
+    space = ParameterSpace([ParameterSpecification(name="CONT", kind="continuous", bounds=(0.0, 1.0))])
+    representation = SynthRLRepresentation(space, num_bins=25)
+    assert representation.class_indices_to_synth_dict(np.array([0]))["CONT"] == 0.0
+    assert representation.class_indices_to_synth_dict(np.array([24]))["CONT"] == 1.0
+
+
+def test_levels_are_equally_spaced_across_the_bounds():
+    space = ParameterSpace([ParameterSpecification(name="CONT", kind="continuous", bounds=(0.2, 0.8))])
+    representation = SynthRLRepresentation(space, num_bins=7)
+    levels = [
+        representation.class_indices_to_synth_dict(np.array([index]))["CONT"] for index in range(7)
+    ]
+    assert np.allclose(levels, np.linspace(0.2, 0.8, 7))
 
 
 def test_class_logits_decode_via_per_head_argmax():

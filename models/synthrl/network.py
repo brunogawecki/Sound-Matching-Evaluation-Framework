@@ -7,8 +7,10 @@ sequence with a 2D sinusoidal positional encoding, and passed through
 decoder holds one learnable **query per parameter**; ``num_decoder_layers`` transformer
 decoder layers (self-attention over the queries, cross-attention onto ``z``) turn the
 queries into per-parameter vectors, and a per-parameter projection head emits that
-parameter's class logits. ``forward`` returns the flat class-logit vector laid out by
-:class:`SynthRLRepresentation` (``[batch, total_class_dimension]``).
+parameter's class scores. ``forward`` returns the flat class-score vector laid out by
+:class:`SynthRLRepresentation` (``[batch, total_class_dimension]``), squashed to
+``[0, 1]`` as the repo does; the softmax temperature that turns those scores into a
+distribution lives with the loss and the policy (``lightning_module.py``).
 
 The mel-dB front-end is reused from the preset-gen-vae port (the same one InverSynth II
 uses): 257 mels, n_fft 1024, hop 256, min-max normalized to [-1, 1]. Featurization lives
@@ -17,7 +19,7 @@ render-length input at build time, so the positional encoding fits any render le
 
 The strided-conv reducer, the DETR cross-attention decoder, and the per-parameter class
 heads are the genuinely new pieces; the mel front-end and transformer layers are
-reused / standard. The network emits **class logits**, not the framework's ML-side
+reused / standard. The network emits **class scores**, not the framework's ML-side
 vector, so the SynthRL families decode through the representation, not
 ``ml_vector_to_synth_dict`` (see ``families.py``).
 """
@@ -86,10 +88,10 @@ def _build_conv_reducer(num_conv_layers: int, d_model: int) -> nn.Sequential:
 
 
 class SynthRLNetwork(nn.Module):
-    """Raw audio ``[batch, num_samples]`` -> flat class logits ``[batch, total_class_dimension]``.
+    """Raw audio ``[batch, num_samples]`` -> flat class scores ``[batch, total_class_dimension]``.
 
     ``class_counts`` is the per-parameter head widths from :class:`SynthRLRepresentation`
-    (subset order); the emitted logits concatenate the heads in that order, matching the
+    (subset order); the emitted scores concatenate the heads in that order, matching the
     representation's ``class_slices``. ``spectrogram_min_db`` / ``spectrogram_max_db`` are
     the corpus-measured [-1, 1] endpoints (D-MELNORM), passed at build time so ``load``
     rebuilds the identical front-end offline.
@@ -183,5 +185,10 @@ class SynthRLNetwork(nn.Module):
         batch_size = audio.shape[0]
         queries = self.parameter_queries.unsqueeze(0).expand(batch_size, -1, -1)
         decoded = self.decoder(queries, memory)  # [batch, num_parameters, d_model]
-        logits = [head(decoded[:, position, :]) for position, head in enumerate(self.class_heads)]
-        return torch.cat(logits, dim=1)  # [batch, total_class_dimension]
+        scores = [head(decoded[:, position, :]) for position, head in enumerate(self.class_heads)]
+        scores = torch.cat(scores, dim=1)  # [batch, total_class_dimension]
+        # Squash to [0, 1] (repo model/network.py: tanh then 0.5*(x+1)). This bounds the
+        # within-head score gap at 1.0, so after the softmax temperature the policy's
+        # sharpness is capped and it keeps exploring -- see lightning_module.py.
+        # Monotonic, so argmax decoding at predict time is unaffected.
+        return 0.5 * (torch.tanh(scores) + 1.0)

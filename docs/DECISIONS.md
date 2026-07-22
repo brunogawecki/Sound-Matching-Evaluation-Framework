@@ -544,10 +544,20 @@ now.
 ### D-METRIC-NORM — Audio metrics compare raw audio (LOCKED 2026-06-27, REVISED 2026-06-30)
 
 **Decision**: audio metrics in the panel compare the **raw** target and re-rendered prediction
-waveforms — no loudness matching, period. There is no normalization knob. This matches **all five**
+waveforms — no loudness matching, period. There is no normalization knob. Four of the five
 reference implementations surveyed (`paper_repos/preset-gen-vae`, `paper_repos/InverSynth2`,
-synth-permutations, SynthRL, Sound2Synth), none of which loudness-normalizes before its audio
-distances.
+synth-permutations, Sound2Synth) apply no level normalization before their audio distances.
+
+**Correction (2026-07-22, SynthRL port)**: the originally-locked text claimed **all five**,
+including SynthRL. That is wrong. SynthRL **peak**-normalizes the rendered prediction before every
+audio distance — in the RL reward (`finetune.py:161, 202, 266`) and again at evaluation
+(`evaluate.py:94`) — against targets themselves rendered with `normalize_audio=True`. Its distances
+are therefore level-invariant. This is peak normalization, not the LUFS loudness matching this
+record rules out, but the practical effect on its magnitude/timbre distances is the same. The
+decision stands on its own reasoning below; only the "all five" evidence claim is retracted.
+**Consequence to carry into the write-up**: our `SynthRL-i` reward includes level error where the
+paper's does not, so the RL stage optimizes a slightly different objective than the published one
+(see `docs/SYNTHRL_PORT.md`, deviation 3).
 
 **Why**: loudness is part of a sound's character, and the panel's `loudness_*` metrics exist
 precisely to measure it; matching levels first would cancel exactly what they capture. Raw comparison

@@ -191,3 +191,58 @@ def test_fit_then_evaluate_through_the_evaluator(tmp_path, monkeypatch):
     assert len(result.per_sample_metrics) == 4
     assert result.summary_path.exists()
     assert result.summary["model_class"] == "SynthRLp"
+
+
+# ---------------------------------------------------------------------------
+# Silent-operator gating in the parameter loss
+# ---------------------------------------------------------------------------
+
+def operator_space() -> ParameterSpace:
+    """A miniature Dexed-shaped subset: one global, one gate, two gated params."""
+    return ParameterSpace([
+        ParameterSpecification(name="ALGORITHM", kind="continuous", default=0.5),
+        ParameterSpecification(name="OP1 OUTPUT LEVEL", kind="continuous", default=1.0),
+        ParameterSpecification(name="OP1 F COARSE", kind="continuous", default=0.5),
+        ParameterSpecification(name="OP1 EG RATE 1", kind="continuous", default=0.5),
+    ])
+
+
+def test_gated_groups_are_read_off_the_parameter_names():
+    from models.synthrl.lightning_module import gated_parameter_groups
+
+    names = [spec.name for spec in operator_space().parameter_specs]
+    assert gated_parameter_groups(names) == [(1, [2, 3])]
+
+
+def test_gated_groups_are_empty_without_the_operator_naming_convention():
+    from models.synthrl.lightning_module import gated_parameter_groups
+
+    assert gated_parameter_groups(["AMP", "CUTOFF", "RESONANCE"]) == []
+
+
+def test_silent_operator_parameters_are_dropped_from_the_loss():
+    """A sample whose OP1 OUTPUT LEVEL is 0 must not constrain the other OP1 heads."""
+    from models.synthrl.lightning_module import SmoothedClassCrossEntropy
+    from models.synthrl.representation import SynthRLRepresentation
+
+    space = operator_space()
+    representation = SynthRLRepresentation(space, num_bins=8)
+    criterion = SmoothedClassCrossEntropy(representation)
+
+    # Two samples, identical except for the OP1 gate: sample 0 silent, sample 1 open.
+    silent = space.synth_dict_to_ml_vector(
+        {"ALGORITHM": 0.5, "OP1 OUTPUT LEVEL": 0.0, "OP1 F COARSE": 0.1, "OP1 EG RATE 1": 0.1}
+    )
+    open_gate = space.synth_dict_to_ml_vector(
+        {"ALGORITHM": 0.5, "OP1 OUTPUT LEVEL": 1.0, "OP1 F COARSE": 0.1, "OP1 EG RATE 1": 0.1}
+    )
+    targets = torch.tensor(np.stack([silent, open_gate]), dtype=torch.float32)
+    scores = torch.rand(2, representation.total_class_dimension)
+
+    loss, _ = criterion(scores, targets)
+
+    # Changing the silent sample's gated targets cannot move the loss.
+    moved = dict(zip(space.names, [0.5, 0.0, 0.9, 0.9]))
+    targets[0] = torch.tensor(space.synth_dict_to_ml_vector(moved), dtype=torch.float32)
+    moved_loss, _ = criterion(scores, targets)
+    assert torch.allclose(loss, moved_loss)

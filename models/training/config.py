@@ -78,15 +78,18 @@ class RLConfig:
 
     Defaults track the SynthRL repo's ``config/stage2.yaml`` + ``utils/buffer.py``:
     per-target PER buffer capacity (``per_capacity`` = 5), one experience sampled per
-    target per update (``buffer.sample`` draws 1), the parameter-loss -> RL curriculum
-    ramp length in epochs (``rl_coef`` ramps over epochs 199->299, i.e. 100 epochs;
-    ``0`` disables the ramp for short runs), the render-worker count for the in-loop
-    reward (``None`` = ``os.cpu_count()``; the paper fixes ``synth_render_workers`` = 16),
-    the render engine, and the three reward-distance weights (paper Eq. 5 / repo
-    ``model/loss.py``: w1/w2/w3). Non-RL families ignore them all.
+    target per update (``buffer.sample`` draws 1), the number of gradient-free render
+    passes that fill the buffers before training (``finetune.py`` runs ``per_capacity``
+    of them; ``0`` skips the pre-fill), the parameter-loss -> RL curriculum ramp length
+    in epochs (``rl_coef`` ramps over epochs 199->299, i.e. 100 epochs; ``0`` disables the
+    ramp for short runs), the render-worker count for the in-loop reward (``None`` =
+    ``os.cpu_count()``; the paper fixes ``synth_render_workers`` = 16), the render engine,
+    and the three reward-distance weights (paper Eq. 5 / repo ``model/loss.py``: w1/w2/w3).
+    Non-RL families ignore them all.
     """
     buffer_capacity: int = 5
     samples_per_target: int = 1
+    prefill_epochs: int = 5
     ramp_epochs: int = 100
     num_render_workers: Optional[int] = None
     renderer: str = "dawdreamer"

@@ -72,6 +72,16 @@ def test_forward_logits_decode_through_the_representation():
     assert set(synth_dict) == set(representation.names)
 
 
+def test_forward_scores_are_squashed_to_the_unit_interval():
+    """The repo squashes head outputs with tanh -> 0.5*(x+1), capping policy sharpness."""
+    representation = make_representation()
+    network = SynthRLNetwork(class_counts=representation.class_counts, **TINY_KWARGS)
+    network.eval()
+    with torch.no_grad():
+        scores = network(torch.randn(4, NUM_SAMPLES))
+    assert scores.min() >= 0.0 and scores.max() <= 1.0
+
+
 def test_one_query_per_parameter_and_head_widths_match():
     representation = make_representation()
     network = SynthRLNetwork(class_counts=representation.class_counts, **TINY_KWARGS)

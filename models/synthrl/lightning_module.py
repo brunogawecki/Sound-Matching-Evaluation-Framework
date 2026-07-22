@@ -12,8 +12,9 @@ Lightning:
    parameter-loss -> RL curriculum ramp.
 
 Both share :class:`SmoothedClassCrossEntropy`, the parameter loss as a small ``nn.Module``:
-it maps the framework's ML-side target vector to per-head class indices (continuous binned,
-categorical argmax) and returns the mean soft cross-entropy plus class accuracy.
+it maps the framework's ML-side target vector to per-head class indices (continuous snapped
+to the nearest level, categorical argmax) and returns the mean soft cross-entropy plus class
+accuracy.
 
 The RL stage renders inside the training loop with the real Dexed via the parallel
 fresh-process backend, so a SynthRL-i *training* run is no longer VST-free (a deliberate,
@@ -21,12 +22,14 @@ documented deviation from D-SELFDESC -- training-only; the eval path is unchange
 """
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Tuple
+import re
+from typing import Callable, Dict, List, Optional, Tuple
 
 import lightning.pytorch as pl
 import numpy as np
 import torch
 import torch.nn.functional as F
+from lightning.pytorch.utilities import rank_zero_info
 from torch import nn
 from torch.distributions import Categorical
 
@@ -37,22 +40,78 @@ from models.synthrl.reward_buffer import RewardPrioritizedReplayBuffer
 from models.training.config import OptimizerConfig
 from models.training.lightning_module import build_optimizers
 
+# Softmax temperatures applied to the network's [0, 1] class scores. The repo sets the
+# loss one in config (`cat_softmax_t: 0.2`) and leaves the policy one at the
+# PresetProcessor default (0.1). Both cap how sharp the resulting distribution can get:
+# the within-head score gap is at most 1.0, so the odds ratio is at most exp(1/T).
+LOSS_SOFTMAX_TEMPERATURE = 0.2
+POLICY_SOFTMAX_TEMPERATURE = 0.1
+# The repo weights its categorical cross-entropy by `categorical_loss_factor` (0.2) before
+# mixing it with the RL term. Kept so the curriculum ramp balances the two the same way.
+CATEGORICAL_LOSS_FACTOR = 0.2
+
+# A Dexed operator at output level 0 is silent, so the rest of that operator's parameters do
+# not affect the sound and carry no learnable signal. The repo drops them from the parameter
+# loss per sample (data/preset.py: get_useless_learned_params_indexes); the groups below are
+# derived from the D-NAMING parameter names, so this is a no-op on any synth that does not
+# use the `OP<n> <param>` convention.
+_OPERATOR_PREFIX = re.compile(r"^(OP\d+) ")
+_GATE_SUFFIX = "OUTPUT LEVEL"
+
+
+def gated_parameter_groups(names: List[str]) -> List[Tuple[int, List[int]]]:
+    """``(gate position, gated positions)`` per operator, read off the parameter names.
+
+    Empty when the names do not follow the ``OP<n> ...`` / ``OP<n> OUTPUT LEVEL`` convention.
+    """
+    gates: Dict[str, int] = {}
+    gated: Dict[str, List[int]] = {}
+    for position, name in enumerate(names):
+        match = _OPERATOR_PREFIX.match(name)
+        if match is None:
+            continue
+        operator = match.group(1)
+        if name == f"{operator} {_GATE_SUFFIX}":
+            gates[operator] = position
+        else:
+            gated.setdefault(operator, []).append(position)
+    return [
+        (gates[operator], positions)
+        for operator, positions in sorted(gated.items())
+        if operator in gates
+    ]
+
 
 class SmoothedClassCrossEntropy(nn.Module):
     """The SynthRL parameter loss: Gaussian-smoothed per-parameter cross-entropy.
 
     Maps the framework's ML-side target vector (continuous floats + one-hot categorical
-    blocks) to per-head target class indices -- continuous values binned, categorical
-    blocks argmax-decoded -- gathers the Gaussian-smoothed soft targets from
+    blocks) to per-head target class indices -- continuous values snapped to their
+    nearest level, categorical blocks argmax-decoded -- gathers the smoothed targets from
     :meth:`SynthRLRepresentation.smoothing_matrices`, and returns the mean soft
-    cross-entropy over the network's flat class logits together with the class accuracy.
+    cross-entropy over the network's flat class scores together with the class accuracy.
+    Heads belonging to a silent operator are dropped per sample (see
+    :func:`gated_parameter_groups`).
     """
 
-    def __init__(self, representation: SynthRLRepresentation) -> None:
+    def __init__(
+        self,
+        representation: SynthRLRepresentation,
+        softmax_temperature: float = LOSS_SOFTMAX_TEMPERATURE,
+        loss_factor: float = CATEGORICAL_LOSS_FACTOR,
+    ) -> None:
         super().__init__()
         self._class_slices = representation.class_slices
         self._num_parameters = len(representation.class_counts)
         self._num_bins = representation.num_bins
+        self._softmax_temperature = float(softmax_temperature)
+        self._loss_factor = float(loss_factor)
+
+        # position -> the position of the parameter gating it (None when ungated).
+        self._gate_position: List[Optional[int]] = [None] * self._num_parameters
+        for gate, gated in gated_parameter_groups(representation.names):
+            for position in gated:
+                self._gate_position[position] = gate
 
         # Per-parameter ML-side layout for the target -> class-index mapping.
         self._parameter_kinds: List[str] = []
@@ -91,20 +150,37 @@ class SmoothedClassCrossEntropy(nn.Module):
         low = self._continuous_low[position]
         high = self._continuous_high[position]
         fraction = (value - low) / (high - low)
-        return (fraction * self._num_bins).floor().long().clamp(0, self._num_bins - 1)
+        if self._num_bins == 1:
+            return torch.zeros_like(value, dtype=torch.long)
+        # Mirror SynthRLRepresentation._level_index: snap to the nearest of num_bins levels.
+        return (fraction * (self._num_bins - 1)).round().long().clamp(0, self._num_bins - 1)
 
     def forward(self, logits: torch.Tensor, ml_targets: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Return ``(mean soft cross-entropy, mean class accuracy)`` over the batch."""
+        """Return ``(mean soft cross-entropy, mean class accuracy)`` over the batch.
+
+        A head gated by a silent operator contributes nothing for that sample; its loss is
+        averaged over the samples where the gate is open. Accuracy is left unmasked, as in
+        the repo's monitoring metric.
+        """
+        class_indices = self.target_class_indices(ml_targets)  # [batch, num_parameters]
         total_loss = logits.new_zeros(())
         total_correct = logits.new_zeros(())
         for position in range(self._num_parameters):
-            class_index = self._target_class_index(position, ml_targets)  # [batch]
-            block_logits = logits[:, self._class_slices[position]]  # [batch, count]
+            class_index = class_indices[:, position]  # [batch]
+            block_logits = logits[:, self._class_slices[position]] / self._softmax_temperature
             smoothing = getattr(self, f"_smoothing_{position}")
             soft_target = smoothing[class_index]  # [batch, count]
-            total_loss = total_loss - (soft_target * F.log_softmax(block_logits, dim=1)).sum(dim=1).mean()
+            cross_entropy = -(soft_target * F.log_softmax(block_logits, dim=1)).sum(dim=1)  # [batch]
+            gate = self._gate_position[position]
+            if gate is None:
+                total_loss = total_loss + cross_entropy.mean()
+            else:
+                # Gate class 0 is the parameter's minimum, i.e. the operator is silent.
+                open_gate = (class_indices[:, gate] != 0).to(logits.dtype)
+                total_loss = total_loss + (open_gate * cross_entropy).sum() / open_gate.sum().clamp(min=1.0)
             total_correct = total_correct + (block_logits.argmax(dim=1) == class_index).float().mean()
-        return total_loss / self._num_parameters, total_correct / self._num_parameters
+        loss = self._loss_factor * total_loss / self._num_parameters
+        return loss, total_correct / self._num_parameters
 
 
 class SynthRLParameterRegressor(pl.LightningModule):
@@ -152,14 +228,17 @@ class SynthRLReinforceRegressor(pl.LightningModule):
     """Trains a :class:`SynthRLNetwork` with in-domain reinforcement learning (SynthRL-i).
 
     The network's per-parameter class heads are a stochastic policy over discrete actions
-    (one class per parameter). Each training step:
+    (one class per parameter, sampled at ``policy_temperature``). Before the first gradient
+    step, :meth:`on_train_start` fills every target's buffer over ``prefill_epochs`` render
+    passes. Then each training step:
 
     1. samples an action per batch item, decodes it to a synth-side patch, **renders** it
        with the real Dexed (parallel fresh-process backend), scores audio similarity to the
        target with :func:`sound_matching_reward`, and stores ``(action, reward)`` in the
        per-target reward-based PER buffer;
     2. samples experiences from each target's buffer and forms the REINFORCE objective
-       ``-mean(reward * log pi(action))`` (the paper's uniform ``1/m`` importance weight);
+       ``-mean(m * reward * mean_log_pi(action))``, ``m = buffer_capacity`` being the paper's
+       uniform ``1/m`` importance weight;
     3. blends in the parameter loss during a curriculum ramp: the parameter weight falls
        ``1 -> 0`` and the RL weight rises ``0 -> 1`` over ``ramp_epochs``, then RL-only.
 
@@ -178,9 +257,11 @@ class SynthRLReinforceRegressor(pl.LightningModule):
         renderer: str = "dawdreamer",
         num_render_workers: Optional[int] = None,
         reward_weights: RewardWeights = DEFAULT_REWARD_WEIGHTS,
-        buffer_capacity: int = 8,
-        samples_per_target: int = 4,
+        buffer_capacity: int = 5,
+        samples_per_target: int = 1,
+        prefill_epochs: int = 5,
         ramp_epochs: int = 0,
+        policy_temperature: float = POLICY_SOFTMAX_TEMPERATURE,
         seed: int = 0,
         backend_factory: Optional[Callable[[], object]] = None,
     ) -> None:
@@ -196,8 +277,11 @@ class SynthRLReinforceRegressor(pl.LightningModule):
         self._renderer = renderer
         self._num_render_workers = num_render_workers
         self._reward_weights = reward_weights
+        self._buffer_capacity = int(buffer_capacity)
         self._samples_per_target = int(samples_per_target)
+        self._prefill_epochs = int(prefill_epochs)
         self._ramp_epochs = int(ramp_epochs)
+        self._policy_temperature = float(policy_temperature)
         self._rng = np.random.default_rng(seed)
         self._buffer = RewardPrioritizedReplayBuffer(buffer_capacity)
         self._backend_factory = backend_factory or self._default_backend_factory
@@ -218,23 +302,64 @@ class SynthRLReinforceRegressor(pl.LightningModule):
             self._backend.close()
             self._backend = None
 
+    # -- buffer pre-fill -----------------------------------------------------
+    def on_train_start(self) -> None:
+        """Fill every target's PER buffer before the first gradient step (repo ``finetune.py``).
+
+        The repo runs ``per_capacity`` gradient-free passes over the training set -- the first
+        greedy, the rest sampled -- so that when training begins each target already has a full
+        buffer of ``m`` experiences to draw its best action from. Without this the buffer holds
+        one entry per target for the first epochs and the objective degenerates to plain
+        on-policy REINFORCE, exactly while the parameter loss is being ramped out.
+
+        Each pass renders the whole training set, so this is expensive by construction; set
+        ``prefill_epochs`` to 0 to skip it.
+        """
+        if self._prefill_epochs <= 0:
+            return
+        rank_zero_info(
+            f"[SynthRL-i] pre-filling the reward buffer: {self._prefill_epochs} render passes "
+            f"over the training set."
+        )
+        was_training = self.network.training
+        self.network.eval()
+        with torch.no_grad():
+            for pass_index in range(self._prefill_epochs):
+                # Repo: the first pass is deterministic, the remaining ones sample.
+                greedy = pass_index == 0
+                for batch in self.trainer.train_dataloader:
+                    audio, ml_targets = (tensor.to(self.device) for tensor in batch)
+                    scores = self.network(audio)
+                    actions = self._greedy_actions(scores) if greedy else self._sample_actions(scores)
+                    self._collect_experiences(actions, audio, ml_targets)
+        self.network.train(was_training)
+
     # -- policy helpers ------------------------------------------------------
-    def _sample_actions(self, logits: torch.Tensor) -> torch.Tensor:
+    def _policy(self, scores: torch.Tensor, block: slice) -> Categorical:
+        """The per-head action distribution: the head's scores at the policy temperature."""
+        return Categorical(logits=scores[:, block] / self._policy_temperature)
+
+    def _sample_actions(self, scores: torch.Tensor) -> torch.Tensor:
         """Sample one class per parameter from the policy: ``[batch, num_parameters]``."""
-        columns = [Categorical(logits=logits[:, block]).sample() for block in self._class_slices]
+        columns = [self._policy(scores, block).sample() for block in self._class_slices]
         return torch.stack(columns, dim=1)
 
-    def _greedy_actions(self, logits: torch.Tensor) -> torch.Tensor:
-        """Argmax class per parameter: ``[batch, num_parameters]``."""
-        columns = [logits[:, block].argmax(dim=1) for block in self._class_slices]
+    def _greedy_actions(self, scores: torch.Tensor) -> torch.Tensor:
+        """Argmax class per parameter: ``[batch, num_parameters]``. Temperature-independent."""
+        columns = [scores[:, block].argmax(dim=1) for block in self._class_slices]
         return torch.stack(columns, dim=1)
 
-    def _log_prob(self, logits: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """Policy log-prob of ``actions [rows, num_parameters]`` under ``logits [rows, total]``."""
-        total = logits.new_zeros(logits.shape[0])
+    def _mean_log_prob(self, scores: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        """Policy log-prob of ``actions [rows, num_parameters]``, **averaged** over parameters.
+
+        The repo divides the summed per-parameter log-probabilities by the parameter count
+        (``get_mean_log_probs``). Averaging rather than summing keeps the REINFORCE term on a
+        scale the curriculum ramp can blend against the parameter loss.
+        """
+        total = scores.new_zeros(scores.shape[0])
         for position, block in enumerate(self._class_slices):
-            total = total + Categorical(logits=logits[:, block]).log_prob(actions[:, position])
-        return total
+            total = total + self._policy(scores, block).log_prob(actions[:, position])
+        return total / len(self._class_slices)
 
     # -- rendering + reward --------------------------------------------------
     def _render_and_reward(
@@ -275,27 +400,32 @@ class SynthRLReinforceRegressor(pl.LightningModule):
         return float(rewards.mean())
 
     # -- objective -----------------------------------------------------------
-    def _reinforce_loss(self, logits: torch.Tensor, ml_targets: torch.Tensor) -> torch.Tensor:
-        """REINFORCE loss from PER-buffer experiences of the batch's targets."""
+    def _reinforce_loss(self, scores: torch.Tensor, ml_targets: torch.Tensor) -> torch.Tensor:
+        """REINFORCE loss from PER-buffer experiences of the batch's targets.
+
+        The ``buffer_capacity`` factor is the paper's importance weight under the uniform
+        proposal ``mu = 1/m`` (Eq. 6, repo ``per_capacity * rewards * mean_log_probs``); the
+        policy-ratio part of that weight is dropped, as it is in the released code.
+        """
         per_target_losses: List[torch.Tensor] = []
-        for row in range(logits.shape[0]):
+        for row in range(scores.shape[0]):
             key = self._target_key(ml_targets, row)
             if key not in self._buffer:
                 continue
             experiences = self._buffer.sample(key, self._samples_per_target, self._rng)
             actions = torch.as_tensor(
                 np.stack([experience.action for experience in experiences]),
-                device=logits.device, dtype=torch.long,
+                device=scores.device, dtype=torch.long,
             )
             rewards = torch.as_tensor(
                 [experience.reward for experience in experiences],
-                device=logits.device, dtype=logits.dtype,
+                device=scores.device, dtype=scores.dtype,
             )
-            repeated_logits = logits[row : row + 1].expand(len(experiences), -1)
-            log_prob = self._log_prob(repeated_logits, actions)
-            per_target_losses.append(-(rewards * log_prob).mean())
+            repeated_scores = scores[row : row + 1].expand(len(experiences), -1)
+            mean_log_prob = self._mean_log_prob(repeated_scores, actions)
+            per_target_losses.append(-(self._buffer_capacity * rewards * mean_log_prob).mean())
         if not per_target_losses:
-            return logits.new_zeros(())
+            return scores.new_zeros(())
         return torch.stack(per_target_losses).mean()
 
     def _ramp_progress(self) -> float:

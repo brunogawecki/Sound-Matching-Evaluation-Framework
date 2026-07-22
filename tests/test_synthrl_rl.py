@@ -184,6 +184,97 @@ def training_config_optimizer():
     return OptimizerConfig(learning_rate=5e-3)
 
 
+def make_module(tmp_path, train_dataset, **overrides):
+    """A bare SynthRLReinforceRegressor with the fake backend already attached."""
+    from models.synthrl.lightning_module import SynthRLReinforceRegressor
+
+    model = make_synthrli(default_root_dir=str(tmp_path / "logs"))
+    hparams = model._build_architecture_hparams(train_dataset, train_dataset.parameter_space)
+    network = model._build_network(hparams)
+    kwargs = dict(
+        render_settings=model._training_render_settings, sample_rate=SAMPLE_RATE,
+        buffer_capacity=5, samples_per_target=1, prefill_epochs=0, ramp_epochs=0,
+        backend_factory=_FakeRenderBackend,
+    )
+    kwargs.update(overrides)
+    module = SynthRLReinforceRegressor(
+        network, model._training_representation, training_config_optimizer(), **kwargs
+    )
+    module._backend = _FakeRenderBackend()
+    return module
+
+
+def test_prefill_fills_every_target_buffer_to_capacity(tmp_path):
+    from types import SimpleNamespace
+
+    train_dataset = build_corpus(tmp_path, "train", count=8, seed=0)
+    module = make_module(tmp_path, train_dataset, buffer_capacity=3, prefill_epochs=3)
+
+    audio = torch.stack([train_dataset[i][0] for i in range(4)])
+    targets = torch.stack([train_dataset[i][1] for i in range(4)])
+    module._trainer = SimpleNamespace(train_dataloader=[[audio, targets]])
+    module.on_train_start()
+
+    for row in range(4):
+        assert module._buffer.size(module._target_key(targets, row)) == 3
+
+
+def test_prefill_is_skipped_when_disabled(tmp_path):
+    from types import SimpleNamespace
+
+    train_dataset = build_corpus(tmp_path, "train", count=8, seed=0)
+    module = make_module(tmp_path, train_dataset, prefill_epochs=0)
+
+    audio = torch.stack([train_dataset[i][0] for i in range(4)])
+    targets = torch.stack([train_dataset[i][1] for i in range(4)])
+    module._trainer = SimpleNamespace(train_dataloader=[[audio, targets]])
+    module.on_train_start()
+
+    assert all(module._buffer.size(module._target_key(targets, row)) == 0 for row in range(4))
+
+
+def test_reinforce_loss_scales_by_buffer_capacity_and_mean_log_prob(tmp_path):
+    """The repo's objective is -(m * R * mean_log_pi), not -(R * sum_log_pi)."""
+    train_dataset = build_corpus(tmp_path, "train", count=8, seed=0)
+    module = make_module(tmp_path, train_dataset, buffer_capacity=5, samples_per_target=1)
+
+    audio = torch.stack([train_dataset[0][0]])
+    targets = torch.stack([train_dataset[0][1]])
+    scores = module.network(audio)
+    action = torch.zeros(1, len(module._class_slices), dtype=torch.long)
+    module._buffer.add(module._target_key(targets, 0), action[0].numpy(), 2.0)
+
+    loss = module._reinforce_loss(scores, targets)
+    expected = -(5 * 2.0 * module._mean_log_prob(scores, action)).mean()
+    assert torch.allclose(loss, expected)
+
+
+def test_policy_temperature_bounds_how_sharp_the_policy_can_get(tmp_path):
+    """Scores live in [0, 1], so the within-head odds ratio is capped at exp(1/T)."""
+    train_dataset = build_corpus(tmp_path, "train", count=8, seed=0)
+    module = make_module(tmp_path, train_dataset, policy_temperature=0.1)
+
+    audio = torch.stack([train_dataset[0][0]])
+    scores = module.network(audio)
+    for block in module._class_slices:
+        probabilities = module._policy(scores, block).probs
+        ratio = probabilities.max() / probabilities.min()
+        assert ratio <= np.exp(1.0 / 0.1) + 1e-3
+
+
+def test_lower_policy_temperature_sharpens_the_greedy_action(tmp_path):
+    train_dataset = build_corpus(tmp_path, "train", count=8, seed=0)
+    audio = torch.stack([train_dataset[0][0]])
+
+    sharp = make_module(tmp_path, train_dataset, policy_temperature=0.05)
+    flat = make_module(tmp_path, train_dataset, policy_temperature=1.0)
+    flat.network.load_state_dict(sharp.network.state_dict())
+
+    scores = sharp.network(audio)
+    greedy = sharp._greedy_actions(scores)
+    assert sharp._mean_log_prob(scores, greedy) > flat._mean_log_prob(scores, greedy)
+
+
 def test_reward_climbs_when_overfitting_a_tiny_corpus(tmp_path):
     train_dataset = build_corpus(tmp_path, "train", count=8, seed=0)
     log_dir = tmp_path / "logs"

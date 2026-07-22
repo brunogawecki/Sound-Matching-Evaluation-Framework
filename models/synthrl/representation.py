@@ -2,9 +2,9 @@
 
 SynthRL casts the whole parameter-estimation problem as **per-parameter
 classification** (Shin & Lee, IJCAI-25, §3.3): every numerical parameter is
-binned into ``num_bins`` equal-width ordinal classes; native-categorical
+discretized onto ``num_bins`` equally spaced ordinal classes; native-categorical
 parameters keep their own cardinality. This module owns that scheme and is the
-only place the binning lives. It **wraps** the shared :class:`ParameterSpace`
+only place the discretization lives. It **wraps** the shared :class:`ParameterSpace`
 (D2/D-KIND LOCKED -- continuous=float, categorical=one-hot) and never modifies
 it: the framework's synth-side dict / ML-side vector contract is untouched, and
 this class-index view is private to the SynthRL family.
@@ -19,10 +19,10 @@ Deviations from the paper, deliberate and documented:
 - 103-param Dexed subset (D1), not the paper's 144. The subset comes from the
   wrapped :class:`ParameterSpace`; this class only re-buckets it.
 - The framework's own continuous/categorical split (16 categorical, 87
-  continuous) decides which parameters are binned. Categorical parameters are
+  continuous) decides which parameters are discretized. Categorical parameters are
   treated as **unordered**: their targets are hard one-hot, with no Gaussian
   smoothing (smoothing over neighbouring class indices only makes sense for the
-  ordinal bins of a numerical parameter).
+  ordinal levels of a numerical parameter).
 """
 from __future__ import annotations
 
@@ -32,20 +32,24 @@ import numpy as np
 
 from synth.parameter_space import ParameterSpace
 
-# Paper default: numerical parameters are binned into 25 equal-width classes.
+# Paper default: numerical parameters are discretized onto 25 equally spaced classes.
 DEFAULT_NUM_BINS = 25
-# Gaussian label-smoothing width, in bin units, for the ordinal (binned) heads
-# (Chen 2022 / Sound2Synth). A knob; 1.0 spreads mass onto the immediate
-# neighbours of the target bin.
-DEFAULT_LABEL_SMOOTHING_SIGMA = 1.0
+# Gaussian label-smoothing width, in class-index units, for the ordinal heads
+# (Chen 2022 / Sound2Synth). The repo's `GaussianKernelConv(sigma=0.02)` scales its
+# kernel by the class count, so at the paper's 25 classes it is 25 * 0.02 = 0.5.
+DEFAULT_LABEL_SMOOTHING_SIGMA = 0.5
 
 
 class SynthRLRepresentation:
     """Maps a :class:`ParameterSpace` onto SynthRL's per-parameter class view.
 
-    Continuous parameters become ``num_bins`` equal-width bins over their
-    ``[low, high]`` bounds; categorical parameters keep their option grid. The
-    class provides the per-parameter class counts (the classification heads), the
+    Continuous parameters become ``num_bins`` equally spaced levels spanning their
+    ``[low, high]`` bounds, **endpoints included** -- class ``c`` is
+    ``low + c * (high - low) / (num_bins - 1)``, the repo's ``round(v * (n - 1))`` /
+    ``c / (n - 1)`` grid. Both bounds are therefore reachable, which matters for
+    parameters where an endpoint is a distinct state (a Dexed operator at output
+    level 0 is off). Categorical parameters keep their option grid. The class
+    provides the per-parameter class counts (the classification heads), the
     synth-dict <-> class-index conversions, and the Gaussian-smoothed target
     distributions used by the cross-entropy parameter loss.
     """
@@ -107,22 +111,26 @@ class SynthRLRepresentation:
         """Total width of the flat class-logit vector (sum of the head widths)."""
         return self._total_class_dimension
 
-    def _bin_index(self, spec, value: float) -> int:
-        """Bin a continuous value into ``[0, num_bins)`` over the spec's bounds."""
+    def _level_index(self, spec, value: float) -> int:
+        """Snap a continuous value to its nearest level in ``[0, num_bins)``."""
+        if self._num_bins == 1:
+            return 0
         low, high = spec.bounds
         fraction = (value - low) / (high - low)
-        return int(np.clip(int(fraction * self._num_bins), 0, self._num_bins - 1))
+        return int(np.clip(round(fraction * (self._num_bins - 1)), 0, self._num_bins - 1))
 
-    def _bin_center(self, spec, index: int) -> float:
-        """The normalized value at the center of bin ``index``."""
+    def _level_value(self, spec, index: int) -> float:
+        """The normalized value of level ``index``. A single level sits at the midpoint."""
         low, high = spec.bounds
-        return low + (index + 0.5) * (high - low) / self._num_bins
+        if self._num_bins == 1:
+            return 0.5 * (low + high)
+        return low + index * (high - low) / (self._num_bins - 1)
 
     def synth_dict_to_class_indices(self, params: Dict[str, Union[float, int]]) -> np.ndarray:
         """Convert a synth-side dict to per-parameter target class indices.
 
-        Continuous values are binned; categorical values are snapped to the
-        nearest option (matching :meth:`ParameterSpace.synth_dict_to_ml_vector`).
+        Continuous values are snapped to their nearest level; categorical values to
+        the nearest option (matching :meth:`ParameterSpace.synth_dict_to_ml_vector`).
         Returns an ``int64`` array of shape ``(num_parameters,)`` in subset order.
         """
         missing = set(self.names) - set(params)
@@ -138,14 +146,14 @@ class SynthRLRepresentation:
             if spec.kind == "categorical":
                 indices[position] = int(np.argmin([abs(value - option) for option in spec.options]))
             else:
-                indices[position] = self._bin_index(spec, value)
+                indices[position] = self._level_index(spec, value)
         return indices
 
     def class_indices_to_synth_dict(self, class_indices: np.ndarray) -> Dict[str, float]:
         """Convert per-parameter class indices to a synth-side dict.
 
-        Continuous classes decode to their bin center; categorical classes decode
-        to their option value. Round-trips a synth-dict to within one bin width.
+        Continuous classes decode to their grid level; categorical classes decode
+        to their option value. Round-trips a synth-dict to within half a step.
         """
         class_indices = np.asarray(class_indices)
         if class_indices.shape != (len(self._class_counts),):
@@ -158,7 +166,7 @@ class SynthRLRepresentation:
             if spec.kind == "categorical":
                 params[spec.name] = float(spec.options[index])
             else:
-                params[spec.name] = float(self._bin_center(spec, index))
+                params[spec.name] = float(self._level_value(spec, index))
         return params
 
     def class_logits_to_class_indices(self, class_vector: np.ndarray) -> np.ndarray:
@@ -183,7 +191,7 @@ class SynthRLRepresentation:
     def _smoothed_block(self, position: int, index: int) -> np.ndarray:
         """The soft target distribution for class ``index`` of head ``position``.
 
-        Ordinal (binned) heads get a Gaussian centered on the target bin (width
+        Ordinal heads get a Gaussian centered on the target class (width
         :attr:`label_smoothing_sigma`); categorical heads (and ``sigma == 0``) get
         a hard one-hot. Sums to 1.
         """
@@ -200,8 +208,8 @@ class SynthRLRepresentation:
     def smoothed_target_vector(self, class_indices: np.ndarray) -> np.ndarray:
         """Build the flat soft-target vector for the cross-entropy parameter loss.
 
-        Each ordinal (binned) head gets a Gaussian over class indices centered on
-        the target bin (width :attr:`label_smoothing_sigma`); each categorical
+        Each ordinal head gets a Gaussian over class indices centered on the
+        target class (width :attr:`label_smoothing_sigma`); each categorical
         head gets a hard one-hot. Every block sums to 1. Shape
         ``(total_class_dimension,)``.
         """

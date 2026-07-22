@@ -247,10 +247,10 @@ class SynthRLi(BaseSynthRLModel):
 
     RL hyperparameters come from the shared ``TrainingConfig``'s ``rl`` section
     (:class:`~models.training.config.RLConfig`), read at build time like InverSynth II's
-    ``loss.audio_loss_weight``: the reward weights, the per-target PER buffer capacity and
-    per-step sample count, the parameter-loss -> RL curriculum ramp length (epochs), the
-    render engine, and the render-worker count. Only ``backend_factory`` (a test seam for
-    injecting a fake renderer) stays a constructor argument.
+    ``loss.audio_loss_weight``: the reward weights, the per-target PER buffer capacity,
+    per-step sample count and pre-fill pass count, the parameter-loss -> RL curriculum ramp
+    length (epochs), the render engine, and the render-worker count. Only ``backend_factory``
+    (a test seam for injecting a fake renderer) stays a constructor argument.
     """
 
     def __init__(
@@ -285,6 +285,7 @@ class SynthRLi(BaseSynthRLModel):
             reward_weights=reward_weights,
             buffer_capacity=rl.buffer_capacity,
             samples_per_target=rl.samples_per_target,
+            prefill_epochs=rl.prefill_epochs,
             ramp_epochs=rl.ramp_epochs,
             seed=training_config.seed,
             backend_factory=self._backend_factory,
