@@ -18,11 +18,14 @@ re-applying parameters and in-process wrapper reloads; only a fresh OS process r
     clean heap (never fork), slow but leak-free; used for test/eval corpora, where generation
     and evaluation render contexts must agree.
   * :class:`ParallelFreshProcessRenderBackend` -- the same leak-free per-render isolation across
-    ``num_workers`` workers, with a batch API; used by the SynthRL RL stage, which renders a
-    batch of predicted patches for the reward each training step.
+    ``num_workers`` workers, with a batch API; the faithful (default) SynthRL RL reward path.
+  * :class:`ParallelInProcessRenderBackend` -- ``num_workers`` workers that each reuse one wrapper
+    across every render, so the hidden state leaks (a measured, deliberate bias -- D-RL-RENDER);
+    tens to hundreds of times faster, the opt-in SynthRL RL reward path for cluster runs.
 
 The Evaluator (#9) re-renders predictions through :class:`FreshProcessRenderBackend` so that
-target and re-render share an identical clean context.
+target and re-render share an identical clean context; the in-process backend never sits on the
+eval path.
 """
 from __future__ import annotations
 
@@ -201,6 +204,90 @@ class ParallelFreshProcessRenderBackend:
         self._pool.join()
 
     def __enter__(self) -> "ParallelFreshProcessRenderBackend":
+        return self
+
+    def __exit__(self, *exception) -> None:
+        self.close()
+
+
+# One persistent wrapper per worker, built once by the pool initializer and reused for every
+# render that worker handles. Module-level so a spawned worker rebuilds them on import.
+_REUSE_WRAPPER: Optional[DexedWrapper] = None
+_REUSE_SETTINGS: Optional[RenderSettings] = None
+
+
+def init_reuse_worker(renderer: str, settings: RenderSettings) -> None:
+    """Pool initializer: build the one wrapper this worker reuses across all its renders."""
+    global _REUSE_WRAPPER, _REUSE_SETTINGS
+    with suppressed_stderr():
+        _REUSE_WRAPPER = _make_wrapper(renderer)
+    _REUSE_SETTINGS = settings
+
+
+def render_patch_in_reused_wrapper(patch: Dict[str, float]) -> np.ndarray:
+    """Render one patch through this worker's persistent wrapper (state leaks across renders)."""
+    _REUSE_WRAPPER.set_parameters(patch)
+    audio = _REUSE_WRAPPER.render_audio(
+        _REUSE_SETTINGS.midi_note,
+        _REUSE_SETTINGS.velocity,
+        _REUSE_SETTINGS.duration_sec,
+        _REUSE_SETTINGS.note_duration_sec,
+    )
+    return np.asarray(audio, dtype=np.float32)
+
+
+# A picklable ``patch -> mono audio`` worker for the reuse pool; the settings/renderer are
+# baked into each worker by the initializer, so only the patch crosses per call.
+ReuseRenderWorker = Callable[[Dict[str, float]], np.ndarray]
+
+
+class ParallelInProcessRenderBackend:
+    """``num_workers`` workers that each reuse one wrapper across every render (fast, leaky).
+
+    Unlike :class:`ParallelFreshProcessRenderBackend`, the pool has **no** ``maxtasksperchild``
+    limit: each worker builds a :class:`DexedWrapper` once (the pool ``initializer``) and reuses
+    it, so Dexed's hidden per-voice state (LFO / sample-&-hold / noise) leaks across the renders
+    that worker performs. That leak is measured and deliberate (D-RL-RENDER): it biases the RL
+    reward but is tens to hundreds of times faster, and eval never uses this backend. Same
+    :meth:`render` / :meth:`render_batch` interface as the fresh-process backend, so the RL stage
+    swaps one for the other by config.
+
+    ``worker_initializer`` / ``render_worker`` are the picklable seam tests use to inject a
+    VST-free stand-in.
+    """
+
+    process_mode = "reuse"
+
+    def __init__(
+        self,
+        settings: RenderSettings,
+        renderer: str = "dawdreamer",
+        num_workers: Optional[int] = None,
+        worker_initializer: Callable[[str, RenderSettings], None] = init_reuse_worker,
+        render_worker: ReuseRenderWorker = render_patch_in_reused_wrapper,
+    ):
+        self._settings = settings
+        self._renderer = renderer
+        self._render_worker = render_worker
+        self.num_workers = num_workers if num_workers is not None else (os.cpu_count() or 1)
+        self._pool = mp.get_context("spawn").Pool(
+            processes=self.num_workers,
+            initializer=worker_initializer,
+            initargs=(renderer, settings),
+        )
+
+    def render(self, params: Dict[str, float]) -> np.ndarray:
+        return self._pool.apply(self._render_worker, (params,))
+
+    def render_batch(self, params_batch: List[Dict[str, float]]) -> List[np.ndarray]:
+        """Render a list of patches in parallel, preserving input order."""
+        return self._pool.map(self._render_worker, params_batch)
+
+    def close(self) -> None:
+        self._pool.terminate()
+        self._pool.join()
+
+    def __enter__(self) -> "ParallelInProcessRenderBackend":
         return self
 
     def __exit__(self, *exception) -> None:

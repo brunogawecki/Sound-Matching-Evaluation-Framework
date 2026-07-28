@@ -282,6 +282,7 @@ class SynthRLi(BaseSynthRLModel):
             sample_rate=self._training_sample_rate,
             renderer=rl.renderer,
             num_render_workers=rl.num_render_workers,
+            render_isolation=rl.render_isolation,
             reward_weights=reward_weights,
             buffer_capacity=rl.buffer_capacity,
             samples_per_target=rl.samples_per_target,

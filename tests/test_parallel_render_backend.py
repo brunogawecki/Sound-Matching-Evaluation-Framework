@@ -18,6 +18,7 @@ import config
 from dataset.render_backends import (
     FreshProcessRenderBackend,
     ParallelFreshProcessRenderBackend,
+    ParallelInProcessRenderBackend,
     RenderSettings,
 )
 
@@ -39,6 +40,20 @@ def fake_render(payload) -> np.ndarray:
 
 def pid_render(payload) -> np.ndarray:
     """A worker that reports the OS process it ran in (first sample = pid), to probe isolation."""
+    return np.array([float(os.getpid())], dtype=np.float32)
+
+
+# The reuse backend's worker takes a bare patch (settings/renderer are baked in by the
+# initializer), so its stand-ins have a different signature from the fresh backend's.
+def noop_reuse_init(renderer, settings) -> None:
+    pass
+
+
+def fake_reuse_render(patch) -> np.ndarray:
+    return _sine_for(float(patch["AMP"]))
+
+
+def pid_reuse_render(patch) -> np.ndarray:
     return np.array([float(os.getpid())], dtype=np.float32)
 
 
@@ -85,6 +100,44 @@ def test_defaults_to_cpu_count_workers():
 
 
 # ---------------------------------------------------------------------------
+# The reuse (in-process) backend: same batch/serial interface, but workers persist
+# across renders (the opposite of the fresh backend's per-render isolation).
+# ---------------------------------------------------------------------------
+def test_reuse_batch_equals_serial_and_expected():
+    patches = [{"AMP": value} for value in (0.1, 0.4, 0.7, 1.0)]
+    with ParallelInProcessRenderBackend(
+        SETTINGS, num_workers=2,
+        worker_initializer=noop_reuse_init, render_worker=fake_reuse_render,
+    ) as backend:
+        parallel = backend.render_batch(patches)
+        single = backend.render(patches[2])
+
+    assert len(parallel) == len(patches)
+    for rendered, patch in zip(parallel, patches):
+        np.testing.assert_allclose(rendered, _sine_for(patch["AMP"]))
+    np.testing.assert_allclose(single, parallel[2])
+
+
+def test_reuse_workers_persist_across_renders():
+    # The point of reuse mode: a batch of N is served by at most num_workers persistent
+    # processes, not N single-use ones (contrast test_every_render_runs_in_its_own_fresh_process).
+    patches = [{"AMP": 0.5} for _ in range(6)]
+    with ParallelInProcessRenderBackend(
+        SETTINGS, num_workers=2,
+        worker_initializer=noop_reuse_init, render_worker=pid_reuse_render,
+    ) as backend:
+        pids = {int(rendered[0]) for rendered in backend.render_batch(patches)}
+    assert len(pids) <= 2 < len(patches)
+
+
+def test_reuse_defaults_to_cpu_count_workers():
+    with ParallelInProcessRenderBackend(
+        SETTINGS, worker_initializer=noop_reuse_init, render_worker=fake_reuse_render
+    ) as backend:
+        assert backend.num_workers == (os.cpu_count() or 1)
+
+
+# ---------------------------------------------------------------------------
 # Dexed-gated: real renders through the parallel pool match the serial backend and
 # are non-silent. Skips when the plugin is absent.
 # ---------------------------------------------------------------------------
@@ -111,3 +164,20 @@ def test_parallel_matches_serial_with_real_dexed():
     for reference, candidate in zip(serial_audio, parallel_audio):
         assert np.max(np.abs(candidate)) > 0.0
         np.testing.assert_allclose(candidate, reference, atol=1e-6)
+
+
+@needs_plugin
+def test_reuse_backend_renders_non_silent_real_dexed():
+    from synth.dexed import DexedWrapper
+
+    synth = DexedWrapper(PLUGIN_PATH, sample_rate=config.SAMPLE_RATE, buffer_size=config.BUFFER_SIZE)
+    space = synth.parameter_space
+    settings = RenderSettings.from_config()
+    patches = [space.sample_uniform(np.random.default_rng(seed)) for seed in (0, 1, 2)]
+
+    with ParallelInProcessRenderBackend(settings, num_workers=2) as backend:
+        rendered = backend.render_batch(patches)
+
+    assert len(rendered) == len(patches)
+    for audio in rendered:
+        assert np.max(np.abs(audio)) > 0.0

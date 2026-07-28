@@ -33,7 +33,11 @@ from lightning.pytorch.utilities import rank_zero_info
 from torch import nn
 from torch.distributions import Categorical
 
-from dataset.render_backends import ParallelFreshProcessRenderBackend, RenderSettings
+from dataset.render_backends import (
+    ParallelFreshProcessRenderBackend,
+    ParallelInProcessRenderBackend,
+    RenderSettings,
+)
 from models.synthrl.representation import SynthRLRepresentation
 from models.synthrl.reward import DEFAULT_REWARD_WEIGHTS, RewardWeights, sound_matching_reward
 from models.synthrl.reward_buffer import RewardPrioritizedReplayBuffer
@@ -256,6 +260,7 @@ class SynthRLReinforceRegressor(pl.LightningModule):
         sample_rate: int,
         renderer: str = "dawdreamer",
         num_render_workers: Optional[int] = None,
+        render_isolation: str = "process",
         reward_weights: RewardWeights = DEFAULT_REWARD_WEIGHTS,
         buffer_capacity: int = 5,
         samples_per_target: int = 1,
@@ -276,6 +281,7 @@ class SynthRLReinforceRegressor(pl.LightningModule):
         self._sample_rate = int(sample_rate)
         self._renderer = renderer
         self._num_render_workers = num_render_workers
+        self._render_isolation = render_isolation
         self._reward_weights = reward_weights
         self._buffer_capacity = int(buffer_capacity)
         self._samples_per_target = int(samples_per_target)
@@ -289,6 +295,15 @@ class SynthRLReinforceRegressor(pl.LightningModule):
 
     # -- render backend lifecycle -------------------------------------------
     def _default_backend_factory(self):
+        # "reuse" trades render fidelity for speed (D-RL-RENDER); "process" is the faithful default.
+        if self._render_isolation == "reuse":
+            return ParallelInProcessRenderBackend(
+                self._render_settings, renderer=self._renderer, num_workers=self._num_render_workers
+            )
+        if self._render_isolation != "process":
+            raise ValueError(
+                f"render_isolation must be 'process' or 'reuse', got {self._render_isolation!r}."
+            )
         return ParallelFreshProcessRenderBackend(
             self._render_settings, renderer=self._renderer, num_workers=self._num_render_workers
         )

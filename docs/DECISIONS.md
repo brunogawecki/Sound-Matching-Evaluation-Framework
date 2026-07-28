@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-07-22 (D-RL-RENDER — the SynthRL RL stage renders with the live VST in the training loop; D-FAMILIES gains the RL slot).
+Last updated: 2026-07-27 (D-RL-RENDER amended — in-process reuse built as an opt-in fast reward path; leakage measured, no in-process reset exists).
 
 ---
 
@@ -1009,12 +1009,13 @@ future work, noted in `docs/FLOW_MATCHING_PORT.md`.
 ### D-RL-RENDER — The RL stage renders with the live VST inside the training loop (LOCKED 2026-07-22)
 
 **Decision**: `SynthRLi` (the SynthRL in-domain RL stage) renders every sampled patch with the real
-Dexed plugin **during training**, through `ParallelFreshProcessRenderBackend` — the D-REPRO
-fresh-process-per-render isolation widened to a worker pool (`rl.num_render_workers`). This is a
-deliberate, **scoped** deviation from D-SELFDESC: a `SynthRLi` *training* environment needs the VST.
-Nothing else moves. The renderer import is training-only and lazy (D-FRAMEWORK), `predict` decodes
-class scores with no synth involved, and the corpus/eval path is unchanged for every family
-including this one.
+Dexed plugin **during training**, through a worker pool (`rl.num_render_workers`). The pool's
+isolation is selected by `rl.render_isolation`: `"process"` (default) is the D-REPRO
+fresh-process-per-render backend; `"reuse"` reuses one wrapper per worker for speed, at a measured
+reward bias (see the 2026-07-27 amendment below). Either way this is a deliberate, **scoped**
+deviation from D-SELFDESC: a `SynthRLi` *training* environment needs the VST. Nothing else moves.
+The renderer import is training-only and lazy (D-FRAMEWORK), `predict` decodes class scores with no
+synth involved, and the corpus/eval path is unchanged for every family including this one.
 
 **Why**: the reward *is* the render. SynthRL's contribution is that the training signal comes from
 audio similarity between the target and the render of the sampled action, which is what removes the
@@ -1034,10 +1035,10 @@ serial one.
 **Alternatives considered**:
 
 - *In-process renderer reuse with a state reset between patches* — roughly two orders of magnitude
-  faster per render, and the obvious optimization if stage 2 turns out to be render-bound. Rejected
-  for now: it reintroduces exactly the context leakage D-REPRO exists to exclude, and it would
-  desynchronize the reward from the evaluation contract. Documented as future work in
-  `docs/SYNTHRL_PORT.md`, not built.
+  faster per render, and the obvious optimization if stage 2 turns out to be render-bound. Was
+  rejected here as future work; **subsequently built** once stage 2 proved render-bound and the
+  leakage was measured — see the 2026-07-27 amendment. The "with a state reset" premise turned out
+  to be false: no in-process reset exists.
 - *A differentiable synthesizer proxy in place of the real render* (the InverSynth II route) —
   rejected. It replaces the paper's own mechanism with a second approximation layer, and that
   approach is already represented in the benchmark as its own family (`IS2xITF` / `IS2`), so folding
@@ -1061,6 +1062,29 @@ serial one.
   before the first stage 2 cluster run.
 - `SynthRL-o` (stage 3, out-of-domain) reuses this machinery unchanged — only the corpus and synth
   differ — so this decision does not need revisiting when D-FAMILIES resolves.
+
+**Amendment (2026-07-27) — in-process reuse built as an opt-in fast reward path.** The two revisit
+conditions the original decision named are both met: stage 2 is render-bound (a fresh-process full
+run measures in weeks at corpus scale, benchmarked locally at ~1.1 s/render), and the leakage is now
+measured. A spike compared in-process renders against the fresh-process render of the same patch on
+the reward's own `lsd`/`sc`/`mfcc` terms (12 seeded patches):
+
+- Reusing one wrapper averages reward **7.9** against the **10.0** a faithful render scores; worst
+  case is far lower, concentrated on free-running-LFO patches.
+- The leak is **not resettable in-process**: `reload_graph` and `load_state(clean blob)` were
+  byte-for-byte identical to no reset. Dexed's DSP state (LFO phase, S&H, noise) survives every
+  reset dawdreamer exposes; only a fresh OS process clears it (this *confirms* D-REPRO empirically).
+  So the original "with a state reset" framing was not achievable — the reused reward is simply
+  biased, not corrected.
+- The leak is fully **deterministic** (byte-identical re-runs), so reuse mode is reproducible.
+
+Given that, `ParallelInProcessRenderBackend` was added alongside the fresh-process backend and is
+selected by `rl.render_isolation` (`"process"` default, `"reuse"` opt-in). `synthrl_i_config.yaml`
+sets `reuse`, because fresh-process is not viable at corpus scale. This is accepted rather than
+gated on an A/B because **eval is unaffected** — the Evaluator always re-renders fresh-process, so
+the reported metrics stay honest; only the *training reward* is approximate, and REINFORCE needs it
+only to rank sampled patches. Fresh-process remains the faithful default for anyone who wants it,
+and stays the sole eval-path renderer. Measurement: the spike is described in `docs/SYNTHRL_PORT.md`.
 
 Map and port fidelity: `docs/SYNTHRL_PORT.md`.
 

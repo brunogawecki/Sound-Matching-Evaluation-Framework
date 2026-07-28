@@ -137,28 +137,39 @@ D-NAMING and is a silent no-op on any synth that does not use that convention.
 
 ## Training renders with the real Dexed
 
-The RL stage renders every sampled patch inside the training loop through
-`ParallelFreshProcessRenderBackend` — the fresh-process-per-render isolation of D-REPRO, widened
-to a worker pool. So a **`SynthRLi` training run is not VST-free**, a deliberate deviation from
-D-SELFDESC. It is training-only: `predict` decodes class scores through the representation with no
-synth involved, so the eval path is identical for both families and unchanged from every other
-family in the benchmark. **D-RL-RENDER** records the decision and the alternatives.
+The RL stage renders every sampled patch inside the training loop. Two render backends are wired
+in, chosen by `rl.render_isolation`:
+
+- `"process"` (default) — `ParallelFreshProcessRenderBackend`, the fresh-process-per-render
+  isolation of D-REPRO widened to a worker pool. Faithful but slow.
+- `"reuse"` — `ParallelInProcessRenderBackend`, one wrapper reused per worker. Tens to hundreds of
+  times faster, with a measured hidden-state bias in the reward (see below).
+
+Either way a **`SynthRLi` training run is not VST-free**, a deliberate deviation from D-SELFDESC. It
+is training-only: `predict` decodes class scores through the representation with no synth involved,
+so the eval path is identical for both families and unchanged from every other family in the
+benchmark. Eval always re-renders fresh-process, so `render_isolation` never touches the reported
+metrics. **D-RL-RENDER** records the decision and the alternatives.
 
 Practical consequences:
 
-- Stage 2 is far slower per epoch than stage 1 (one fresh VST process per patch per step, plus
-  `prefill_epochs` full passes up front). Budget wall-clock accordingly, and set
-  `rl.num_render_workers` to the job's `--cpus-per-task`.
+- Fresh-process stage 2 is render-bound: one VST process per patch per step, plus `prefill_epochs`
+  full passes up front. At corpus scale this is prohibitive (a full run measures in weeks), which is
+  why `synthrl_i_config.yaml` sets `render_isolation: reuse`. Set `rl.num_render_workers` to the
+  job's `--cpus-per-task` either way.
 - The training environment needs **Dexed 0.9.8** — the version the D-SELFDESC cluster spike pinned.
   Parameter-name parity between that build and the one that rendered the corpus is still unverified,
   and it matters here: the backend sets patches by name, so a renamed parameter would silently
   change what the reward scores.
 
-**Future optimization, not built:** reusing one in-process synth with a state reset between patches
-would be roughly two orders of magnitude faster per render. It is rejected for now because it
-reintroduces the context leakage D-REPRO excludes, which would leave the reward and the reported
-metric measuring different audio. Revisit only if stage 2 proves render-bound, and only with the
-leakage measured.
+**The reuse-mode bias (measured).** A leakage spike compared in-process renders against the
+fresh-process render of the same patch (12 seeded patches, the reward's own `lsd`/`sc`/`mfcc`
+terms). Reusing one wrapper averages reward 7.9 against the 10.0 a faithful render scores, worst
+case far lower on free-running-LFO patches; the leak is fully deterministic (byte-identical re-runs)
+but not resettable — `reload_graph` and `load_state` were byte-for-byte identical to no reset,
+because Dexed's DSP state survives every in-process reset dawdreamer exposes. So reuse mode is a
+biased-but-cheap reward, accepted because eval stays honest and REINFORCE only needs the reward to
+rank patches; fresh-process remains the faithful default for anyone who wants it.
 
 ## How the code maps onto this
 

@@ -41,6 +41,10 @@ rl:
   ramp_epochs: 100          # repo stage2.yaml: rl_coef ramps 0->1 over epochs 199->299
   num_render_workers: 8     # repo: 16; capped by --cpus-per-task (see header)
   renderer: dawdreamer
+  render_isolation: reuse    # one wrapper reused per worker: fast, with a measured hidden-state
+                             # bias in the reward (D-RL-RENDER). Fresh-process is too slow at
+                             # corpus scale. Eval still re-renders fresh-process, so the reported
+                             # metrics are unaffected -- only the training reward is approximate.
   reward_spectrogram_weight: 0.27           # paper Eq. 5 w1
   reward_spectral_convergence_weight: 0.7   # paper Eq. 5 w2
   reward_mfcc_weight: 0.03                  # paper Eq. 5 w3

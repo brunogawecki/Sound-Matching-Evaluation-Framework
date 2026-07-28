@@ -85,6 +85,9 @@ class RLConfig:
     ramp for short runs), the render-worker count for the in-loop reward (``None`` =
     ``os.cpu_count()``; the paper fixes ``synth_render_workers`` = 16), the render engine,
     and the three reward-distance weights (paper Eq. 5 / repo ``model/loss.py``: w1/w2/w3).
+    ``render_isolation`` picks the reward renderer: ``"process"`` (default) renders each patch
+    in a fresh process (faithful, slow); ``"reuse"`` reuses one wrapper per worker (fast, a
+    measured hidden-state bias -- D-RL-RENDER). Eval is always fresh-process regardless.
     Non-RL families ignore them all.
     """
     buffer_capacity: int = 5
@@ -93,6 +96,7 @@ class RLConfig:
     ramp_epochs: int = 100
     num_render_workers: Optional[int] = None
     renderer: str = "dawdreamer"
+    render_isolation: str = "process"
     reward_spectrogram_weight: float = 0.27
     reward_spectral_convergence_weight: float = 0.7
     reward_mfcc_weight: float = 0.03
