@@ -6,10 +6,10 @@
 #     sbatch -A "$SLURM_ACCOUNT" cluster/train.sbatch <corpus> SynthRLi synthrl_i \
 #         checkpoints/<synthrl_p_jobid>/synthrl_p.pt
 #
-# This stage renders with the real Dexed inside the training loop (one fresh process per patch,
-# batch_size patches per step), so it needs the plugin on the compute node and is far slower
-# per epoch than stage 1. Budget wall-clock accordingly -- the 12h #SBATCH --time in
-# train.sbatch will not cover 200 epochs on a large corpus.
+# This stage renders with the real Dexed inside the training loop (batch_size patches per step),
+# so it needs the plugin on the compute node and is slower per epoch than stage 1. With
+# render_isolation: reuse (below) rendering is cheap and the run is GPU-bound; train.sbatch's
+# 24h #SBATCH --time covers 200 epochs.
 #
 # Deviations from the paper, dictated by what models/training/ supports:
 # - Scheduler: as in synthrl_p_config.yaml, plain cosine stands in for the repo's

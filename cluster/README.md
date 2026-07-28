@@ -93,8 +93,8 @@ the model's registry entry (`mean_parameter_baseline.json` / `spectrogram_cnn.pt
 ## Configs + wandb
 
 - Switch smoke ↔ full with the 3rd `train.sbatch` arg (`smoke` / `full`, default `full`; a
-  `.yaml` path also works). `train.sbatch`'s `--time=12:00:00` covers the full run; lower it
-  for smoke. Configs live in `cluster/training_configs/`.
+  `.yaml` path also works). `train.sbatch`'s `--time=24:00:00` covers the full run (including a
+  `SynthRLi` RL stage in reuse mode); lower it for smoke. Configs live in `cluster/training_configs/`.
 - wandb is off by default (a `CSVLogger` always writes `lightning_logs/`). To stream metrics,
   add `logger:\n  wandb: true` to the training config and set `WANDB_API_KEY` in `cluster.env`
   (from <https://wandb.ai/authorize>). If the node has no internet, set `WANDB_MODE=offline`
@@ -125,10 +125,12 @@ family is VST-free here. One-time setup on the cluster:
 
 Two things to know before a stage-2 run:
 
-- **Rendering dominates the wall clock.** One fresh process per patch per step, plus
-  `rl.prefill_epochs` gradient-free passes up front. `rl.num_render_workers` in the training
-  config must match `--cpus-per-task` (both 8 today). The `--time=12:00:00` in `train.sbatch`
-  will **not** cover 200 epochs on a large corpus.
+- **Rendering cost depends on `rl.render_isolation`.** `synthrl_i_config.yaml` ships `reuse`
+  (one wrapper per worker), so rendering is cheap and the run is GPU-bound; `process`
+  (fresh process per patch) is faithful but far slower and would not fit 200 epochs on a large
+  corpus (D-RL-RENDER). `rl.num_render_workers` in the training config must match
+  `--cpus-per-task` (both 8 today). The `--time=24:00:00` in `train.sbatch` covers 200 epochs
+  in reuse mode.
 - **Verify parameter-name parity first.** The corpus's `ParameterSpace` was built by the Mac's
   Dexed; the reward sets patches by name (D-NAMING) on 0.9.8 here. A renamed or missing
   parameter would silently change what the reward scores instead of erroring. Unverified —
