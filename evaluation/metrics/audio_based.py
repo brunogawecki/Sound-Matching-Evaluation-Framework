@@ -32,14 +32,15 @@ as the dataset builder's near-silence gate (D-SILENCE). ``f0_rmse`` compares
 choices below are reasonable defaults, not anchored to a reference -- they are
 pickable later (as for the mel / MSS parameters).
 
-``librosa`` and ``pyloudnorm`` are hard dependencies of the core panel and are
-imported eagerly.
+``librosa`` is imported eagerly. ``pyloudnorm`` is imported lazily inside the one
+loudness metric that uses it, so the SynthRL reward can reuse the STFT/MFCC
+metrics here on the cluster (training env, no ``pyloudnorm`` -- D-FRAMEWORK)
+without pulling in an eval-only dependency.
 """
 from __future__ import annotations
 
 import numpy as np
 import librosa
-import pyloudnorm
 
 # Single-resolution STFT framing -- matches the preset-gen-vae anchor.
 N_FFT = 1024
@@ -190,6 +191,7 @@ def _integrated_loudness(signal: np.ndarray, sample_rate: int) -> float:
     gate (D-SILENCE). Silence integrates to ``-inf``; it is clamped to
     :data:`LOUDNESS_FLOOR_LUFS` so downstream differences stay finite.
     """
+    import pyloudnorm  # lazy: eval-only, absent on the cluster training env
     meter = pyloudnorm.Meter(sample_rate)
     loudness = float(meter.integrated_loudness(np.asarray(signal, dtype=np.float64)))
     return max(loudness, LOUDNESS_FLOOR_LUFS)
