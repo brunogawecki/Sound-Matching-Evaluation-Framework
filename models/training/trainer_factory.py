@@ -84,6 +84,7 @@ def build_trainer(
 
     return pl.Trainer(
         max_epochs=trainer_config.max_epochs,
+        max_time=trainer_config.max_time,
         precision=trainer_config.precision,
         accelerator=trainer_config.accelerator,
         devices=trainer_config.devices,

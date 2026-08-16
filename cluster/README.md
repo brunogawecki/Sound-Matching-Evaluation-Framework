@@ -93,8 +93,8 @@ the model's registry entry (`mean_parameter_baseline.json` / `spectrogram_cnn.pt
 ## Configs + wandb
 
 - Switch smoke ↔ full with the 3rd `train.sbatch` arg (`smoke` / `full`, default `full`; a
-  `.yaml` path also works). `train.sbatch`'s `--time=24:00:00` covers the full run (including a
-  `SynthRLi` RL stage in reuse mode); lower it for smoke. Configs live in `cluster/training_configs/`.
+  `.yaml` path also works). `train.sbatch`'s `--time=24:00:00` covers the full run, and
+  `synthrl_i` is truncated to fit it (see below). Configs live in `cluster/training_configs/`.
 - wandb is off by default (a `CSVLogger` always writes `lightning_logs/`). To stream metrics,
   add `logger:\n  wandb: true` to the training config and set `WANDB_API_KEY` in `cluster.env`
   (from <https://wandb.ai/authorize>). If the node has no internet, set `WANDB_MODE=offline`
@@ -125,21 +125,27 @@ family is VST-free here. One-time setup on the cluster:
 
 Two things to know before a stage-2 run:
 
-- **Rendering cost depends on `rl.render_isolation`.** `synthrl_i_config.yaml` ships `reuse`
-  (one wrapper per worker), so rendering is cheap and the run is GPU-bound; `process`
-  (fresh process per patch) is faithful but far slower and would not fit 200 epochs on a large
-  corpus (D-RL-RENDER). `rl.num_render_workers` in the training config must match
-  `--cpus-per-task` (both 8 today). The `--time=24:00:00` in `train.sbatch` covers 200 epochs
-  in reuse mode.
+- **The RL stage is not render-bound, and 200 epochs does not fit 24 h.** Measured on job
+  1006799: ~35.3 min/epoch, so the paper's 200 epochs need ~118 h. Rendering is only ~1% of a
+  step (~29 ms per 32-patch batch at 8 workers) — the cost is the per-sample reward loop and
+  the REINFORCE loop over 103 parameter heads, so raising `rl.num_render_workers` does **not**
+  reduce epoch cost. `synthrl_i_config.yaml` therefore runs a truncated 36-epoch curriculum
+  with `ramp_epochs` halved to 18, plus `trainer.max_time: "00:22:00:00"` so Lightning stops
+  gracefully and still exports the checkpoint. Use `scripts/benchmark_render_throughput.py` to
+  re-measure. `rl.render_isolation` stays `reuse`; `process` (fresh interpreter per patch) is
+  faithful but far slower (D-RL-RENDER).
 - **Verify parameter-name parity first.** The corpus's `ParameterSpace` was built by the Mac's
   Dexed; the reward sets patches by name (D-NAMING) on 0.9.8 here. A renamed or missing
-  parameter would silently change what the reward scores instead of erroring. Unverified —
-  this is the open follow-up from the D-SELFDESC spike.
+  parameter would silently change what the reward scores instead of erroring. Check with
+  `python scripts/verify_parameter_parity.py --corpus <dir>` — this passed for
+  `full_preset-gen-vae_train` on 2026-07-30 (all 103 parameters matched).
 
 ## Notes
 
-- `--time` cap is 24 h per job; a timed-out job checkpoints and requeues (safety net, not a
-  tested path).
+- There is **no cluster-imposed wall-time cap** — every partition reports `TIMELIMIT infinite`
+  and multi-day jobs are accepted (verified with `sbatch --test-only --time=7-00:00:00`). The
+  24 h in `train.sbatch` is our own choice. A job killed by `--time` dies *inside* `fit()`, so
+  no checkpoint is exported; prefer `trainer.max_time` to stop gracefully before that.
 - Corpus is read in place over shared `/home` — no node-local staging.
 - No `.env` needed on the cluster; `config.py` has defaults for every value except
   `DEXED_PATH`, which `cluster.env` supplies for `SynthRLi` (its default is a macOS path).

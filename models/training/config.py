@@ -159,6 +159,9 @@ class TrainerConfig:
     ``devices=1``). ``deterministic`` is on by default for reproducibility.
     """
     max_epochs: int = 100
+    # Wall-clock stop ("DD:HH:MM:SS"). Set it below the SLURM --time so fit() returns and
+    # the checkpoint export runs, instead of the job being killed mid-fit with no export.
+    max_time: Optional[str] = None
     precision: str = "bf16-mixed"
     accelerator: str = "auto"
     devices: Union[int, str] = "auto"

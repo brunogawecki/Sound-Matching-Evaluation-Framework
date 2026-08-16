@@ -123,9 +123,14 @@ Two details that are easy to get wrong:
 ### The curriculum ramp
 
 Stage 2 blends `loss = α·RL + (1−α)·parameter`, with α rising linearly `0 → 1` over
-`rl.ramp_epochs` (100) and staying at 1 afterwards. This is the repo's `rl_coef` schedule over
+`rl.ramp_epochs` and staying at 1 afterwards. This is the repo's `rl_coef` schedule over
 epochs 199→299. The parameter loss carries the repo's 0.2 categorical factor so the two terms
 balance the way the paper's do.
+
+`ramp_epochs` must be scaled with `trainer.max_epochs`, not left at the paper's 100: on a
+truncated run a full-length ramp means RL never fully engages. The timed-out 200-epoch attempt
+reached only epoch 41, so α peaked at ~0.41 and the RL objective was never at full weight.
+`synthrl_i_config.yaml` keeps the paper's half-ramp-then-RL-only shape (18 of 36).
 
 ### Silent operators are dropped from the parameter loss
 
@@ -203,6 +208,7 @@ Deliberate, and each with a reason:
 | 8 | **Single seeded 10% validation split**, not the repo's 5-fold CV with a 20% test holdout | Framework convention across all families. |
 | 9 | **Eq. 6's policy-ratio importance weight is dropped** | The released code drops it too (`importance_sampling=False`); we match the code, not the equation. |
 | 10 | **`SynthRL-o` not ported** | Needs a second synth; blocked on D-FAMILIES. |
+| 11 | **Stage 2 runs 36 epochs, not 200**, with `ramp_epochs` scaled 100 → 18 to keep the paper's 50/50 ramp/RL-only shape | Measured cost is ~35.3 min/epoch (job 1006799), so 200 epochs needs ~118 h. 36 epochs fits one 24 h job. The first attempt at the full 200 timed out at epoch 41 and exported nothing. Reward was still climbing at truncation, so this run **understates** what the method reaches at full length — state that with any `SynthRL-i` result. |
 
 ## Caveats
 

@@ -7,9 +7,16 @@
 #         checkpoints/<synthrl_p_jobid>/synthrl_p.pt
 #
 # This stage renders with the real Dexed inside the training loop (batch_size patches per step),
-# so it needs the plugin on the compute node and is slower per epoch than stage 1. With
-# render_isolation: reuse (below) rendering is cheap and the run is GPU-bound; train.sbatch's
-# 24h #SBATCH --time covers 200 epochs.
+# so it needs the plugin on the compute node and is slower per epoch than stage 1.
+#
+# Epoch budget (measured, job 1006799): ~35.3 min/epoch on an A100, so the paper's 200 epochs
+# would need ~118 h. This config instead runs a **truncated 36-epoch** curriculum that fits one
+# 24 h job, with ramp_epochs halved to keep the paper's shape (ramp for the first half, RL-only
+# for the second). Deviation from the paper, recorded in docs/SYNTHRL_PORT.md.
+#
+# That cost is not rendering: at 8 workers a 32-patch batch renders in ~29 ms, ~1% of the 3.13 s
+# step. The step is dominated by the per-sample reward loop and the REINFORCE loop over 103
+# parameter heads, so raising num_render_workers does not reduce epoch cost.
 #
 # Deviations from the paper, dictated by what models/training/ supports:
 # - Scheduler: as in synthrl_p_config.yaml, plain cosine stands in for the repo's
@@ -32,13 +39,13 @@ optimizer:
   learning_rate: 2.0e-5     # repo stage2.yaml: optim.initial_lr (10x below stage 1)
   weight_decay: 1.0e-4      # repo stage2.yaml: optim.weight_decay
   scheduler: cosine
-  scheduler_max_epochs: 200 # matches trainer.max_epochs below
+  scheduler_max_epochs: 36  # matches trainer.max_epochs below
 
 rl:
   buffer_capacity: 5        # repo stage2.yaml: loss.per_capacity
   samples_per_target: 1     # repo utils/buffer.py: sample() draws one experience per target
   prefill_epochs: 5         # repo finetune.py: per_capacity gradient-free epochs before training
-  ramp_epochs: 100          # repo stage2.yaml: rl_coef ramps 0->1 over epochs 199->299
+  ramp_epochs: 18           # repo: 100 over 200 epochs; halved max_epochs keeps the 50/50 shape
   num_render_workers: 8     # repo: 16; capped by --cpus-per-task (see header)
   renderer: dawdreamer
   render_isolation: reuse    # one wrapper reused per worker: fast, with a measured hidden-state
@@ -57,7 +64,8 @@ data:
   val_fraction: 0.1         # seeded sample-level split (repo: 5-fold CV; see header)
 
 trainer:
-  max_epochs: 200             # paper 4.2: 100 ramp epochs + 100 RL-only epochs
+  max_epochs: 36              # paper 4.2 runs 200; truncated to fit 24 h (see header)
+  max_time: "00:22:00:00"     # stop 2 h before #SBATCH --time so fit() returns and exports
   precision: 32-true          # see header
   accelerator: gpu            # fail loud if no GPU is visible (we requested --gres=gpu:1)
   devices: 1
