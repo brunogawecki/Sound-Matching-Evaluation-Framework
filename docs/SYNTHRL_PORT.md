@@ -160,12 +160,15 @@ Practical consequences:
 
 - Fresh-process stage 2 is render-bound: one VST process per patch per step, plus `prefill_epochs`
   full passes up front. At corpus scale this is prohibitive (a full run measures in weeks), which is
-  why `synthrl_i_config.yaml` sets `render_isolation: reuse`. Set `rl.num_render_workers` to the
-  job's `--cpus-per-task` either way.
+  why `synthrl_i_config.yaml` sets `render_isolation: reuse`. Under `reuse` the run is **not**
+  render-bound — rendering is ~1% of a step, so raising `rl.num_render_workers` buys nothing (see
+  deviation 11 and the D-RL-RENDER 2026-08-16 amendment). Set it to the job's `--cpus-per-task`
+  either way.
 - The training environment needs **Dexed 0.9.8** — the version the D-SELFDESC cluster spike pinned.
-  Parameter-name parity between that build and the one that rendered the corpus is still unverified,
-  and it matters here: the backend sets patches by name, so a renamed parameter would silently
-  change what the reward scores.
+  Parameter-name parity between that build and the one that rendered the corpus matters here,
+  because the backend sets patches by name and a renamed parameter would silently change what the
+  reward scores. **Verified 2026-07-30** for `full_preset-gen-vae_train` — all 103 parameters
+  matched (`scripts/verify_parameter_parity.py`). Re-run it for a new corpus or Dexed build.
 
 **The reuse-mode bias (measured).** A leakage spike compared in-process renders against the
 fresh-process render of the same patch (12 seeded patches, the reward's own `lsd`/`sc`/`mfcc`

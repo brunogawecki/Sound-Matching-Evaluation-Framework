@@ -1051,15 +1051,18 @@ serial one.
 - The cluster training environment for this one family must install Dexed 0.9.8 + `dawdreamer`
   (version pinned by the D-SELFDESC spike — 1.0.1 does not load there). Every other family still
   trains VST-free.
-- Stage 2 wall-clock is dominated by rendering. `rl.num_render_workers` should be set to match the
-  job's `--cpus-per-task`, and `rl.prefill_epochs` (default 5) costs that many gradient-free full
-  passes over the training set before the first gradient step.
+- Stage 2 wall-clock is dominated by rendering **in `process` mode only** (~1.1 s/render). Under the
+  `reuse` mode the cluster config actually uses, rendering is ~1% of a step and the cost is the
+  per-sample reward and the REINFORCE pass over the parameter heads — see the 2026-08-16 amendment.
+  `rl.num_render_workers` should still match the job's `--cpus-per-task`, and `rl.prefill_epochs`
+  (default 5) costs that many gradient-free full passes over the training set before the first
+  gradient step.
 - **Parameter-name parity between Dexed builds now bites.** The corpus's `ParameterSpace` is rebuilt
   offline from `run_summary.json`, but the RL backend sets patches **by name** (D-NAMING) on the
-  cluster's 0.9.8 build, while the existing corpora were rendered by the Mac build. The D-SELFDESC
-  spike already flagged this parity as unverified; for this family it stops being cosmetic, because
-  a renamed or missing parameter would silently change the patch the reward is computed on. Verify
-  before the first stage 2 cluster run.
+  cluster's 0.9.8 build, while the existing corpora were rendered by the Mac build. A renamed or
+  missing parameter would silently change the patch the reward is computed on. **Verified
+  2026-07-30** for `full_preset-gen-vae_train` — all 103 parameters matched
+  (`scripts/verify_parameter_parity.py`). Re-run it for any new corpus or Dexed build.
 - `SynthRL-o` (stage 3, out-of-domain) reuses this machinery unchanged — only the corpus and synth
   differ — so this decision does not need revisiting when D-FAMILIES resolves.
 
@@ -1085,6 +1088,26 @@ gated on an A/B because **eval is unaffected** — the Evaluator always re-rende
 the reported metrics stay honest; only the *training reward* is approximate, and REINFORCE needs it
 only to rank sampled patches. Fresh-process remains the faithful default for anyone who wants it,
 and stays the sole eval-path renderer. Measurement: the spike is described in `docs/SYNTHRL_PORT.md`.
+
+**Amendment (2026-08-16) — under `reuse`, stage 2 is *not* render-bound.** The first full stage-2
+cluster run (job 1006799) measured **~35.3 min/epoch** (3.13 s/step, 660 steps), which the original
+"dominated by rendering" consequence would attribute to the render pool. Profiling says otherwise.
+Per 32-patch step, steady state:
+
+| component | time |
+|---|---|
+| render 32 patches (8 workers, `reuse`) | 29 ms (~1%) |
+| reward, 32 samples | 237 ms |
+| sample actions | 9 ms |
+| REINFORCE + backward | 128 ms |
+
+Dexed renders 4 s of audio in ~2 ms in-process, so **raising `rl.num_render_workers` does not reduce
+epoch cost**. The cost is the per-sample reward loop (serial librosa STFT/MFCC calls) and the
+REINFORCE loop over the parameter heads. Re-measure with
+`scripts/benchmark_render_throughput.py`. This does not change the decision — it corrects the
+rationale, and it means the "render-bound" framing applies to `process` mode only. Consequence for
+run planning: 200 epochs needs ~118 h, so `synthrl_i_config.yaml` truncates to 36 epochs with
+`ramp_epochs` scaled to match (deviation 11 in `docs/SYNTHRL_PORT.md`).
 
 Map and port fidelity: `docs/SYNTHRL_PORT.md`.
 

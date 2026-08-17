@@ -26,7 +26,8 @@ port (#23/#35/#36) — full VAE with latent RealNVP flow, two registered familie
 
 What does **not** exist yet:
 
-- **No neural-proxy baseline** — and whether it is built at all is the open half of D-FAMILIES.
+- **No trained `SynthRLi`.** Stage 1 (`SynthRLp`) has a completed cluster run; stage 2 has not
+  finished one, so the RL family has no evaluated result yet.
 - **No fuller Sound2Synth architecture.** The landed model is a single-spectrogram-branch first cut;
   the paper's multi-modal encoder + grouped-FC parameter classifier is still future work.
 - **No final human test set (D4), no benchmark orchestration, no benchmark table** — Phase 6. The
@@ -97,6 +98,14 @@ the Phase 4 harness + packaging.
   synthetic-uniform corpus (D-FLOW-CORPUS), unlike every other family. The paper's AST regression
   baseline is deliberately not ported (discriminative coverage already exists). Map and port
   fidelity: `docs/FLOW_MATCHING_PORT.md`.
+- **Reinforcement-learning family** (SynthRL — Shin & Lee IJCAI-25) — **DONE**: two of the paper's
+  three staged models as registered families, `SynthRLp` (stage 1, parameter loss only) and
+  `SynthRLi` (stage 2, in-domain RL, warm-started from a stage-1 checkpoint via `--init-from`).
+  Stage 3 `SynthRL-o` is deferred — it needs a second synth, so it is blocked on D-FAMILIES, not on
+  the port. The only family that treats every parameter as a **classification** head, and the only
+  one that renders with the live VST **inside the training loop** (D-RL-RENDER); `predict` and the
+  eval path stay VST-free. Stage 2 is truncated to 36 epochs against the paper's 200 on measured
+  cost. Map and port fidelity: `docs/SYNTHRL_PORT.md`.
 
 *(Evolutionary search is dropped pending D-FAMILIES. If ever reinstated it runs its per-target search
 locally with the live VST — it does not fit the cluster training harness.)*
