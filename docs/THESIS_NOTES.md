@@ -205,3 +205,112 @@ point.
 discriminative model (Bruford et al. DAFx24) and is **deliberately not ported** — discriminative
 coverage already exists via `sound2synth` and `inversynth2`. Mind the name collision: our
 `AudioSpectrogramTransformer` is the flow's conditioning encoder, not that baseline.)*
+
+---
+
+**Topic: the SynthRL port — what the Implementation chapter should say, and one threat to validity
+that affects the whole benchmark table.** The reinforcement-learning family is a port of Shin & Lee
+(IJCAI-25), implemented in `models/synthrl/` as two registered families (`SynthRLp` / `SynthRLi` —
+stages 1 and 2 of the paper's three). The authoritative source is `docs/SYNTHRL_PORT.md`: the
+architecture, the code↔paper counterpart table, and all eleven documented deviations. Rationale
+lives in `DECISIONS.md` (**D-RL-RENDER**, D-METRIC-NORM, D-KIND, D-MELNORM, D-REPRO). The five
+angles below are what the write-up should not miss. **As of this writing `SynthRLp` has one
+completed cluster run but no evaluation, and `SynthRLi` has not completed a run at all — there are
+no numbers yet, only method and implementation.**
+
+## 1. The RL reward is built from the evaluation panel's own metrics — say this, it is a confound
+
+The reward is `1 / (w₁·LSD + w₂·SC + w₃·MFCC)`, computed with the framework's own metric callables
+(`lsd`, `spectral_convergence`, `mfcc_mae`). As an implementation fact this is a virtue and worth
+one sentence: the training signal and the results table measure similarity through one shared
+definition rather than two drifting ones.
+
+**The consequence is the problem.** `SynthRLi` is the only family in the benchmark that directly
+optimizes quantities the panel scores it on. Every other family optimizes a parameter loss, an ELBO,
+or a flow-matching objective, and is then measured on audio similarity as an *independent* test.
+SynthRL is measured on part of its own objective. A strong `SynthRLi` row on `spectral_convergence`
+or `mfcc_mae` is therefore not directly comparable to the other families' rows on those same
+metrics.
+
+This is not a reason to change the reward — it *is* the paper's method, and changing it would stop
+being a port. It is a reason to state the asymmetry wherever the comparative table is discussed, and
+to lean on the metric axes the reward does **not** contain (the parameter, loudness, and pitch axes)
+when arguing that `SynthRLi` genuinely improved rather than gamed three numbers. The
+`SynthRLp` → `SynthRLi` delta stays interpretable throughout, since both are scored the same way.
+
+## 2. We port the in-domain half of a cross-domain paper — do not oversell the contribution
+
+The paper is titled *Cross-domain* Synthesizer Sound Matching, and its headline claim is stage 3
+(`SynthRL-o`): RL-only fine-tuning on sounds from a **different synthesizer**, which is what removes
+the need for ground-truth parameters. That stage is **deferred**, because it needs the second synth
+and D-FAMILIES is open.
+
+So the thesis tests the paper's machinery, not the paper's main claim. Be explicit about it. The
+framing that holds up: stages 1 and 2 establish that the method works in-domain on Dexed, and the
+cross-domain claim is out of scope for this benchmark rather than refuted by it. Note also that
+nothing in the port blocks stage 3 — it is stage 2's recipe with the parameter loss switched off and
+a different corpus — so it is a scope decision, not a technical limitation.
+
+## 3. The staging is the experiment, and it parallels InverSynth II
+
+`SynthRLi` warm-starts from a finished `SynthRLp` checkpoint through the generic `--init-from` hook.
+Same network, same corpus, same evaluation — the only difference is that stage 2 adds the RL
+objective and ramps the parameter loss out. The `SynthRLp` → `SynthRLi` difference therefore
+isolates the contribution of reinforcement learning, cleanly, and it is the number this family
+exists to produce.
+
+Worth pointing at the `IS` → `IS2xITF` → `IS2` staging in the same chapter rather than re-explaining
+the idea: two of the five families are staged ports where the intermediate stage is a registered,
+separately-evaluated model. That is a property of how this benchmark was built, and it is more
+informative than either family's absolute score.
+
+## 4. The context-leakage story from topic 1 resurfaces here, and was measured a second time
+
+Stage 2 renders every sampled patch with the live Dexed **inside the training loop** (D-RL-RENDER) —
+the only family that does, and a deliberate, scoped deviation from the self-describing-corpus rule.
+Fresh-process rendering is too slow at corpus scale, so training reuses one plugin instance per
+worker, which walks straight into the hidden per-voice state documented at the top of this file.
+
+It was quantified again in this new setting: a reused instance computes an average reward of **7.9**
+where a faithful fresh-process render of the same patch scores **10.0**, worst case far lower and
+concentrated on free-running-LFO patches. The leak is fully deterministic, so training stays
+reproducible, and `reload_graph` / `load_state` were byte-for-byte identical to no reset at all —
+independently confirming the topic-1 finding that only OS-level process isolation clears the state.
+
+Two things the write-up must pair with that number, or it reads as a broken experiment:
+
+- **Evaluation is unaffected.** The Evaluator always re-renders fresh-process (D-EVAL / D-REPRO), so
+  every reported metric is computed on clean audio. Only the *training reward* is biased.
+- **REINFORCE only needs the reward to rank patches**, not to be calibrated. A deterministic,
+  monotone-ish distortion of the reward is a far weaker requirement than an accurate one.
+
+This is a good discussion beat: the same plugin defect that topic 1 frames as a threat to validity
+turns out to be tolerable in one specific place, for a stated reason. That is a more interesting
+claim than either "it does not matter" or "it invalidates the run".
+
+## 5. The truncated run understates the method — and the reason is not what it looks like
+
+The paper runs 200 epochs per stage. Stage 2 here runs **36**, with the curriculum ramp scaled from
+100 down to 18 so the paper's half-ramp-then-RL-only shape survives the truncation. The reason is
+measured: **~35.3 min/epoch** on an A100 (job 1006799), so 200 epochs needs ~118 h. A first attempt
+at the full 200 hit the job wall-time at epoch 41 and exported nothing.
+
+The reward was **still climbing** when the run was truncated (`val_reward` 1.337 → 1.413). State
+that wherever a `SynthRLi` number appears: this configuration is a lower bound on the method, not a
+measurement of it, and a weak result is under-training before it is evidence about the approach.
+
+**Do not write that rendering is the bottleneck.** It is the intuitive explanation and it is wrong —
+rendering is ~1% of a training step under the reuse backend; the cost is the per-sample reward
+computation and the REINFORCE pass over the ~100 parameter heads. The earlier "render-bound" framing
+in the docs was corrected on 2026-08-16 (D-RL-RENDER amendment) and applies only to the
+fresh-process mode. This is worth a sentence in its own right if the thesis discusses engineering
+cost: the expensive part of RL-based sound matching here is *scoring* the audio, not *making* it.
+
+*(One structural note for the Implementation chapter: this family is the only one that treats every
+synthesis parameter as a **classification** problem rather than a regression — numerical parameters
+are discretized onto 25 ordinal levels with Gaussian-smoothed targets. It wraps the shared
+`ParameterSpace` and never modifies it, so the class-index view stays private to this family and
+D-KIND is untouched. Unlike the preset-gen-vae port there are no weight-transplant parity tests: the
+reference is AGPL-3.0 and deliberately not vendored, so fidelity rests on the counterpart table in
+`SYNTHRL_PORT.md` plus behavioral tests — the same "verify with the artifacts you actually have"
+argument made for flow matching above.)*
