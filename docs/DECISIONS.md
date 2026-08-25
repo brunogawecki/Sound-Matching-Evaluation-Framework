@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-08-25 (D-DIVA-START locked — Diva is the second synth; D-NAMING amended for module-qualified names; D-DIVA-SUBSET opened).
+Last updated: 2026-08-25 (D-DIVA-RENDER locked — Diva reproduces fresh-process only; D-DIVA-START locked; D-NAMING amended for module-qualified names; D-DIVA-SUBSET opened).
 
 ---
 
@@ -191,6 +191,14 @@ wrapper, so it works with any renderer unchanged.
   in run metadata.
 - Engine choice was de-risked empirically by `scripts/benchmark_renderers.py`, which compares
   total render time (primary) and cross-engine audio agreement (secondary) over seeded patches.
+- **Amended 2026-08-25: pluggability is per wrapper, not universal.** `DivaWrapper` accepts
+  **DawDreamer only** and raises on any other renderer. Diva's parameter *index space* is
+  engine-specific — Pedalboard reports 2271 parameters where DawDreamer reports 2362, because it
+  drops the 91 whose names collide, so index 280 is a MIDI CC under Pedalboard and the last
+  synthesis parameter under DawDreamer. Diva's name→index table (which cannot be rebuilt from the
+  plugin, see D-DIVA-START) is written against DawDreamer, so another engine would silently
+  repoint every parameter. Refusing is the only safe behaviour. Dexed stays pluggable: its names
+  are unique, so its map is rebuilt per engine.
 
 **Benchmark results (2026-06-15)** — append-only; the decision above is unchanged.
 
@@ -1215,10 +1223,62 @@ so a built Diva corpus is enough for them. Consequently only `InProcessRenderBac
 `FreshProcessRenderBackend` need to work with Diva — the two `Parallel*` backends are not validated
 against it.
 
-**Not yet established, and not to be assumed from Dexed**: whether Diva leaks hidden per-voice state
-between renders the way Dexed does (the D-REPRO finding is empirical and specific to the Dexed
-binary), and whether Diva needs the `suppressed_stderr` JUCE-noise workaround. Both are re-verified
-when the wrapper lands, not inherited.
+**Answered when the wrapper landed** (both were flagged here as not-to-be-assumed-from-Dexed, and
+both were measured rather than inherited): Diva does not reproduce in-process at all, far worse than
+Dexed's hidden-voice-state leak, but is bit-identical fresh-process — see **D-DIVA-RENDER**. And Diva
+needs a *wider* noise workaround than Dexed's, because it writes to stdout as well as stderr;
+`suppressed_stderr` moved to `synth/plugin_output.py` and gained a both-descriptor sibling.
+
+### D-DIVA-RENDER — Diva renders fresh-process only (LOCKED 2026-08-25)
+
+Diva corpora and evaluations render **one fresh process per render, at position 0**. The
+in-process reuse path (`InProcessRenderBackend`, and the `ParallelInProcessRenderBackend` the RL
+reward loop uses) is **not valid for Diva** and must refuse to run with it.
+
+This is stronger than D-REPRO's Dexed finding. Dexed leaks a little hidden voice state between
+in-process renders; Diva does not reproduce in-process at all.
+
+**Measurements (2026-08-25, `DivaWrapper`, DawDreamer, 22050 Hz, D3 render settings, Diva 1.4.7
+on Apple M5 / macOS 26.6.2).** Four consecutive renders of one identical patch through a single
+wrapper, parameter state re-applied before each:
+
+| comparison | waveform, max abs diff / peak | log-spectral distance | RMS drift |
+|---|---|---|---|
+| render 2 vs 1 | 1.393 | 7.72 dB | 0.24% |
+| render 3 vs 1 | 1.379 | 7.97 dB | 0.24% |
+| render 4 vs 1 | 1.400 | 7.85 dB | 0.18% |
+
+No two renders agreed, and the divergence starts at sample 16. Loudness is stable while the
+waveform is not, which is what per-note randomized oscillator phase / voice assignment looks like
+— Diva is an analog emulation and this is a feature of it. For scale, ~7.9 dB log-spectral
+distance is as large as the p90 *cross-engine* (DawDreamer vs Pedalboard) disagreement recorded
+for Dexed under D-RENDERER. It is not a rounding artefact.
+
+**Ruled out**: re-applying the full parameter state before each render (the fix that works for
+Dexed); zeroing all five `OPT.*Slop` parameters; zeroing `OSC.Drift`; raising `OPT.Accuracy` to
+`divine`. `VCC.MultiCore` is already `Off` in the loaded patch, so it is not the cause either.
+Each was tested and each left the divergence intact.
+
+**Fresh processes are bit-identical.** Three separate processes each constructing a `DivaWrapper`
+and rendering the same patch produced byte-identical audio (max abs diff exactly 0.0). So the
+render contract D-REPRO already mandates is sufficient for Diva as it stands; what changes is
+that for Diva it is the *only* option, not the strict setting of two.
+
+**Consequences.**
+
+- `FreshProcessRenderBackend` / `ParallelFreshProcessRenderBackend` are the only valid Diva
+  backends. The synth registry work must make choosing an in-process backend for Diva an error,
+  not a silent quality loss.
+- `SynthRLi` stays out of scope for Diva (already recorded under D-DIVA-START). Its fast reward
+  path is in-process reuse, which Diva cannot use, so it would be forced onto the slow path.
+- Nothing changes for training or evaluation of the other families: they consume a built corpus
+  and never render (D-SELFDESC), and the Evaluator already re-renders fresh-process (D-EVAL).
+
+**Also observed, cosmetic**: Diva writes a machine report, a revision banner and a long run of
+`makeAutomatable` warnings to **stdout** as well as stderr on every instantiation, and it writes
+a log file to `~/Desktop/Diva.log` that the host cannot redirect. `synth/plugin_output.py`
+provides `suppressed_plugin_output()` (both file descriptors) alongside the existing
+`suppressed_stderr()`; the desktop log file is unavoidable.
 
 ---
 

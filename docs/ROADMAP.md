@@ -48,7 +48,11 @@ Landed so far: `synth/diva/parameters.py`, the committed 281-parameter module-qu
 plus its plugin-gated test. Diva's plugin names are not unique, so parameters are addressed
 module-qualified (`VCF1.Model`) — see the D-NAMING amendment.
 
-Still to build: the `DivaWrapper`, the subset (**D-DIVA-SUBSET**, open), the preset loader, a
+`DivaWrapper` is built: 279 exposed parameters (281 minus master output and the GUI LED tint),
+continuous/discrete split read off the plugin and frozen, DawDreamer-only. Rendering Diva is
+**fresh-process only** — it does not reproduce in-process at all (**D-DIVA-RENDER**).
+
+Still to build: the subset (**D-DIVA-SUBSET**, open), the preset loader, a
 `--synth {dexed,diva}` flag on `scripts/build_dataset.py`, and the shared-code extraction that keeps
 `dataset/render_backends.py` and the preset loaders synth-neutral. `SynthRLi` is out of scope for
 Diva (it is the only family that renders inside the training loop, D-RL-RENDER).

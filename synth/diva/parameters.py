@@ -331,6 +331,295 @@ DIVA_PARAMETER_NAMES: List[str] = [
     "ARP.Order",  # 280
 ]
 
+# Discrete parameters and their step counts, as the plugin reports them
+# (``isDiscrete`` / ``numSteps``); the other 164 parameters are continuous. Read off the live
+# plugin and frozen here for the same reason as the names: it must not depend on a renderer
+# that reports step counts, and a plugin change should fail a test rather than pass silently.
+#
+# This is the raw plugin fact, not the D-KIND verdict. A parameter being on a grid does not by
+# itself make it categorical ML-side -- ordered, perceptually smooth grids stay continuous. That
+# judgement belongs to the Diva subset (D-DIVA-SUBSET), which filters this table.
+DIVA_DISCRETE_STEPS: Dict[str, int] = {
+    # main
+    "main.Active #FX1": 2,  # 1  Off .. On
+    "main.Active #FX2": 2,  # 2  Off .. On
+    # VCC
+    "VCC.Voices": 8,  # 4  2 .. 16
+    "VCC.Voice Stack": 6,  # 5  1.00 .. 6.00
+    "VCC.Mode": 5,  # 6  poly .. poly2
+    "VCC.GlideMode": 2,  # 7  time .. rate
+    "VCC.PitchBend Up": 27,  # 11  0 .. 48
+    "VCC.PitchBend Down": 27,  # 12  0 .. 48
+    "VCC.TuningMode": 2,  # 13  0.00 .. 1.00
+    "VCC.Transpose": 49,  # 14  -24.00 .. 24.00
+    "VCC.Note Priority": 3,  # 16  last .. highest
+    "VCC.MultiCore": 2,  # 17  Off .. On
+    # OPT
+    "OPT.Accuracy": 4,  # 18  draft .. divine
+    "OPT.OfflineAcc": 2,  # 19  same .. best
+    # ENV1
+    "ENV1.Model": 3,  # 38  ADS .. digital
+    "ENV1.Trigger": 4,  # 39  Gate .. LFO2
+    "ENV1.Quantise": 2,  # 40  0.00 .. 1.00
+    "ENV1.Curve": 2,  # 41  0.00 .. 1.00
+    "ENV1.Release On": 2,  # 42  0.00 .. 1.00
+    # ENV2
+    "ENV2.Model": 3,  # 49  ADS .. digital
+    "ENV2.Trigger": 5,  # 50  Gate .. LFO2
+    "ENV2.Quantise": 2,  # 51  0.00 .. 1.00
+    "ENV2.Curve": 2,  # 52  0.00 .. 1.00
+    "ENV2.Release On": 2,  # 53  0.00 .. 1.00
+    # LFO1
+    "LFO1.Sync": 27,  # 55  0.1s .. 8/1
+    "LFO1.Restart": 4,  # 56  sync .. random
+    "LFO1.Waveform": 8,  # 57  sine .. rand glide
+    "LFO1.DepthMod Src1": 24,  # 60  none .. Multiply
+    "LFO1.FreqMod Src1": 24,  # 63  none .. Multiply
+    "LFO1.Polarity": 2,  # 65  bipolar .. positive
+    # LFO2
+    "LFO2.Sync": 27,  # 66  0.1s .. 8/1
+    "LFO2.Restart": 4,  # 67  sync .. random
+    "LFO2.Waveform": 8,  # 68  sine .. rand glide
+    "LFO2.DepthMod Src1": 24,  # 71  none .. Multiply
+    "LFO2.FreqMod Src1": 24,  # 74  none .. Multiply
+    "LFO2.Polarity": 2,  # 76  bipolar .. positive
+    # MOD
+    "MOD.RectifySource": 24,  # 79  none .. Multiply
+    "MOD.InvertSource": 24,  # 80  none .. Multiply
+    "MOD.QuantiseSource": 24,  # 81  none .. Multiply
+    "MOD.LagSource": 24,  # 82  none .. Multiply
+    "MOD.AddSource1": 24,  # 83  none .. Multiply
+    "MOD.AddSource2": 24,  # 84  none .. Multiply
+    "MOD.MulSource1": 24,  # 85  none .. Multiply
+    "MOD.MulSource2": 24,  # 86  none .. Multiply
+    # OSC
+    "OSC.Model": 5,  # 87  Triple VCO .. Digital
+    "OSC.Sync2": 2,  # 97  0.00 .. 1.00
+    "OSC.PulseShape": 4,  # 102  off .. pwm
+    "OSC.SawShape": 6,  # 103  off .. ||  ||
+    "OSC.SuboscShape": 6,  # 104  ____---- .. _______---
+    "OSC.Tune1ModSrc": 24,  # 105  none .. Multiply
+    "OSC.Tune2ModSrc": 24,  # 107  none .. Multiply
+    "OSC.PWModSrc": 24,  # 109  none .. Multiply
+    "OSC.ShapeSrc": 24,  # 111  none .. Multiply
+    "OSC.Triangle1On": 2,  # 113  0.00 .. 1.00
+    "OSC.Sine2On": 2,  # 114  0.00 .. 1.00
+    "OSC.Saw1On": 2,  # 115  0.00 .. 1.00
+    "OSC.Pwm1On": 2,  # 116  0.00 .. 1.00
+    "OSC.Triangle2On": 2,  # 117  0.00 .. 1.00
+    "OSC.Saw2On": 2,  # 118  0.00 .. 1.00
+    "OSC.Pulse2On": 2,  # 119  0.00 .. 1.00
+    "OSC.PWM2On": 2,  # 120  0.00 .. 1.00
+    "OSC.Noise1On": 2,  # 121  0.00 .. 1.00
+    "OSC.ShapeModel": 3,  # 122  ideal .. analog2
+    "OSC.Sync3": 2,  # 123  0.00 .. 1.00
+    "OSC.NoiseColor": 2,  # 125  white .. pink
+    "OSC.TuneModOsc1": 2,  # 126  0.00 .. 1.00
+    "OSC.TuneModOsc2": 2,  # 127  0.00 .. 1.00
+    "OSC.TuneModOsc3": 2,  # 128  0.00 .. 1.00
+    "OSC.ShapeModOsc1": 2,  # 129  0.00 .. 1.00
+    "OSC.ShapeModOsc2": 2,  # 130  0.00 .. 1.00
+    "OSC.ShapeModOsc3": 2,  # 131  0.00 .. 1.00
+    "OSC.TuneModMode": 4,  # 132  2->1, 1->1 .. 1->1, 2->2
+    "OSC.RingmodPulse": 2,  # 135  0.00 .. 1.00
+    "OSC.FmModSrc": 24,  # 137  none .. Multiply
+    "OSC.NoiseVolModSrc": 24,  # 139  none .. Multiply
+    "OSC.DigitalType1": 7,  # 144  Multisaw .. Triangle
+    "OSC.DigitalType2": 7,  # 145  Multisaw .. Triangle
+    "OSC.DigitalAntiAlias": 2,  # 146  0.00 .. 1.00
+    # HPF
+    "HPF.Model": 4,  # 147  Feedback .. HPF BITE
+    "HPF.Revision": 2,  # 150  1.00 .. 2.00
+    "HPF.FreqModSrc": 24,  # 152  none .. Multiply
+    "HPF.Post-HPF Freq": 5,  # 154  -1.00 .. 3.00
+    # VCF1
+    "VCF1.Model": 5,  # 155  Ladder .. Uhbie
+    "VCF1.FreqModSrc": 24,  # 158  none .. Multiply
+    "VCF1.FreqMod2Src": 24,  # 160  none .. Multiply
+    "VCF1.LadderMode": 2,  # 164  24db .. 12db
+    "VCF1.LadderColor": 2,  # 165  clean .. rough
+    "VCF1.SlnKyRevision": 2,  # 166  1.00 .. 2.00
+    "VCF1.SvfMode": 4,  # 167  LP 24db .. BP
+    "VCF1.ResModSrc": 24,  # 169  none .. Multiply
+    "VCF1.FmAmountModSrc": 24,  # 171  none .. Multiply
+    "VCF1.FeedbackModSrc": 24,  # 173  none .. Multiply
+    "VCF1.ShapeModSrc": 24,  # 176  none .. Multiply
+    "VCF1.UhbieBandpass": 2,  # 178  0.00 .. 1.00
+    # VCA1
+    "VCA1.VCA": 2,  # 181  Gate .. Env1
+    "VCA1.Modulation": 24,  # 182  none .. Multiply
+    "VCA1.PanModulation": 24,  # 184  none .. Multiply
+    "VCA1.Mode": 3,  # 186  lin .. complex moog
+    # FX1
+    "FX1.Module": 5,  # 190  Chorus1 .. Rotary1
+    # Chrs1
+    "Chrs1.Type": 3,  # 191  Classic .. Ensemble
+    # Phase1
+    "Phase1.Type": 2,  # 195  Stoned .. Flanged
+    "Phase1.Sync": 2,  # 199  0.00 .. 1.00
+    # Rtary1
+    "Rtary1.Mode": 3,  # 221  Normal .. NoBass
+    "Rtary1.Controller": 4,  # 230  ModWheel .. Pressure
+    # FX2
+    "FX2.Module": 5,  # 231  Chorus2 .. Rotary2
+    # Chrs2
+    "Chrs2.Type": 3,  # 232  Classic .. Ensemble
+    # Phase2
+    "Phase2.Type": 2,  # 236  Stoned .. Flanged
+    "Phase2.Sync": 2,  # 240  0.00 .. 1.00
+    # Rtary2
+    "Rtary2.Mode": 3,  # 262  Normal .. NoBass
+    "Rtary2.Controller": 4,  # 271  ModWheel .. Pressure
+    # CLK
+    "CLK.TimeBase": 4,  # 273  1/32 .. 1/4
+    # ARP
+    "ARP.Direction": 6,  # 275  played .. random
+    "ARP.Octaves": 4,  # 276  1 .. 4
+    "ARP.Multiply": 5,  # 277  1x .. 16x
+    "ARP.Restart": 13,  # 278  none .. 32
+    "ARP.OnOff": 2,  # 279  Off .. On
+    "ARP.Order": 4,  # 280  serial .. repeat: Dict[str, int] = {
+    # main
+    "main.Active #FX1": 2,  # 1  Off .. On
+    "main.Active #FX2": 2,  # 2  Off .. On
+    # VCC
+    "VCC.Voices": 8,  # 4  2 .. 16
+    "VCC.Voice Stack": 6,  # 5  1.00 .. 6.00
+    "VCC.Mode": 5,  # 6  poly .. poly2
+    "VCC.GlideMode": 2,  # 7  time .. rate
+    "VCC.PitchBend Up": 27,  # 11  0 .. 48
+    "VCC.PitchBend Down": 27,  # 12  0 .. 48
+    "VCC.TuningMode": 2,  # 13  0.00 .. 1.00
+    "VCC.Transpose": 49,  # 14  -24.00 .. 24.00
+    "VCC.Note Priority": 3,  # 16  last .. highest
+    "VCC.MultiCore": 2,  # 17  Off .. On
+    # OPT
+    "OPT.Accuracy": 4,  # 18  draft .. divine
+    "OPT.OfflineAcc": 2,  # 19  same .. best
+    # ENV1
+    "ENV1.Model": 3,  # 38  ADS .. digital
+    "ENV1.Trigger": 4,  # 39  Gate .. LFO2
+    "ENV1.Quantise": 2,  # 40  0.00 .. 1.00
+    "ENV1.Curve": 2,  # 41  0.00 .. 1.00
+    "ENV1.Release On": 2,  # 42  0.00 .. 1.00
+    # ENV2
+    "ENV2.Model": 3,  # 49  ADS .. digital
+    "ENV2.Trigger": 5,  # 50  Gate .. LFO2
+    "ENV2.Quantise": 2,  # 51  0.00 .. 1.00
+    "ENV2.Curve": 2,  # 52  0.00 .. 1.00
+    "ENV2.Release On": 2,  # 53  0.00 .. 1.00
+    # LFO1
+    "LFO1.Sync": 27,  # 55  0.1s .. 8/1
+    "LFO1.Restart": 4,  # 56  sync .. random
+    "LFO1.Waveform": 8,  # 57  sine .. rand glide
+    "LFO1.DepthMod Src1": 24,  # 60  none .. Multiply
+    "LFO1.FreqMod Src1": 24,  # 63  none .. Multiply
+    "LFO1.Polarity": 2,  # 65  bipolar .. positive
+    # LFO2
+    "LFO2.Sync": 27,  # 66  0.1s .. 8/1
+    "LFO2.Restart": 4,  # 67  sync .. random
+    "LFO2.Waveform": 8,  # 68  sine .. rand glide
+    "LFO2.DepthMod Src1": 24,  # 71  none .. Multiply
+    "LFO2.FreqMod Src1": 24,  # 74  none .. Multiply
+    "LFO2.Polarity": 2,  # 76  bipolar .. positive
+    # MOD
+    "MOD.RectifySource": 24,  # 79  none .. Multiply
+    "MOD.InvertSource": 24,  # 80  none .. Multiply
+    "MOD.QuantiseSource": 24,  # 81  none .. Multiply
+    "MOD.LagSource": 24,  # 82  none .. Multiply
+    "MOD.AddSource1": 24,  # 83  none .. Multiply
+    "MOD.AddSource2": 24,  # 84  none .. Multiply
+    "MOD.MulSource1": 24,  # 85  none .. Multiply
+    "MOD.MulSource2": 24,  # 86  none .. Multiply
+    # OSC
+    "OSC.Model": 5,  # 87  Triple VCO .. Digital
+    "OSC.Sync2": 2,  # 97  0.00 .. 1.00
+    "OSC.PulseShape": 4,  # 102  off .. pwm
+    "OSC.SawShape": 6,  # 103  off .. ||  ||
+    "OSC.SuboscShape": 6,  # 104  ____---- .. _______---
+    "OSC.Tune1ModSrc": 24,  # 105  none .. Multiply
+    "OSC.Tune2ModSrc": 24,  # 107  none .. Multiply
+    "OSC.PWModSrc": 24,  # 109  none .. Multiply
+    "OSC.ShapeSrc": 24,  # 111  none .. Multiply
+    "OSC.Triangle1On": 2,  # 113  0.00 .. 1.00
+    "OSC.Sine2On": 2,  # 114  0.00 .. 1.00
+    "OSC.Saw1On": 2,  # 115  0.00 .. 1.00
+    "OSC.Pwm1On": 2,  # 116  0.00 .. 1.00
+    "OSC.Triangle2On": 2,  # 117  0.00 .. 1.00
+    "OSC.Saw2On": 2,  # 118  0.00 .. 1.00
+    "OSC.Pulse2On": 2,  # 119  0.00 .. 1.00
+    "OSC.PWM2On": 2,  # 120  0.00 .. 1.00
+    "OSC.Noise1On": 2,  # 121  0.00 .. 1.00
+    "OSC.ShapeModel": 3,  # 122  ideal .. analog2
+    "OSC.Sync3": 2,  # 123  0.00 .. 1.00
+    "OSC.NoiseColor": 2,  # 125  white .. pink
+    "OSC.TuneModOsc1": 2,  # 126  0.00 .. 1.00
+    "OSC.TuneModOsc2": 2,  # 127  0.00 .. 1.00
+    "OSC.TuneModOsc3": 2,  # 128  0.00 .. 1.00
+    "OSC.ShapeModOsc1": 2,  # 129  0.00 .. 1.00
+    "OSC.ShapeModOsc2": 2,  # 130  0.00 .. 1.00
+    "OSC.ShapeModOsc3": 2,  # 131  0.00 .. 1.00
+    "OSC.TuneModMode": 4,  # 132  2->1, 1->1 .. 1->1, 2->2
+    "OSC.RingmodPulse": 2,  # 135  0.00 .. 1.00
+    "OSC.FmModSrc": 24,  # 137  none .. Multiply
+    "OSC.NoiseVolModSrc": 24,  # 139  none .. Multiply
+    "OSC.DigitalType1": 7,  # 144  Multisaw .. Triangle
+    "OSC.DigitalType2": 7,  # 145  Multisaw .. Triangle
+    "OSC.DigitalAntiAlias": 2,  # 146  0.00 .. 1.00
+    # HPF
+    "HPF.Model": 4,  # 147  Feedback .. HPF BITE
+    "HPF.Revision": 2,  # 150  1.00 .. 2.00
+    "HPF.FreqModSrc": 24,  # 152  none .. Multiply
+    "HPF.Post-HPF Freq": 5,  # 154  -1.00 .. 3.00
+    # VCF1
+    "VCF1.Model": 5,  # 155  Ladder .. Uhbie
+    "VCF1.FreqModSrc": 24,  # 158  none .. Multiply
+    "VCF1.FreqMod2Src": 24,  # 160  none .. Multiply
+    "VCF1.LadderMode": 2,  # 164  24db .. 12db
+    "VCF1.LadderColor": 2,  # 165  clean .. rough
+    "VCF1.SlnKyRevision": 2,  # 166  1.00 .. 2.00
+    "VCF1.SvfMode": 4,  # 167  LP 24db .. BP
+    "VCF1.ResModSrc": 24,  # 169  none .. Multiply
+    "VCF1.FmAmountModSrc": 24,  # 171  none .. Multiply
+    "VCF1.FeedbackModSrc": 24,  # 173  none .. Multiply
+    "VCF1.ShapeModSrc": 24,  # 176  none .. Multiply
+    "VCF1.UhbieBandpass": 2,  # 178  0.00 .. 1.00
+    # VCA1
+    "VCA1.VCA": 2,  # 181  Gate .. Env1
+    "VCA1.Modulation": 24,  # 182  none .. Multiply
+    "VCA1.PanModulation": 24,  # 184  none .. Multiply
+    "VCA1.Mode": 3,  # 186  lin .. complex moog
+    # FX1
+    "FX1.Module": 5,  # 190  Chorus1 .. Rotary1
+    # Chrs1
+    "Chrs1.Type": 3,  # 191  Classic .. Ensemble
+    # Phase1
+    "Phase1.Type": 2,  # 195  Stoned .. Flanged
+    "Phase1.Sync": 2,  # 199  0.00 .. 1.00
+    # Rtary1
+    "Rtary1.Mode": 3,  # 221  Normal .. NoBass
+    "Rtary1.Controller": 4,  # 230  ModWheel .. Pressure
+    # FX2
+    "FX2.Module": 5,  # 231  Chorus2 .. Rotary2
+    # Chrs2
+    "Chrs2.Type": 3,  # 232  Classic .. Ensemble
+    # Phase2
+    "Phase2.Type": 2,  # 236  Stoned .. Flanged
+    "Phase2.Sync": 2,  # 240  0.00 .. 1.00
+    # Rtary2
+    "Rtary2.Mode": 3,  # 262  Normal .. NoBass
+    "Rtary2.Controller": 4,  # 271  ModWheel .. Pressure
+    # CLK
+    "CLK.TimeBase": 4,  # 273  1/32 .. 1/4
+    # ARP
+    "ARP.Direction": 6,  # 275  played .. random
+    "ARP.Octaves": 4,  # 276  1 .. 4
+    "ARP.Multiply": 5,  # 277  1x .. 16x
+    "ARP.Restart": 13,  # 278  none .. 32
+    "ARP.OnOff": 2,  # 279  Off .. On
+    "ARP.Order": 4,  # 280  serial .. repeat
+}
+
 
 def build_name_to_index() -> Dict[str, int]:
     """Module-qualified name -> plugin parameter index."""
