@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-07-27 (D-RL-RENDER amended — in-process reuse built as an opt-in fast reward path; leakage measured, no in-process reset exists).
+Last updated: 2026-08-25 (D-DIVA-START locked — Diva is the second synth; D-NAMING amended for module-qualified names; D-DIVA-SUBSET opened).
 
 ---
 
@@ -21,7 +21,21 @@ numeric index. Each wrapper builds a name→index map from the live plugin
 relative to the classic Dexed layout the original code assumed. Index-based addressing
 caused two critical bugs (see `PROJECT_CONTEXT.md` review follow-up / git history).
 Name-based addressing kills this class of bug and is self-documenting. The same
-convention applies to the future Surge XT wrapper.
+convention applies to every further wrapper.
+
+**Amended 2026-08-25 (Diva).** A name only addresses a parameter if the plugin's names are
+unique, which Dexed's are and Diva's are not (56 names shared by 147 parameters). Where they
+collide, the canonical name is **module-qualified**, `<Module>.<Name>` — `LFO1.Rate`,
+`VCF1.Model`. This is the same rule, not a new one: the requirement is a stable, unique,
+human-readable key, and the module prefix is what makes one exist. Indices stay out of every
+public API.
+
+Two constraints follow. The module is **not** reported by VST3, so a wrapper whose plugin needs
+qualification carries a committed name table validated against the live plugin, rather than
+deriving names at `__init__` (`synth/diva/parameters.py`, `tests/test_diva_parameters.py`); and
+each such wrapper owns the translation from its qualified names down to the bare names the plugin
+answers to. Above the wrapper — subsets, `ParameterSpace`, corpus metadata, model code — only the
+qualified name is ever seen. See **D-DIVA-START**.
 
 ### D-EXCLUDED — VST-level extra parameters are invisible above the wrapper
 
@@ -150,8 +164,13 @@ entry.
 
 Build the full pipeline (wrapper fixes → ParameterSpace → DatasetBuilder → PyTorch dataset →
 BaseModel + trivial baseline → metric panel) on **Dexed only**, producing a first results
-table. The Surge XT wrapper comes after, re-using the proven recipe. Rationale: fastest
+table. The second synth's wrapper comes after, re-using the proven recipe. Rationale: fastest
 end-to-end feedback; avoids a second subset decision while D1 is open.
+
+**Exception granted 2026-08-25 (D-DIVA-START).** The second synth is **Diva**, not Surge XT, and
+it starts before the benchmark table is finished. D-ORDER's condition is satisfied rather than
+waived: the Dexed slice runs end to end and D1 is locked, so neither reason for the ordering still
+applies. The rest of D-ORDER stands — Diva re-uses the proven recipe, it does not fork it.
 
 ### D-RENDERER — Rendering library is pluggable; DawDreamer is the default
 
@@ -1111,6 +1130,96 @@ run planning: 200 epochs needs ~118 h, so `synthrl_i_config.yaml` truncates to 3
 
 Map and port fidelity: `docs/SYNTHRL_PORT.md`.
 
+### D-DIVA-START — u-he Diva is the second synthesizer (LOCKED 2026-08-25)
+
+The framework gets a second synthesizer, **u-he Diva**, before the Dexed benchmark table is
+finished. Diva is subtractive / analog-modelling where Dexed is FM, so the pair spans two synthesis
+paradigms rather than two instances of one — which is what turns the benchmark from a single-synth
+result into a comparative one.
+
+**This is an approved exception to D-ORDER and to the ROADMAP's Dexed-only scope**, taken by the
+user. It does not reopen D-ORDER: the Dexed vertical slice is already proven end to end (Phase 4
+plus every Phase 5 port), and D1 is locked, so the risk D-ORDER guarded against — a second subset
+decision taken while the first one was still open — no longer exists.
+
+**Why Diva** (feasibility survey over Surge XT, Diva, TAL-NoiseMaker and Vital, 2026-08-25):
+
+- It is a plain VST3, so `DawDreamerRenderer` hosts it unchanged. Vital has no usable headless
+  Python path.
+- It has a large public preset dataset that ships **parameter vectors, not just audio** (below).
+  Surge XT and TAL-NoiseMaker have no comparable dataset, and Surge's `.fxp` presets are an opaque
+  plugin chunk neither renderer will load.
+- It has direct precedent in the sound-matching literature (Esling et al., *Flow Synthesizer*,
+  DAFx 2019 / MDPI 2020), which is the source of both the parameter map and the dataset below.
+- It is installed and licensed on the user's machine.
+
+Surge XT is no longer the planned second synth. Where earlier entries name it (D-ORDER,
+D-RENDERER, D-FAMILIES) they should be read as "the second synth".
+
+**Parameter addressing: module-qualified names.** Diva reports **2362 VST3 parameters**. 2080 are
+`MIDI CC` JUCE passthroughs and one is `Program`, leaving **281 real parameters at indices 0–280** —
+comparable to Dexed's 152, not to the raw 2362. The 2081 non-synthesis parameters are excluded above
+the wrapper exactly as Dexed's are (D-EXCLUDED).
+
+Diva's plugin-reported names are **not unique**: 56 names are shared by 147 parameters (six `Rate`,
+six `Wet`, five `Model`, five `Feedback`, …). Taken as-is they would silently collapse 91 parameters
+in any name→index map, and `ParameterSpace.__init__` would raise on the duplicates. So a Diva
+parameter is addressed above the wrapper by its **module-qualified name** — `LFO1.Rate`,
+`VCF1.Model` — per the D-NAMING amendment.
+
+The module is not recoverable from the plugin. VST3 reports the bare display name only, and Diva
+ships no machine-readable parameter list (checked the `.vst3` bundle Resources, the
+`Locale/en.uhe-locale` strings, `NKS/u-he-Diva.xml` and the GUI `Scripts/EditorSetup.txt`); the Flow
+Synthesizer authors state they established the correspondence by hand. Changing renderer does not
+help: `PedalboardRenderer` only appears to report unique names because it drops the 91 colliding
+parameters, while DawDreamer reports them honestly. RenderMan remains unsupported (D-RENDERER).
+
+**The map is therefore a static, committed table**, `synth/diva/parameters.py`
+(`DIVA_PARAMETER_NAMES`; position in the list *is* the plugin parameter index), never recomputed at
+import time. It was derived from `code/synth/diva_params.txt` in `acids-ircam/flow_synthesizer`,
+which lists all 281 as `Module: Name` for Diva ~1.4. Diva 1.4.7 inserted 16 parameters, so the
+indices had drifted; realigning on the names pairs 265 exactly, and the 16 additions
+(`LFO1.Polarity`, `OSC.DigitalShape2..4`, `VCF1.ShapeMix`, `Phase1.Depth`, …) sit interior to known
+module blocks and take their neighbours' module. Result: 281/281, unique, no collisions.
+
+**Validated twice, independently**: `tests/test_diva_parameters.py` checks the table against the
+live plugin index by index (plugin-gated, and fails loudly if a Diva update reshuffles indices), and
+the preset dataset's own `param` keys overlap the table 281/281.
+
+**Preset source: the Flow Synthesizer Diva dataset**, `diva_raw.zip` (1.32 GB,
+https://nubo.ircam.fr/index.php/s/nL3NQomqxced6eJ) — **11,218 `.npz` files**, one per preset, named
+`<md5>_60_100.npz`. Each carries `param` (all 281 module-qualified names → values already normalized
+to [0, 1], keyed `'VCF1: Model'` where this project's table uses `'VCF1.Model'`), `audio` (88320
+float16 samples, ≈4.0 s at 22.05 kHz) and `chars` (a (10, 3) semantic-descriptor array).
+
+Because it ships **parameters and not only audio**, the shipped audio is not used: every preset is
+**re-rendered under this project's own contract** (D3 / D-REPRO / D-EVAL), exactly as the Dexed human
+corpora are. Its note 60 / velocity 100 / 4.0 s / 22.05 kHz happening to match D3 is a convenience,
+not a licence to reuse someone else's renders.
+
+This **supersedes** the earlier plan to parse Diva's 486 factory `.h2p` presets with `THIRD PARTY`
+opt-in. Two consequences: **no `.h2p` parser is built** (the planned `synth/diva/patch.py` is
+dropped), and the third-party-preset licensing question does not arise. The `.h2p` path stays
+available as a fallback if the dataset turns out to be unusable.
+
+**Scope of the Diva port.** Wrapper (`synth/diva/synth.py`), subset (`synth/diva/subset.py`,
+D-DIVA-SUBSET), preset loader, and a `--synth {dexed,diva}` flag on `scripts/build_dataset.py`.
+Shared machinery moves into synth-neutral modules rather than being duplicated: `_make_wrapper` in
+`dataset/render_backends.py` becomes registry-backed, and the synth-agnostic half of
+`dataset/dexed_preset_loader.py` moves to a common module.
+
+`SynthRLi` is **out of scope for Diva**. It is the only registered family that renders with a live
+VST inside the training loop (D-RL-RENDER, verified across `models/registry.py`), and its cost was
+measured on Dexed only; every other family trains from a corpus with no plugin present (D-SELFDESC),
+so a built Diva corpus is enough for them. Consequently only `InProcessRenderBackend` and
+`FreshProcessRenderBackend` need to work with Diva — the two `Parallel*` backends are not validated
+against it.
+
+**Not yet established, and not to be assumed from Dexed**: whether Diva leaks hidden per-voice state
+between renders the way Dexed does (the D-REPRO finding is empirical and specific to the Dexed
+binary), and whether Diva needs the `suppressed_stderr` JUCE-noise workaround. Both are re-verified
+when the wrapper lands, not inherited.
+
 ---
 
 ## OPEN
@@ -1136,6 +1245,10 @@ Change offline, so a voice is applied as parameters, not loaded as a patch — t
 **Still open**: which cartridge collection(s) — or other source — actually become the benchmark test
 set, and the final train/test composition. The built importer currently covers DX7 `.syx`; a
 non-SysEx source (e.g. Surge `.fxp`) would need its own importer.
+
+**Scope**: D4 is about **Dexed**. Diva's preset source is settled separately (D-DIVA-START: the
+Flow Synthesizer 11k dataset); how that corpus splits into train and test is its own open question,
+raised when the Diva loader lands.
 
 **Update (roadmap)**: the leading plan is now "train human → test human" on the
 **preset-gen-vae human DX7 collection** (`paper_repos/preset-gen-vae/synth/dexed_presets.sqlite`,
@@ -1168,4 +1281,29 @@ porting it later is "point stage 2 at a second synth's corpus with the parameter
 actually needs is the second-synth commitment here, plus a `BaseSynthesizer` wrapper, a corpus, and a
 cluster feasibility spike for that plugin.
 
+**Update 2026-08-25**: the second synth is now committed — **Diva** (D-DIVA-START), not Surge XT.
+That does **not** unblock `SynthRL-o`. Its remaining cost is the in-training-loop render (D-RL-RENDER)
+against a plugin whose throughput has never been measured, and `SynthRLi` is explicitly out of scope
+for Diva for that reason; stage 3 inherits the same blocker. Whether a second synth adds *families*
+is still open here.
+
 **Blocks**: Phase 5. Resolve here before the Phase 5 family tasks start.
+
+### D-DIVA-SUBSET — Diva parameter subset (OPEN, blocked on the wrapper)
+
+Which of Diva's **281 real parameters** the models estimate; the rest stay at init-patch defaults.
+This is the Diva analogue of **D1**, and it takes D1's rule unchanged: keep the learnable voice
+parameters, drop the ones that are **non-identifiable under D3** (one fixed note, C4, at fixed
+velocity 100). For Dexed that cut keyboard scaling and velocity sensitivity; Diva's equivalents are
+its key-follow and velocity-depth parameters, to be enumerated from the live plugin rather than
+guessed. Each kept parameter also needs a D-KIND call (continuous vs categorical) and, if
+categorical, its cardinality read off the plugin.
+
+The Flow Synthesizer papers estimate a reduced Diva set rather than all 281, so their choice is the
+obvious comparison point — the same role preset-gen-vae's learnable voice played for D1 — but it has
+not been read off yet and is not assumed here.
+
+**Why it's open**: it needs the `DivaWrapper` to enumerate bounds, defaults and step counts from the
+live plugin. Nothing about it is contentious, it is just not yet done.
+
+**Blocks**: any Diva corpus build, and therefore every Diva training and evaluation run.

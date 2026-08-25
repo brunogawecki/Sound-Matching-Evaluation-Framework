@@ -3,10 +3,13 @@
 This is the **decomposition** of the work between today's state (a corpus, a model interface, a
 trivial baseline, and a working Evaluator) and the project's goal (a comparative benchmark across
 model families on Dexed). It is high-level on purpose: each task below gets its own detailed-design
-session later. Scope is **Dexed-only** (D-ORDER) — the full pipeline must be proven on Dexed before
-any second synth — and the roadmap **ends at "benchmark results produced."** Thesis prose/figures,
-the #12 dashboard (built — see `ARCHITECTURE.md`, but tangential to the benchmark path), and
-Surge XT are out of scope.
+session later. The benchmark path is **Dexed-only** (D-ORDER) — the full pipeline had to be proven on
+Dexed before any second synth — and the roadmap **ends at "benchmark results produced."** Thesis
+prose/figures and the #12 dashboard (built — see `ARCHITECTURE.md`, but tangential to the benchmark
+path) are out of scope.
+
+**A second synth is now in scope, in parallel** — see "Diva" below. It runs alongside Phase 6 rather
+than replacing it; the benchmark table is still Dexed.
 
 The split with the rest of `docs/` is the usual one: **this file owns the *decomposition and
 ordering*; `DECISIONS.md` owns the *why*; GitHub issues own the *do*.** Open decisions resolve in
@@ -33,6 +36,23 @@ What does **not** exist yet:
 - **No final human test set (D4), no benchmark orchestration, no benchmark table** — Phase 6. The
   existing results rows are pipeline shakedowns, not benchmark numbers.
 
+## Diva (second synth)
+
+**u-he Diva is the second synthesizer** (D-DIVA-START, LOCKED 2026-08-25), an approved exception to
+D-ORDER's ordering and to this file's former Dexed-only scope. Surge XT is no longer the plan. Diva
+is subtractive where Dexed is FM, it hosts as a plain VST3, and it has an 11,218-preset public
+dataset that ships parameter vectors (Flow Synthesizer, Esling et al.), so a human Diva corpus can be
+re-rendered under this project's own contract.
+
+Landed so far: `synth/diva/parameters.py`, the committed 281-parameter module-qualified name table,
+plus its plugin-gated test. Diva's plugin names are not unique, so parameters are addressed
+module-qualified (`VCF1.Model`) — see the D-NAMING amendment.
+
+Still to build: the `DivaWrapper`, the subset (**D-DIVA-SUBSET**, open), the preset loader, a
+`--synth {dexed,diva}` flag on `scripts/build_dataset.py`, and the shared-code extraction that keeps
+`dataset/render_backends.py` and the preset loaders synth-neutral. `SynthRLi` is out of scope for
+Diva (it is the only family that renders inside the training loop, D-RL-RENDER).
+
 ## Sequencing — vertical slice first
 
 Stand up the training framework **and** cluster packaging by driving them end-to-end with a single
@@ -47,6 +67,7 @@ than discovering them family-by-family. It mirrors D-ORDER one level down.
 | **D-FRAMEWORK** — PyTorch Lightning vs. raw PyTorch loop | LOCKED (Lightning) | — (unblocked) | Locked 2026-06-30; conventions for the harness recorded in `DECISIONS.md`. |
 | **D-FAMILIES** — final model-family set | OPEN (stub) | Phase 5 | Discriminative + generative (primary) + neural-proxy (baseline); evolutionary dropped. |
 | **D4** — human test-set composition | OPEN | Phase 6 | Importer built; Phase 4 has landed, so the final split is unblocked and awaits the user's call. |
+| **D-DIVA-SUBSET** — Diva's estimated parameter subset | OPEN | any Diva corpus | The D1 analogue, same rule. Blocked on the `DivaWrapper`, not contentious. |
 
 ## Phase 4 — Training foundation, proven by one real model
 
@@ -117,4 +138,5 @@ locally with the live VST — it does not fit the cluster training harness.)*
 - **Results aggregation** — comparative table across families, plus the metric-panel rank-correlation
   pruning (D-EVAL names `per_sample.csv` as the source of truth). **Finish line.**
 
-**Out of scope:** the #12 dashboard, the second synth (Surge XT), thesis prose/figures.
+**Out of scope:** the #12 dashboard, thesis prose/figures. The Diva work above runs in parallel and
+does not enter this table.
