@@ -86,14 +86,24 @@ class _SynthSpec:
     import_wrapper_class: Callable[[], Type[BaseSynthesizer]]
     plugin_path_config_attribute: str
     open_output_suppressor: Callable[[], ContextManager[None]]
+    # Whether the plugin logs from its destructor, which happens at worker-process exit and
+    # so escapes the suppressor around construction and rendering. See _worker_silencing.
+    logs_at_teardown: bool = False
 
 
 _SYNTH_REGISTRY: Dict[str, _SynthSpec] = {
     "dexed": _SynthSpec(_import_dexed_wrapper, "DEXED_PATH", suppressed_stderr),
-    "diva": _SynthSpec(_import_diva_wrapper, "DIVA_PATH", _suppress_diva_output),
+    "diva": _SynthSpec(
+        _import_diva_wrapper, "DIVA_PATH", _suppress_diva_output, logs_at_teardown=True
+    ),
 }
 
 DEFAULT_SYNTH = "dexed"
+
+
+def synth_logs_at_teardown(synth_name: str) -> bool:
+    """Whether this synth's plugin logs from its destructor (Diva does, Dexed does not)."""
+    return _synth_spec(synth_name).logs_at_teardown
 
 
 def _synth_spec(synth_name: str) -> _SynthSpec:
@@ -145,6 +155,36 @@ def render_patch_in_fresh_process(
         settings.note_duration_sec,
     )
     return np.asarray(audio, dtype=np.float32)
+
+
+def _silence_worker_output(synth_name: str) -> None:
+    """Silence the worker's fds 1 and 2 for its whole life (pool initializer).
+
+    Top-level so it survives the spawn pickle. Uses the permanent redirect rather than
+    entering the suppressor context and leaving it open: an un-referenced context manager is
+    garbage-collected, its ``finally`` restores the descriptors, and the noise comes straight
+    back. The worker's whole life is one render under ``maxtasksperchild=1``, and the point
+    is to still be suppressing when the plugin's destructor runs at process exit. Pool
+    workers hand exceptions back to the parent by pickle rather than stderr, so nothing an
+    error needs is lost.
+    """
+    from synth.plugin_output import silence_plugin_output_from_now_on
+
+    silence_plugin_output_from_now_on()
+
+
+def _worker_silencing(synth_name: str) -> Dict[str, object]:
+    """Pool kwargs that keep a teardown-chatty plugin quiet for the worker's whole life.
+
+    The suppressor inside the render call covers construction and rendering, but Diva logs
+    ~15 lines from its destructor, which runs after that context has closed and lands in the
+    middle of the progress bar. Dexed does not log at teardown and its worker is left exactly
+    as it was on purpose: its fresh-process reproducibility has a measured, undiagnosed
+    sensitivity to what its worker does at startup (see ``synth/plugin_output.py``).
+    """
+    if not _synth_spec(synth_name).logs_at_teardown:
+        return {}
+    return {"initializer": _silence_worker_output, "initargs": (synth_name,)}
 
 
 # A picklable ``(patch, settings, renderer, synth_name) -> mono audio`` render worker.
@@ -207,7 +247,9 @@ class FreshProcessRenderBackend:
         self._renderer = renderer
         self._synth_name = synth_name
         _synth_spec(synth_name)  # fail here, not inside a spawned worker
-        self._pool = mp.get_context("spawn").Pool(processes=1, maxtasksperchild=1)
+        self._pool = mp.get_context("spawn").Pool(
+            processes=1, maxtasksperchild=1, **_worker_silencing(synth_name)
+        )
 
     def render(self, params: Dict[str, float]) -> np.ndarray:
         return self._pool.apply(
@@ -259,7 +301,7 @@ class ParallelFreshProcessRenderBackend:
         _synth_spec(synth_name)  # fail here, not inside a spawned worker
         self.num_workers = num_workers if num_workers is not None else (os.cpu_count() or 1)
         self._pool = mp.get_context("spawn").Pool(
-            processes=self.num_workers, maxtasksperchild=1
+            processes=self.num_workers, maxtasksperchild=1, **_worker_silencing(synth_name)
         )
 
     def _payload(

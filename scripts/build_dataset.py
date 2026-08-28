@@ -109,6 +109,7 @@ from dataset.render_backends import (
     ParallelFreshProcessRenderBackend,
     RenderSettings,
     make_wrapper,
+    synth_logs_at_teardown,
     synth_plugin_path,
 )
 from dataset.preset_sources import (
@@ -123,6 +124,11 @@ import config
 
 SYNTH_CHOICES = ["dexed", "diva"]
 
+# Wrappers this script built, held so they are not destroyed while the subcommand returns.
+# Diva reports from its destructor, and main() silences output only once the subcommand is
+# done; without this the report lands between the two.
+_LIVE_SYNTHS: list = []
+
 # Diva does not reproduce in-process at all, so every Diva partition renders in a fresh
 # process regardless of --fresh-process (D-DIVA-RENDER, docs/DECISIONS.md).
 _ALWAYS_FRESH_PROCESS = {"diva"}
@@ -135,6 +141,7 @@ def _make_synth(synth_name: str) -> BaseSynthesizer:
         print(f"Please update {synth_name.upper()}_PATH in your .env file.")
         sys.exit(1)
     synth = make_wrapper(renderer="dawdreamer", synth_name=synth_name)
+    _LIVE_SYNTHS.append(synth)
     print(
         f"Initialized {synth_name} at {synth.sample_rate}Hz; "
         f"subset = {len(synth.parameter_space.names)} params"
@@ -447,6 +454,11 @@ def main() -> None:
     if args.command == "hybrid" and args.run_name is None:
         args.run_name = f"hybrid_{args.mode}"
     args.func(args)
+    if synth_logs_at_teardown(args.synth):
+        # The wrapper this script holds outlives main(), and Diva reports from its destructor
+        # on the way out. Everything of ours is printed by now, so silence the rest.
+        from synth.plugin_output import silence_plugin_output_from_now_on
+        silence_plugin_output_from_now_on()
 
 
 if __name__ == "__main__":

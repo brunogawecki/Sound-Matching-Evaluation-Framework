@@ -22,6 +22,7 @@ safe choice is to not add anything to Dexed's import path that doesn't have to b
 """
 import contextlib
 import os
+import sys
 from typing import Generator
 
 
@@ -42,4 +43,24 @@ def suppressed_plugin_output() -> Generator[None, None, None]:
         os.close(devnull_fd)
 
 
-__all__ = ["suppressed_plugin_output"]
+def silence_plugin_output_from_now_on() -> None:
+    """Suppress fds 1 and 2 for the rest of the process, permanently.
+
+    A JUCE plugin logs from its destructor, which for a wrapper the main process holds runs
+    on the way out, after the script has printed everything it meant to. A CLI calls this
+    once its own output is done so a run ends on its summary rather than on the plugin's
+    teardown report. Deliberately never restores the descriptors: nothing after this point
+    is ours to print. (``atexit`` is too early -- its callbacks run before the deallocation
+    that triggers the destructor.)
+    """
+    # Flush first: piped stdout is block-buffered and would otherwise flush at exit, into
+    # the devnull this installs -- silently eating the caller's own last output.
+    for stream in (sys.stdout, sys.stderr):
+        stream.flush()
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    for fd in (1, 2):
+        os.dup2(devnull_fd, fd)
+    os.close(devnull_fd)
+
+
+__all__ = ["suppressed_plugin_output", "silence_plugin_output_from_now_on"]
