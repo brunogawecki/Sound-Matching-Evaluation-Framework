@@ -32,7 +32,7 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, ContextManager, Dict, List, Optional, Tuple, Type
 
 import numpy as np
 
@@ -59,10 +59,58 @@ class RenderSettings:
         )
 
 
-def _make_wrapper(renderer: str) -> DexedWrapper:
-    """Construct a renderer-backed Dexed wrapper (caller is responsible for stderr suppression)."""
-    return DexedWrapper(
-        plugin_path=os.path.expanduser(config.DEXED_PATH),
+def _import_dexed_wrapper() -> Type[BaseSynthesizer]:
+    return DexedWrapper
+
+
+def _import_diva_wrapper() -> Type[BaseSynthesizer]:
+    from synth.diva import DivaWrapper
+    return DivaWrapper
+
+
+def _suppress_diva_output() -> ContextManager[None]:
+    # Diva writes its banner to stdout as well as stderr, so it needs the wider suppressor.
+    from synth.plugin_output import suppressed_plugin_output
+    return suppressed_plugin_output()
+
+
+@dataclass(frozen=True)
+class _SynthSpec:
+    """Everything a render worker needs to build one synth's wrapper.
+
+    ``import_wrapper_class`` is a deferred import rather than a direct class reference so a
+    Dexed render never imports the Diva package. Spawned workers re-import this module on
+    every render, and Dexed's reproducibility has already proved sensitive to what is imported
+    alongside it (see the module docstring of ``synth/plugin_output.py``).
+    """
+    import_wrapper_class: Callable[[], Type[BaseSynthesizer]]
+    plugin_path_config_attribute: str
+    open_output_suppressor: Callable[[], ContextManager[None]]
+
+
+_SYNTH_REGISTRY: Dict[str, _SynthSpec] = {
+    "dexed": _SynthSpec(_import_dexed_wrapper, "DEXED_PATH", suppressed_stderr),
+    "diva": _SynthSpec(_import_diva_wrapper, "DIVA_PATH", _suppress_diva_output),
+}
+
+DEFAULT_SYNTH = "dexed"
+
+
+def _synth_spec(synth_name: str) -> _SynthSpec:
+    try:
+        return _SYNTH_REGISTRY[synth_name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown synth {synth_name!r}. Known: {sorted(_SYNTH_REGISTRY)}."
+        ) from None
+
+
+def _make_wrapper(renderer: str, synth_name: str = DEFAULT_SYNTH) -> BaseSynthesizer:
+    """Construct a renderer-backed wrapper (caller is responsible for output suppression)."""
+    spec = _synth_spec(synth_name)
+    wrapper_class = spec.import_wrapper_class()
+    return wrapper_class(
+        plugin_path=os.path.expanduser(getattr(config, spec.plugin_path_config_attribute)),
         sample_rate=config.SAMPLE_RATE,
         buffer_size=config.BUFFER_SIZE,
         renderer=renderer,
@@ -70,18 +118,20 @@ def _make_wrapper(renderer: str) -> DexedWrapper:
 
 
 def render_patch_in_fresh_process(
-    payload: Tuple[Dict[str, float], RenderSettings, str]
+    payload: Tuple[Dict[str, float], RenderSettings, str, str]
 ) -> np.ndarray:
-    """Render one patch at position 0 of a brand-new Dexed wrapper.
+    """Render one patch at position 0 of a brand-new wrapper.
 
     Top-level (picklable) so it can run inside a spawned worker. Each call constructs its own
     wrapper and renders a single patch, so when the worker process itself is fresh (spawn +
     ``maxtasksperchild=1``) the render happens on a clean OS heap -- the only context in which
-    Dexed's hidden per-voice state is reset (D-REPRO). Returns mono float32 audio.
+    Dexed's hidden per-voice state is reset, and the only context in which Diva reproduces at
+    all (D-REPRO / D-DIVA-RENDER). Returns mono float32 audio.
     """
-    patch, settings, renderer = payload
-    with suppressed_stderr():
-        wrapper = _make_wrapper(renderer)
+    patch, settings, renderer, synth_name = payload
+    spec = _synth_spec(synth_name)
+    with spec.open_output_suppressor():
+        wrapper = _make_wrapper(renderer, synth_name)
     wrapper.set_parameters(patch)
     audio = wrapper.render_audio(
         settings.midi_note,
@@ -92,9 +142,9 @@ def render_patch_in_fresh_process(
     return np.asarray(audio, dtype=np.float32)
 
 
-# A picklable ``(patch, settings, renderer) -> mono audio`` render worker. Top-level so
-# it survives the spawn pickle; the default is the real Dexed render above.
-RenderWorker = Callable[[Tuple[Dict[str, float], RenderSettings, str]], np.ndarray]
+# A picklable ``(patch, settings, renderer, synth_name) -> mono audio`` render worker.
+# Top-level so it survives the spawn pickle; the default is the real render above.
+RenderWorker = Callable[[Tuple[Dict[str, float], RenderSettings, str, str]], np.ndarray]
 
 
 class InProcessRenderBackend:
@@ -107,6 +157,13 @@ class InProcessRenderBackend:
     process_mode = "in-process"
 
     def __init__(self, synth: BaseSynthesizer, settings: RenderSettings):
+        # getattr, not attribute access: BaseSynthesizer defaults this to True, so every real
+        # wrapper has it, but VST-free test doubles duck-type the interface without subclassing.
+        if not getattr(synth, "supports_in_process_render", True):
+            raise ValueError(
+                f"{type(synth).__name__} does not reproduce in-process; use "
+                "FreshProcessRenderBackend. See D-DIVA-RENDER in docs/DECISIONS.md."
+            )
         self._synth = synth
         self._settings = settings
 
@@ -135,14 +192,22 @@ class FreshProcessRenderBackend:
 
     process_mode = "fresh"
 
-    def __init__(self, settings: RenderSettings, renderer: str = "dawdreamer"):
+    def __init__(
+        self,
+        settings: RenderSettings,
+        renderer: str = "dawdreamer",
+        synth_name: str = DEFAULT_SYNTH,
+    ):
         self._settings = settings
         self._renderer = renderer
+        self._synth_name = synth_name
+        _synth_spec(synth_name)  # fail here, not inside a spawned worker
         self._pool = mp.get_context("spawn").Pool(processes=1, maxtasksperchild=1)
 
     def render(self, params: Dict[str, float]) -> np.ndarray:
         return self._pool.apply(
-            render_patch_in_fresh_process, ((params, self._settings, self._renderer),)
+            render_patch_in_fresh_process,
+            ((params, self._settings, self._renderer, self._synth_name),),
         )
 
     def close(self) -> None:
@@ -180,17 +245,22 @@ class ParallelFreshProcessRenderBackend:
         renderer: str = "dawdreamer",
         num_workers: Optional[int] = None,
         render_worker: RenderWorker = render_patch_in_fresh_process,
+        synth_name: str = DEFAULT_SYNTH,
     ):
         self._settings = settings
         self._renderer = renderer
         self._render_worker = render_worker
+        self._synth_name = synth_name
+        _synth_spec(synth_name)  # fail here, not inside a spawned worker
         self.num_workers = num_workers if num_workers is not None else (os.cpu_count() or 1)
         self._pool = mp.get_context("spawn").Pool(
             processes=self.num_workers, maxtasksperchild=1
         )
 
-    def _payload(self, params: Dict[str, float]) -> Tuple[Dict[str, float], RenderSettings, str]:
-        return (params, self._settings, self._renderer)
+    def _payload(
+        self, params: Dict[str, float]
+    ) -> Tuple[Dict[str, float], RenderSettings, str, str]:
+        return (params, self._settings, self._renderer, self._synth_name)
 
     def render(self, params: Dict[str, float]) -> np.ndarray:
         return self._pool.apply(self._render_worker, (self._payload(params),))
@@ -219,15 +289,18 @@ class ParallelFreshProcessRenderBackend:
 
 # One persistent wrapper per worker, built once by the pool initializer and reused for every
 # render that worker handles. Module-level so a spawned worker rebuilds them on import.
-_REUSE_WRAPPER: Optional[DexedWrapper] = None
+_REUSE_WRAPPER: Optional[BaseSynthesizer] = None
 _REUSE_SETTINGS: Optional[RenderSettings] = None
 
 
-def init_reuse_worker(renderer: str, settings: RenderSettings) -> None:
+def init_reuse_worker(
+    renderer: str, settings: RenderSettings, synth_name: str = DEFAULT_SYNTH
+) -> None:
     """Pool initializer: build the one wrapper this worker reuses across all its renders."""
     global _REUSE_WRAPPER, _REUSE_SETTINGS
-    with suppressed_stderr():
-        _REUSE_WRAPPER = _make_wrapper(renderer)
+    spec = _synth_spec(synth_name)
+    with spec.open_output_suppressor():
+        _REUSE_WRAPPER = _make_wrapper(renderer, synth_name)
     _REUSE_SETTINGS = settings
 
 
@@ -270,17 +343,25 @@ class ParallelInProcessRenderBackend:
         settings: RenderSettings,
         renderer: str = "dawdreamer",
         num_workers: Optional[int] = None,
-        worker_initializer: Callable[[str, RenderSettings], None] = init_reuse_worker,
+        worker_initializer: Callable[[str, RenderSettings, str], None] = init_reuse_worker,
         render_worker: ReuseRenderWorker = render_patch_in_reused_wrapper,
+        synth_name: str = DEFAULT_SYNTH,
     ):
+        wrapper_class = _synth_spec(synth_name).import_wrapper_class()
+        if not wrapper_class.supports_in_process_render:
+            raise ValueError(
+                f"{wrapper_class.__name__} does not reproduce in-process; use "
+                "ParallelFreshProcessRenderBackend. See D-DIVA-RENDER in docs/DECISIONS.md."
+            )
         self._settings = settings
         self._renderer = renderer
         self._render_worker = render_worker
+        self._synth_name = synth_name
         self.num_workers = num_workers if num_workers is not None else (os.cpu_count() or 1)
         self._pool = mp.get_context("spawn").Pool(
             processes=self.num_workers,
             initializer=worker_initializer,
-            initargs=(renderer, settings),
+            initargs=(renderer, settings, synth_name),
         )
 
     def render(self, params: Dict[str, float]) -> np.ndarray:

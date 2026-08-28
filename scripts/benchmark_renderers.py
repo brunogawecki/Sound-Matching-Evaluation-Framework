@@ -208,7 +208,7 @@ def time_subprocess_arm(
     """
     context = mp.get_context("spawn")
     settings = RenderSettings.from_config()
-    payloads = [(patch, settings, "dawdreamer") for patch in patches]
+    payloads = [(patch, settings, "dawdreamer", "dexed") for patch in patches]
     renders: List[np.ndarray] = []
     per_render_seconds: List[float] = []
     last = time.perf_counter()

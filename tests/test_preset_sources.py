@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from synth.parameter_space import ParameterSpecification, ParameterSpace
-from dataset.dexed_preset_loader import LoadedPreset
+from dataset.preset_loader_common import LoadedPreset
 from dataset.preset_sources import (
     METHOD_AUGMENT,
     METHOD_HUMAN,

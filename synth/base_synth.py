@@ -12,6 +12,13 @@ class BaseSynthesizer(abc.ABC):
     regardless of the underlying VST hosting engine (DawDreamer, Pedalboard, etc.).
     """
 
+    # Whether consecutive renders through one live wrapper reproduce well enough to build a
+    # corpus from (D-REPRO). True for Dexed, which only leaks a little hidden voice state;
+    # False for a plugin that does not reproduce in-process at all, which makes the
+    # in-process backends refuse it outright rather than lose quality silently
+    # (D-DIVA-RENDER). See docs/DECISIONS.md.
+    supports_in_process_render: bool = True
+
     @property
     @abc.abstractmethod
     def sample_rate(self) -> int:

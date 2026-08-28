@@ -5,99 +5,27 @@ The synth-specific half of the human-preset pipeline. It loads each DX7 voice
 near-twins on their subset projection (so presets that render identically
 collapse to one), and makes a seeded voice-level train/test split so the two
 partitions are provably disjoint.
+
+Only the ``.syx`` reading is Dexed-specific. The dedup and split machinery is shared with
+every other human-preset loader and lives in :mod:`dataset.preset_loader_common`; this
+module re-exports it so existing imports keep working.
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import Dict, List, Sequence, Tuple
-
-import numpy as np
-from tqdm import tqdm
+from typing import Dict, List, Sequence
 
 from synth.parameter_space import ParameterSpace
 from synth.dexed.cartridge import NUM_VOICES, voice_names, voice_parameters
-
-
-@dataclass(frozen=True)
-class LoadedPreset:
-    """One human preset: its full unpacked parameters plus provenance."""
-    params: Dict[str, float]
-    source_file: str
-    voice_index: int
-    voice_name: str
-
-
-@dataclass(frozen=True)
-class PresetSplit:
-    """Disjoint train / test partitions of deduplicated human presets."""
-    train: List[LoadedPreset]
-    test: List[LoadedPreset]
-
-
-# -- shared dedup / split (synth-agnostic; reused by every human-preset loader) --
-
-def _projected_vector(preset: LoadedPreset, parameter_space: ParameterSpace) -> np.ndarray:
-    """The preset's ML vector on the estimated subset (what actually gets rendered)."""
-    subset = {name: preset.params[name] for name in parameter_space.names}
-    return parameter_space.synth_dict_to_ml_vector(subset)
-
-
-def deduplicate_presets(
-    presets: List[LoadedPreset],
-    parameter_space: ParameterSpace,
-    dedup_threshold: float = 1e-3,
-    show_progress: bool = False,
-) -> List[LoadedPreset]:
-    """Drop near-twins: any preset whose subset projection is within
-    ``dedup_threshold`` (max-norm) of one already kept. Presets that render
-    identically under the fixed contract collapse to a single representative.
-
-    This is O(n^2) in the number of presets; pass ``show_progress=True`` to draw a
-    tqdm bar (the scan is silent and slow on the full ~30k-voice collection).
-    """
-    kept: List[LoadedPreset] = []
-    kept_vectors: List[np.ndarray] = []
-    for preset in tqdm(presets, desc="Deduplicating", unit="preset", disable=not show_progress):
-        vector = _projected_vector(preset, parameter_space)
-        if any(
-            np.max(np.abs(vector - other)) <= dedup_threshold
-            for other in kept_vectors
-        ):
-            continue
-        kept.append(preset)
-        kept_vectors.append(vector)
-    return kept
-
-
-def split_indices(
-    count: int,
-    test_fraction: float,
-    split_seed: int = 0,
-) -> Tuple[List[int], List[int]]:
-    """Seeded train/test partition of ``range(count)`` positions; the two lists are
-    disjoint by construction (a position is in exactly one) and each stays in
-    ascending order. The single source of truth for how a set is split into
-    train/test, shared by :func:`split_presets` and the post-render corpus split."""
-    order = np.random.default_rng(split_seed).permutation(count)
-    num_test = int(round(count * test_fraction))
-    test_positions = set(order[:num_test].tolist())
-    train = [index for index in range(count) if index not in test_positions]
-    test = [index for index in range(count) if index in test_positions]
-    return train, test
-
-
-def split_presets(
-    presets: List[LoadedPreset],
-    test_fraction: float,
-    split_seed: int = 0,
-) -> PresetSplit:
-    """Seeded voice-level train/test split; the two partitions are disjoint by
-    construction (a preset is in exactly one)."""
-    train_positions, test_positions = split_indices(len(presets), test_fraction, split_seed)
-    train = [presets[index] for index in train_positions]
-    test = [presets[index] for index in test_positions]
-    return PresetSplit(train=train, test=test)
+# Re-exported so existing `from dataset.dexed_preset_loader import LoadedPreset, ...` imports
+# keep working; the definitions themselves are synth-agnostic and live in the common module.
+from .preset_loader_common import (  # noqa: F401
+    LoadedPreset,
+    PresetSplit,
+    deduplicate_presets,
+    split_indices,
+    split_presets,
+)
 
 
 class DexedPresetLoader:

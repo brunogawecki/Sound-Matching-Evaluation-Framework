@@ -1274,6 +1274,20 @@ that for Diva it is the *only* option, not the strict setting of two.
 - `FreshProcessRenderBackend` / `ParallelFreshProcessRenderBackend` are the only valid Diva
   backends. The synth registry work must make choosing an in-process backend for Diva an error,
   not a silent quality loss.
+  Implemented 2026-08-28: `BaseSynthesizer.supports_in_process_render` (True by default, False
+  on `DivaWrapper`), checked by both in-process backends.
+
+  **This costs almost nothing** (measured 2026-08-28, 12 random patches, 4.0 s at 22050 Hz,
+  10 workers, per render):
+
+  | synth | construct | in-process | fresh | parallel fresh | fresh / in-process |
+  |---|---|---|---|---|---|
+  | Dexed | 0.024 s | 0.004 s | 0.121 s | 0.031 s | 28.3x |
+  | Diva | 0.038 s | 0.138 s | 0.279 s | 0.058 s | **2.0x** |
+
+  Diva's own render dominates its cost, so process isolation is a 2x tax rather than Dexed's
+  28x, where a 4 ms render is swamped by process overhead. At 0.058 s per render the full
+  11,218-preset corpus is ~11 minutes, so throughput is not a reason to revisit this.
 - `SynthRLi` stays out of scope for Diva (already recorded under D-DIVA-START). Its fast reward
   path is in-process reuse, which Diva cannot use, so it would be forced onto the slow path.
 - Nothing changes for training or evaluation of the other families: they consume a built corpus

@@ -53,6 +53,9 @@ class DivaWrapper(BaseSynthesizer):
     reuse path does not. See D-DIVA-RENDER in docs/DECISIONS.md.
     """
 
+    # D-DIVA-RENDER: the in-process backends must refuse Diva rather than degrade silently.
+    supports_in_process_render = False
+
     def __init__(
         self,
         plugin_path: str,

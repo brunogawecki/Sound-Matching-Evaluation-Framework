@@ -21,7 +21,7 @@ import numpy as np
 from synth.parameter_space import ParameterSpace
 
 if TYPE_CHECKING:
-    from .dexed_preset_loader import LoadedPreset
+    from .preset_loader_common import LoadedPreset
 
 # Record-level provenance tags (the dataset-level method lives in the run summary).
 METHOD_SYNTHETIC = "synthetic"

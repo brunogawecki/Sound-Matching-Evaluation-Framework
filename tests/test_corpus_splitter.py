@@ -23,7 +23,7 @@ from dataset.corpus_splitter import (
     split_source_description,
     write_copied_partition,
 )
-from dataset.dexed_preset_loader import split_indices
+from dataset.preset_loader_common import split_indices
 from dataset.preset_sources import CorpusPresetSource
 from synth.parameter_space import ParameterSpace, ParameterSpecification
 

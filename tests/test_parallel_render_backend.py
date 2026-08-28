@@ -34,7 +34,7 @@ def _sine_for(amp: float) -> np.ndarray:
 
 def fake_render(payload) -> np.ndarray:
     """A deterministic, VST-free render worker: a sine whose amplitude is the patch's ``AMP``."""
-    patch, _settings, _renderer = payload
+    patch, _settings, _renderer, _synth_name = payload
     return _sine_for(float(patch["AMP"]))
 
 
@@ -45,7 +45,7 @@ def pid_render(payload) -> np.ndarray:
 
 # The reuse backend's worker takes a bare patch (settings/renderer are baked in by the
 # initializer), so its stand-ins have a different signature from the fresh backend's.
-def noop_reuse_init(renderer, settings) -> None:
+def noop_reuse_init(renderer, settings, synth_name="dexed") -> None:
     pass
 
 
@@ -195,3 +195,46 @@ def test_reuse_backend_renders_non_silent_real_dexed():
     assert len(rendered) == len(patches)
     for audio in rendered:
         assert np.max(np.abs(audio)) > 0.0
+
+
+# ---------------------------------------------------------------------------
+# The synth registry: which synth a backend renders, and which backends each synth allows.
+# ---------------------------------------------------------------------------
+def test_unknown_synth_is_rejected_in_the_parent_process():
+    # Not inside a spawned worker, where the traceback would be far less useful.
+    for backend_class in (FreshProcessRenderBackend, ParallelFreshProcessRenderBackend):
+        with pytest.raises(ValueError, match="Unknown synth"):
+            backend_class(SETTINGS, synth_name="moog")
+
+
+def test_payload_carries_the_synth_name():
+    backend = ParallelFreshProcessRenderBackend(
+        SETTINGS, num_workers=1, render_worker=fake_render, synth_name="diva"
+    )
+    try:
+        assert backend._payload({"AMP": 0.5})[3] == "diva"
+    finally:
+        backend.close()
+
+
+def test_in_process_backends_refuse_a_synth_that_cannot_reproduce_in_process():
+    # D-DIVA-RENDER: Diva does not reproduce in-process at all, so the reuse backends must
+    # refuse it rather than quietly produce a corpus that cannot be reproduced.
+    from dataset.render_backends import InProcessRenderBackend
+
+    class _NoInProcessSynth:
+        supports_in_process_render = False
+
+    with pytest.raises(ValueError, match="does not reproduce in-process"):
+        InProcessRenderBackend(_NoInProcessSynth(), SETTINGS)
+
+    with pytest.raises(ValueError, match="does not reproduce in-process"):
+        ParallelInProcessRenderBackend(
+            SETTINGS, synth_name="diva",
+            worker_initializer=noop_reuse_init, render_worker=fake_reuse_render,
+        )
+
+
+def test_dexed_still_allows_the_in_process_backends():
+    from synth.dexed import DexedWrapper
+    assert DexedWrapper.supports_in_process_render is True
