@@ -52,7 +52,10 @@ module-qualified (`VCF1.Model`) — see the D-NAMING amendment.
 continuous/discrete split read off the plugin and frozen, DawDreamer-only. Rendering Diva is
 **fresh-process only** — it does not reproduce in-process at all (**D-DIVA-RENDER**).
 
-Still to build: the subset (**D-DIVA-SUBSET**, open), the preset loader, a
+The estimated subset is settled: **237 of the 281** parameters (**D-DIVA-SUBSET**), a 1100-dimension
+ML-side vector against Dexed's 333.
+
+Still to build: the preset loader, a
 `--synth {dexed,diva}` flag on `scripts/build_dataset.py`, and the shared-code extraction that keeps
 `dataset/render_backends.py` and the preset loaders synth-neutral. `SynthRLi` is out of scope for
 Diva (it is the only family that renders inside the training loop, D-RL-RENDER).
@@ -71,7 +74,6 @@ than discovering them family-by-family. It mirrors D-ORDER one level down.
 | **D-FRAMEWORK** — PyTorch Lightning vs. raw PyTorch loop | LOCKED (Lightning) | — (unblocked) | Locked 2026-06-30; conventions for the harness recorded in `DECISIONS.md`. |
 | **D-FAMILIES** — final model-family set | OPEN (stub) | Phase 5 | Discriminative + generative (primary) + neural-proxy (baseline); evolutionary dropped. |
 | **D4** — human test-set composition | OPEN | Phase 6 | Importer built; Phase 4 has landed, so the final split is unblocked and awaits the user's call. |
-| **D-DIVA-SUBSET** — Diva's estimated parameter subset | OPEN | any Diva corpus | The D1 analogue, same rule. Blocked on the `DivaWrapper`, not contentious. |
 
 ## Phase 4 — Training foundation, proven by one real model
 
