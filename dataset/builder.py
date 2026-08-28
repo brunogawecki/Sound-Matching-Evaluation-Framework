@@ -23,7 +23,7 @@ from tqdm import tqdm
 import config
 from synth.base_synth import BaseSynthesizer
 from synth.parameter_space import ParameterSpace
-from .render_backends import InProcessRenderBackend, RenderSettings
+from .render_backends import DEFAULT_SYNTH, InProcessRenderBackend, RenderSettings
 from .preset_sources import PresetRecord, PresetSource
 
 
@@ -202,6 +202,7 @@ class DatasetBuilder:
             "render_process": getattr(self._backend, "process_mode", "in-process"),
             "sample_rate": self._synth.sample_rate,
             "renderer": getattr(self._synth, "renderer_name", None),
+            "synth": getattr(self._synth, "synth_name", DEFAULT_SYNTH),
             "subset_names": list(self._subset_names),
             "parameter_space": self._parameter_space.to_dict(),
             "default_params": {name: float(value) for name, value in self._defaults.items()},

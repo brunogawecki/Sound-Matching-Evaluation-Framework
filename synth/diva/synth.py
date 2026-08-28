@@ -53,6 +53,8 @@ class DivaWrapper(BaseSynthesizer):
     reuse path does not. See D-DIVA-RENDER in docs/DECISIONS.md.
     """
 
+    synth_name = "diva"
+
     # D-DIVA-RENDER: the in-process backends must refuse Diva rather than degrade silently.
     supports_in_process_render = False
 

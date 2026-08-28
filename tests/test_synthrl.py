@@ -94,9 +94,10 @@ class FakeSynth:
 class _FakeBackend:
     """Stands in for FreshProcessRenderBackend at eval time: a fixed sine, no VST."""
 
-    def __init__(self, settings, renderer="dawdreamer"):
+    def __init__(self, settings, renderer="dawdreamer", synth_name="dexed"):
         self.settings = settings
         self.renderer = renderer
+        self.synth_name = synth_name
         self.closed = False
 
     def render(self, params):

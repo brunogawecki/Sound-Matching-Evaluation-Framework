@@ -44,9 +44,12 @@ from tqdm import tqdm
 
 import config
 from dataset.render_backends import (
+    DEFAULT_SYNTH,
     FreshProcessRenderBackend,
     InProcessRenderBackend,
     RenderSettings,
+    _synth_spec,
+    synth_plugin_path,
 )
 from dataset.torch_dataset import RenderedCorpusDataset
 from evaluation.registry import METRIC_PANEL
@@ -81,6 +84,9 @@ class Evaluator:
         self._corpus_summary = self._load_corpus_summary(corpus.corpus_dir)
         self._render_settings = RenderSettings(**self._corpus_summary["render_settings"])
         self._renderer = str(self._corpus_summary["renderer"])
+        # Optional, unlike the contract fields: corpora built before the framework had a
+        # second synth carry no "synth" key and are all Dexed.
+        self._synth_name = str(self._corpus_summary.get("synth", DEFAULT_SYNTH))
         self._sample_rate = int(self._corpus_summary["sample_rate"])
         self._default_params: Dict[str, float] = {
             name: float(value) for name, value in self._corpus_summary["default_params"].items()
@@ -190,7 +196,9 @@ class Evaluator:
         sample: predict, re-render in a fresh process, run the whole panel.
         """
         target_matrix = self._corpus.targets.numpy()
-        backend = FreshProcessRenderBackend(self._render_settings, renderer=self._renderer)
+        backend = FreshProcessRenderBackend(
+            self._render_settings, renderer=self._renderer, synth_name=self._synth_name
+        )
         monitor_backend = self._attach_itf_monitor(model)
         audio_dir = run_dir / "audio"
         if audio_sample_indices:
@@ -247,13 +255,14 @@ class Evaluator:
         if not hasattr(model, "set_itf_render_callback"):
             return None
         # Reused process (not fresh-per-render): the monitor is a selection heuristic, so
-        # Dexed's voice-state leak is acceptable here (unlike the scored render). Built at the
-        # corpus sample rate and renderer, never config.py's, to match the contract.
-        from synth.dexed import DexedWrapper, suppressed_stderr
-
-        with suppressed_stderr():
-            synth = DexedWrapper(
-                plugin_path=os.path.expanduser(config.DEXED_PATH),
+        # Dexed's voice-state leak is acceptable here (unlike the scored render). Built for
+        # the corpus's own synth and renderer, never config.py's, to match the contract.
+        # A synth that does not reproduce in-process at all (Diva, D-DIVA-RENDER) is refused
+        # by InProcessRenderBackend rather than silently monitored on garbage.
+        spec = _synth_spec(self._synth_name)
+        with spec.open_output_suppressor():
+            synth = spec.import_wrapper_class()(
+                plugin_path=synth_plugin_path(self._synth_name),
                 sample_rate=self._sample_rate,
                 buffer_size=config.BUFFER_SIZE,
                 renderer=self._renderer,

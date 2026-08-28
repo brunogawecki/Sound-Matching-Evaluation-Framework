@@ -12,6 +12,11 @@ class BaseSynthesizer(abc.ABC):
     regardless of the underlying VST hosting engine (DawDreamer, Pedalboard, etc.).
     """
 
+    # This synth's key in dataset.render_backends._SYNTH_REGISTRY, written into every
+    # corpus's run_summary.json so the eval path can rebuild the right wrapper without
+    # being told (D-EVAL). Subclasses set it; the two must not drift apart.
+    synth_name: str = "dexed"
+
     # Whether consecutive renders through one live wrapper reproduce well enough to build a
     # corpus from (D-REPRO). True for Dexed, which only leaks a little hidden voice state;
     # False for a plugin that does not reproduce in-process at all, which makes the

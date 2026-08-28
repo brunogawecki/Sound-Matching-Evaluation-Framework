@@ -65,8 +65,12 @@ not 237**: D-DIVA-SUBSET's list is unchanged, but the corpus-variance rule narro
 corpus (`restrict_to_realized`). A second, synthetic Diva corpus over the full 237 is the planned
 way to exercise the categoricals; it is not scheduled.
 
-Still to build: a `--synth {dexed,diva}` flag on `scripts/build_dataset.py`. `SynthRLi` is out of
-scope for Diva (it is the only family that renders inside the training loop, D-RL-RENDER).
+`scripts/build_dataset.py` takes `--synth {dexed,diva}` on all three subcommands, and a corpus now
+records which synth built it, so the Evaluator re-renders on the right one. The full pipeline runs
+end to end on Diva: build, `RenderedCorpusDataset` with no live VST, fit, evaluate. `SynthRLi` is
+out of scope for Diva (it is the only family that renders inside the training loop, D-RL-RENDER).
+
+Still to build: the Diva wrapper's own test file, and a full-size corpus.
 
 ## Sequencing — vertical slice first
 

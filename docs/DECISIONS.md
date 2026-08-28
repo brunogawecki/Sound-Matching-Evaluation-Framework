@@ -504,6 +504,18 @@ deliberately **not** re-exported from `dataset/__init__`, and `dataset/__init__`
 generation API lazily (PEP 562 `__getattr__`), so importing the Dataset never drags in the
 synth / render stack. `torch` is added as a dependency (the framework's first torch user).
 
+**Amendment (2026-08-28): the corpus also records which synth built it.** With a second synth in
+the framework, the serialized `ParameterSpace` no longer identifies the plugin: Diva's narrowed
+corpus space (see D-DIVA-SUBSET) names 58 parameters that mean nothing to Dexed. So
+`run_summary.json` carries a `"synth"` field, written from the wrapper's `synth_name` and read back
+as a key of `dataset/render_backends._SYNTH_REGISTRY`. The Evaluator uses it to re-render on the
+synth the corpus was built with, instead of assuming Dexed (D-EVAL: the contract comes from the
+corpus, never from `config.py`).
+
+Unlike the render-contract fields, `"synth"` is **optional on read** and defaults to `dexed`: every
+corpus built before the field existed is Dexed, so old corpora keep evaluating unchanged rather than
+being invalidated.
+
 **Feasibility spike (2026-07-21)** — append-only; the decision above is unchanged. Tested whether the
 "setup choice, not a hard platform limit" claim actually holds, on the real PUT cluster
 (`slurm.cs.put.poznan.pl`, Ubuntu 22.04.5, glibc 2.35 / `libstdc++` `GLIBCXX_3.4.30` ceiling — no

@@ -105,12 +105,17 @@ def _synth_spec(synth_name: str) -> _SynthSpec:
         ) from None
 
 
-def _make_wrapper(renderer: str, synth_name: str = DEFAULT_SYNTH) -> BaseSynthesizer:
+def synth_plugin_path(synth_name: str) -> str:
+    """Expanded local path to a synth's plugin binary, from ``config``."""
+    return os.path.expanduser(getattr(config, _synth_spec(synth_name).plugin_path_config_attribute))
+
+
+def make_wrapper(renderer: str, synth_name: str = DEFAULT_SYNTH) -> BaseSynthesizer:
     """Construct a renderer-backed wrapper (caller is responsible for output suppression)."""
     spec = _synth_spec(synth_name)
     wrapper_class = spec.import_wrapper_class()
     return wrapper_class(
-        plugin_path=os.path.expanduser(getattr(config, spec.plugin_path_config_attribute)),
+        plugin_path=synth_plugin_path(synth_name),
         sample_rate=config.SAMPLE_RATE,
         buffer_size=config.BUFFER_SIZE,
         renderer=renderer,
@@ -131,7 +136,7 @@ def render_patch_in_fresh_process(
     patch, settings, renderer, synth_name = payload
     spec = _synth_spec(synth_name)
     with spec.open_output_suppressor():
-        wrapper = _make_wrapper(renderer, synth_name)
+        wrapper = make_wrapper(renderer, synth_name)
     wrapper.set_parameters(patch)
     audio = wrapper.render_audio(
         settings.midi_note,
@@ -300,7 +305,7 @@ def init_reuse_worker(
     global _REUSE_WRAPPER, _REUSE_SETTINGS
     spec = _synth_spec(synth_name)
     with spec.open_output_suppressor():
-        _REUSE_WRAPPER = _make_wrapper(renderer, synth_name)
+        _REUSE_WRAPPER = make_wrapper(renderer, synth_name)
     _REUSE_SETTINGS = settings
 
 
