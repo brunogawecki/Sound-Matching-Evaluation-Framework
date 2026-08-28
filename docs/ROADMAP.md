@@ -55,10 +55,18 @@ continuous/discrete split read off the plugin and frozen, DawDreamer-only. Rende
 The estimated subset is settled: **237 of the 281** parameters (**D-DIVA-SUBSET**), a 1100-dimension
 ML-side vector against Dexed's 333.
 
-Still to build: the preset loader, a
-`--synth {dexed,diva}` flag on `scripts/build_dataset.py`, and the shared-code extraction that keeps
-`dataset/render_backends.py` and the preset loaders synth-neutral. `SynthRLi` is out of scope for
-Diva (it is the only family that renders inside the training loop, D-RL-RENDER).
+The render layer and the preset loaders are synth-neutral (`dataset/render_backends.py` carries a
+synth registry, `dataset/preset_loader_common.py` holds the shared dedup/split half), and
+`dataset/diva_preset_loader.py` reads the 11,217-preset Flow Synthesizer corpus.
+
+That corpus varies only 64 of Diva's 281 parameters and no categoricals at all -- the paper kept
+continuous parameters only and fixed the rest. So the **Diva human corpus estimates 58 parameters,
+not 237**: D-DIVA-SUBSET's list is unchanged, but the corpus-variance rule narrows the space per
+corpus (`restrict_to_realized`). A second, synthetic Diva corpus over the full 237 is the planned
+way to exercise the categoricals; it is not scheduled.
+
+Still to build: a `--synth {dexed,diva}` flag on `scripts/build_dataset.py`. `SynthRLi` is out of
+scope for Diva (it is the only family that renders inside the training loop, D-RL-RENDER).
 
 ## Sequencing — vertical slice first
 

@@ -250,3 +250,21 @@ def test_dexed_sampled_subset_roundtrips_through_the_synth(synth):
     readback = synth.get_parameters()
     for name, value in params.items():
         assert readback[name] == pytest.approx(value, abs=1e-6), name
+
+
+def test_restrict_keeps_named_params_in_space_order():
+    space = ParameterSpace([
+        ParameterSpecification(name="a", kind="continuous", default=0.0),
+        ParameterSpecification(name="b", kind="categorical", options=[0.0, 0.5, 1.0], default=0.0),
+        ParameterSpecification(name="c", kind="continuous", default=0.0),
+    ])
+    narrowed = space.restrict(["c", "b"])  # order of the argument is irrelevant
+    assert narrowed.names == ["b", "c"]
+    assert narrowed.ml_dimension == 3 + 1
+    assert narrowed.parameter_specs[0] == space.parameter_specs[1]  # specs carried unchanged
+
+
+def test_restrict_rejects_names_outside_the_space():
+    space = ParameterSpace([ParameterSpecification(name="a", kind="continuous", default=0.0)])
+    with pytest.raises(KeyError, match="Not parameters of this space"):
+        space.restrict(["a", "z"])

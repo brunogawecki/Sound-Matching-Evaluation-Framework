@@ -12,13 +12,13 @@ dicts and a :class:`~synth.parameter_space.ParameterSpace`, so it is as portable
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Tuple
 
 import numpy as np
 from tqdm import tqdm
 
-from synth.parameter_space import ParameterSpace
+from synth.parameter_space import ParameterSpace, ParameterSpecification
 
 
 @dataclass(frozen=True)
@@ -103,3 +103,60 @@ def split_presets(
     train = [presets[index] for index in train_positions]
     test = [presets[index] for index in test_positions]
     return PresetSplit(train=train, test=test)
+
+
+def constant_parameters(
+    presets: List[LoadedPreset],
+    parameter_space: ParameterSpace,
+    tolerance: float = 1e-6,
+) -> List[str]:
+    """Subset parameters that take the same value in every one of ``presets``.
+
+    A parameter with no variance across the corpus is free for a model to "predict" and
+    carries no information about the benchmark, so a collection that freezes a large share
+    of the estimated subset is not a usable human-preset source for it. Returned in subset
+    order. See the corpus-variance rule under D-DIVA-SUBSET in docs/DECISIONS.md.
+    """
+    if not presets:
+        return list(parameter_space.names)
+    constant: List[str] = []
+    for name in parameter_space.names:
+        first = float(presets[0].params[name])
+        if all(abs(float(preset.params[name]) - first) <= tolerance for preset in presets):
+            constant.append(name)
+    return constant
+
+
+def restrict_to_realized(
+    presets: List[LoadedPreset],
+    parameter_space: ParameterSpace,
+    tolerance: float = 1e-6,
+) -> Tuple[ParameterSpace, Dict[str, float]]:
+    """Narrow a space to what a preset source actually realizes.
+
+    Applies the corpus-variance rule (D-DIVA-SUBSET, docs/DECISIONS.md) mechanically:
+
+    * a parameter constant across every preset is dropped from the space, and
+    * a surviving categorical keeps only the options the presets actually use.
+
+    Returns the narrowed space and the values the dropped parameters must be locked at,
+    which is the source's own frozen value, not the plugin's init patch. Pass those to
+    ``DatasetBuilder(default_params=...)``, or the corpus renders a different instrument
+    from the one the presets were written for.
+    """
+    dropped = constant_parameters(presets, parameter_space, tolerance)
+    frozen = {name: float(presets[0].params[name]) for name in dropped}
+    kept = [name for name in parameter_space.names if name not in set(dropped)]
+
+    narrowed: List[ParameterSpecification] = []
+    for parameter_spec in parameter_space.restrict(kept).parameter_specs:
+        if parameter_spec.kind != "categorical":
+            narrowed.append(parameter_spec)
+            continue
+        realized = sorted({
+            min(parameter_spec.options, key=lambda option: abs(option - float(preset.params[parameter_spec.name])))
+            for preset in presets
+        })
+        default = min(realized, key=lambda option: abs(option - parameter_spec.default))
+        narrowed.append(replace(parameter_spec, options=realized, default=default))
+    return ParameterSpace(narrowed), frozen

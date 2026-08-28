@@ -246,3 +246,45 @@ def test_builds_human_corpus_end_to_end_with_dexed(tmp_path):
     assert (frame["method"] == "human").all()
     assert (frame["partition"] == "test").all()
     assert frame["source_file"].notna().all()
+
+
+# -- corpus-scoped subset and base patch (D-DIVA-SUBSET's corpus-variance rule) ---
+
+def test_parameter_space_override_narrows_what_the_corpus_estimates(tmp_path):
+    # A source that only ever varies AMP: the corpus estimates AMP alone, and CAT is
+    # locked at a base-patch value the synth's own init patch does not carry.
+    narrowed = make_space().restrict(["AMP"])
+
+    class AmpOnlySource(PresetSource):
+        def iter_presets(self) -> Iterator[PresetRecord]:
+            for slot, amp in enumerate((0.3, 0.6, 0.9)):
+                yield PresetRecord(
+                    params={"AMP": amp}, method=METHOD_SYNTHETIC, partition="train", slot=slot
+                )
+
+        def describe(self):
+            return {"method": "amp-only"}
+
+    run_summary = build(
+        tmp_path, AmpOnlySource(),
+        parameter_space=narrowed, default_params={"CAT": 1.0},
+    )
+    space = ParameterSpace.from_dict(run_summary["parameter_space"])
+    assert space.names == ["AMP"]                      # the override, not the synth's subset
+    assert run_summary["default_params"]["CAT"] == 1.0  # the source's base patch, not 0.0
+
+
+def test_default_params_rejects_a_name_the_synth_does_not_expose(tmp_path):
+    with pytest.raises(KeyError, match="default_params names the synth does not expose"):
+        DatasetBuilder(
+            FakeSynth(make_space()), render_settings=small_settings(),
+            default_params={"NOPE": 0.0},
+        )
+
+
+def test_parameter_space_override_rejects_a_name_the_synth_does_not_expose(tmp_path):
+    stray = ParameterSpace([ParameterSpecification(name="NOPE", kind="continuous", default=0.0)])
+    with pytest.raises(KeyError, match="parameter_space names the synth does not expose"):
+        DatasetBuilder(
+            FakeSynth(make_space()), render_settings=small_settings(), parameter_space=stray
+        )

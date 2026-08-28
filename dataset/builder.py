@@ -22,6 +22,7 @@ from tqdm import tqdm
 
 import config
 from synth.base_synth import BaseSynthesizer
+from synth.parameter_space import ParameterSpace
 from .render_backends import InProcessRenderBackend, RenderSettings
 from .preset_sources import PresetRecord, PresetSource
 
@@ -54,6 +55,15 @@ class DatasetBuilder:
         render_backend: where renders run. Defaults to an in-process backend reusing
             ``synth`` (fast; the training path). Pass a FreshProcessRenderBackend to
             render each preset in a clean spawned process for test/eval corpora (D-REPRO).
+        default_params: values to lock the non-subset parameters at, overriding the
+            synth's own init patch. Needed when a preset source froze parameters at a
+            base patch of its own; see ``restrict_to_realized`` in
+            :mod:`dataset.preset_loader_common`. Merged over the synth defaults, so a
+            partial dict is fine, and written to the run summary either way.
+        parameter_space: the space this corpus estimates, overriding the synth's own
+            subset. Pass the narrowed space from ``restrict_to_realized`` alongside its
+            ``default_params``; it must be the same space the ``PresetSource`` was built
+            against, and it is what gets serialized into the run summary (D-SELFDESC).
     """
 
     def __init__(
@@ -63,6 +73,8 @@ class DatasetBuilder:
         min_loudness_lufs: float = -34.0,
         max_redraw_attempts: int = 10,
         render_backend=None,
+        default_params: Optional[Dict[str, float]] = None,
+        parameter_space: Optional[ParameterSpace] = None,
     ):
         self._synth = synth
         self._settings = render_settings or RenderSettings.from_config()
@@ -71,9 +83,16 @@ class DatasetBuilder:
         self._max_redraw_attempts = int(max_redraw_attempts)
         self._loudness_meter = pyloudnorm.Meter(int(synth.sample_rate))
 
-        self._defaults = synth.get_parameter_defaults()
-        self._parameter_space = synth.parameter_space
+        synth_defaults = synth.get_parameter_defaults()
+        unknown = set(default_params or {}) - set(synth_defaults)
+        if unknown:
+            raise KeyError(f"default_params names the synth does not expose: {sorted(unknown)}")
+        self._defaults = {**synth_defaults, **(default_params or {})}
+        self._parameter_space = parameter_space or synth.parameter_space
         self._subset_names = self._parameter_space.names
+        outside = [name for name in self._subset_names if name not in synth_defaults]
+        if outside:
+            raise KeyError(f"parameter_space names the synth does not expose: {outside}")
 
     def build(
         self,

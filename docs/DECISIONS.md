@@ -1431,6 +1431,74 @@ suggests the corpus is generated rather than collected. If it was generated unde
 most of those 624 dimensions automatically. If instead they are genuine user presets with varied
 routing, the full grids stay and the Dexed-symmetry argument above carries. The data decides.
 
+**The data decided (2026-08-28).** `diva_raw.zip` was downloaded and every one of its 11,217
+presets read (`dataset/diva_preset_loader.py`; the archive holds 11,217 `.npz` files, not the
+11,218 quoted above). Its `param` keys are Diva's own module-qualified names written
+`'VCF1: Model'`, and translating that separator to `.` maps **all 281 onto
+`synth/diva/parameters.py` exactly**, nothing left over on either side. Values are already in the
+plugin's `[0, 1]` scale and every discrete parameter lands exactly on its option grid.
+
+The variance result is unambiguous:
+
+| | count |
+|---|---|
+| parameters in the corpus | 281 |
+| parameters that vary at all | **64** |
+| parameters constant across all 11,217 presets | 217 |
+| D-DIVA-SUBSET parameters that vary | **58** of 237 |
+| D-DIVA-SUBSET parameters that are constant | **179** of 237 |
+
+The 64 varying names are exactly Flow Synthesizer's own
+`code/synth/params/64contparams.txt`, and all 217 constants agree to 1e-5 with every value in
+`code/synth/param_default_32.json`. So the corpus is real presets **projected onto Flow
+Synthesizer's 64 continuous parameters and re-seated on their fixed base patch**. Not one
+categorical parameter varies, which confirms from the data what the routing table above inferred
+from their code: they estimate continuous parameters only.
+
+The six parameters that vary in the corpus but are *not* in D-DIVA-SUBSET are
+`ENV1.KeyFollow`, `ENV1.Velocity`, `ENV2.KeyFollow`, `ENV2.Velocity`, `VCF1.KeyFollow` and
+`VCA1.PanModDepth` — precisely the key-follow, velocity-depth and pan parameters dropped above as
+non-identifiable under D3. Flow Synthesizer estimates them because it does not hold note and
+velocity fixed the way D3 does.
+
+**Resolution (2026-08-28): build on `diva_raw` and let the rule narrow the corpus.** The rule is
+applied mechanically, so the Diva human corpus estimates the **58 continuous parameters the corpus
+actually varies**, ML dimension 58 (down from 1100), and no categoricals. The alternative, parsing
+the 561 factory `.h2p` presets, was priced and rejected for now: their keys are abbreviated
+(`Freq`, `KeyScl`, `SkRev`) and do not match the VST3 names, a file carries 341 keys against the
+plugin's 281 so positional alignment drifts inside a module, and the values are in real-world units
+needing a per-parameter inversion built from `get_parameter_text` sweeps. That is a hand-verified
+281-entry translation table plus a value inversion, for 4% of the preset count. See the follow-up
+below.
+
+**D-DIVA-SUBSET's 237-parameter list is unchanged.** It stays the synth's canonical subset. What
+narrows is the **corpus**, not the synth: `ParameterSpace.restrict` and
+`dataset.preset_loader_common.restrict_to_realized` apply the rule to a loaded preset set, and
+`DatasetBuilder` takes the resulting space through its `parameter_space` argument. Each corpus
+serializes its own space into `run_summary.json`, which D-SELFDESC already required, so two Diva
+corpora with different spaces coexist. Models trained on one are comparable only within it.
+
+**The dropped parameters are locked at the corpus' base patch, not Diva's init patch.** 49 of the
+217 constants disagree with the freshly-loaded Diva patch, so locking at the wrapper's defaults
+would render the presets on a different instrument from the one they were written for. Measured on
+one preset: peak 0.185 on the corpus base patch against 0.117 on the init patch. `DatasetBuilder`
+therefore also takes `default_params`, which `restrict_to_realized` returns alongside the narrowed
+space.
+
+**Three module groups keep this framework's defaults instead**, all outside the 237-parameter
+subset already: `OPT` (Accuracy and the five slop knobs -- render-quality settings, and
+D-DIVA-RENDER's bit-identity was measured at our values, not at the corpus' draft-quality
+`Accuracy=0`), `Scope1` (the oscilloscope, measured bit-identical at every setting), and `VCC`
+(voice allocation, glide and pitch-bend range, non-identifiable under D3 by construction). This
+means our renders are not sample-comparable with the audio shipped in `diva_raw`, which was already
+true: every sound is re-rendered under D3 regardless.
+
+**Follow-up: a second, synthetic Diva corpus over the full 237.** `SyntheticPresetSource` already
+takes the wrapper's own space, so a uniform-sampled Diva corpus needs no new machinery and would
+exercise the 102 categoricals and the one-hot path that the `diva_raw` corpus leaves untouched. It
+needs a `min_loudness_lufs` recalibration and probably `audible_sampling_ranges` for Diva first
+(D-AUDIBLE), since uniform draws over 237 parameters are often near-silent. Not scheduled.
+
 **Two constraints on whoever applies it.** The `ParameterSpace` is serialized into
 `run_summary.json` (D-SELFDESC), so narrowing an option list invalidates any corpus already built —
 which is exactly why this must land before the big build, and why keeping the grids wide now costs
