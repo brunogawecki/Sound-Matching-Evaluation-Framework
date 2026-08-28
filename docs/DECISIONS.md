@@ -1276,6 +1276,15 @@ Dexed); zeroing all five `OPT.*Slop` parameters; zeroing `OSC.Drift`; raising `O
 `divine`. `VCC.MultiCore` is already `Off` in the loaded patch, so it is not the cause either.
 Each was tested and each left the divergence intact.
 
+**Amendment (2026-08-28): "loudness is stable" does not generalize.** The 0.18-0.24% RMS drift
+above holds for the patch it was measured on, not for Diva in general. Re-measured over eight
+uniform-sampled subset patches, consecutive in-process renders drifted **17.3%** in RMS on a loud
+one (peak 20.7) and 97.8% on a quiet one. Worse, five of those eight patches rendered *digitally
+silent* in-process while the same patches rendered audibly through fresh processes — so an
+in-process Diva corpus would not merely be noisy, it would contain empty audio for patches that
+are fine. The decision is unchanged and the case for it is stronger; only the "energy is stable
+while the waveform is not" reading is retired.
+
 **Fresh processes are bit-identical.** Three separate processes each constructing a `DivaWrapper`
 and rendering the same patch produced byte-identical audio (max abs diff exactly 0.0). So the
 render contract D-REPRO already mandates is sufficient for Diva as it stands; what changes is
@@ -1507,9 +1516,15 @@ true: every sound is re-rendered under D3 regardless.
 
 **Follow-up: a second, synthetic Diva corpus over the full 237.** `SyntheticPresetSource` already
 takes the wrapper's own space, so a uniform-sampled Diva corpus needs no new machinery and would
-exercise the 102 categoricals and the one-hot path that the `diva_raw` corpus leaves untouched. It
-needs a `min_loudness_lufs` recalibration and probably `audible_sampling_ranges` for Diva first
-(D-AUDIBLE), since uniform draws over 237 parameters are often near-silent. Not scheduled.
+exercise the 102 categoricals and the one-hot path that the `diva_raw` corpus leaves untouched.
+Not scheduled.
+
+What it needs first is **not** what Dexed needed. 100 uniform draws over the 237-parameter subset,
+rendered fresh-process under D3, came out: 0 digitally silent, 2 near-silent (peak < 0.01), 62
+usable, and **36 clipping above full scale**, max peak 25.3. So Diva's uniform-sampling problem is
+level, not silence — the opposite of the Dexed case D-AUDIBLE was written for, where draws collapse
+to inaudible. `audible_sampling_ranges` is the wrong tool; what this needs is a level constraint or
+a normalization step, plus a `min_loudness_lufs` recalibration. Measured 2026-08-28.
 
 **Two constraints on whoever applies it.** The `ParameterSpace` is serialized into
 `run_summary.json` (D-SELFDESC), so narrowing an option list invalidates any corpus already built —

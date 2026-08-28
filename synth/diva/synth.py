@@ -44,9 +44,10 @@ class DivaWrapper(BaseSynthesizer):
     DawDreamer is the only supported renderer (see _SUPPORTED_RENDERERS).
 
     **Diva must be rendered fresh-process.** Consecutive renders of one identical patch through
-    a single wrapper are not reproducible: they agree on energy (~0.2% RMS) but not on waveform
-    or per-frame spectrum (~7.9 dB log-spectral distance, as large as Dexed's worst cross-engine
-    disagreement). Re-applying the parameter state first does not help, and neither does zeroing
+    a single wrapper are not reproducible: the waveform and per-frame spectrum differ (~7.9 dB
+    log-spectral distance, as large as Dexed's worst cross-engine disagreement), and energy is
+    not stable either -- RMS drifted 17% on a loud uniform-sampled patch, and patches that render
+    audibly in a fresh process can come back digitally silent in-process. Re-applying the parameter state first does not help, and neither does zeroing
     the OPT slop parameters or OSC.Drift, so this is not the mild state leak Dexed shows. Two
     renders from *separate processes* are bit-identical, so the framework's existing
     fresh-process-at-position-0 discipline satisfies D-REPRO for Diva -- but the in-process

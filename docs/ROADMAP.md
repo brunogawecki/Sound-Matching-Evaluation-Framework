@@ -70,7 +70,8 @@ records which synth built it, so the Evaluator re-renders on the right one. The 
 end to end on Diva: build, `RenderedCorpusDataset` with no live VST, fit, evaluate. `SynthRLi` is
 out of scope for Diva (it is the only family that renders inside the training loop, D-RL-RENDER).
 
-Still to build: the Diva wrapper's own test file, and a full-size corpus.
+`tests/test_diva_wrapper.py` covers the parameter universe, addressing, the renderer
+restriction and the render contract. Still to build: a full-size Diva corpus.
 
 ## Sequencing — vertical slice first
 
