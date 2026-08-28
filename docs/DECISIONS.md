@@ -1278,19 +1278,23 @@ that for Diva it is the *only* option, not the strict setting of two.
   path is in-process reuse, which Diva cannot use, so it would be forced onto the slow path.
 - Nothing changes for training or evaluation of the other families: they consume a built corpus
   and never render (D-SELFDESC), and the Evaluator already re-renders fresh-process (D-EVAL).
-- **`ParallelFreshProcessRenderBackend.render_batch` does not currently deliver a fresh process
-  per render.** It calls `Pool.map` with the default chunksize, which batches several payloads
-  into one worker *task*; `maxtasksperchild=1` retires a worker after one task, not after one
-  render, so every render after the first in a chunk is an in-process render. Found while
-  measuring D-DIVA-SUBSET: with 4 workers and 53 payloads, renders diverged from their chunk's
-  first render by ~8 dB LSD, exactly Diva's in-process figure above, and the pattern followed the
-  payload's position modulo the worker count. Passing `chunksize=1` restored bit-identity on a
-  control patch rendered first, mid-run and last. This also contradicts the class docstring's
-  claim that "each patch still gets its own single-use process". The existing Dexed test
-  (`test_parallel_matches_serial_with_real_dexed`) does not catch it because 2 payloads across
-  2 workers already chunk to 1. It matters for the SynthRL reward path, which renders a whole
-  batch per step. **Not fixed here** — it belongs with the synth-registry work on
-  `dataset/render_backends.py`, and it is a Dexed bug as much as a Diva one.
+- **`ParallelFreshProcessRenderBackend.render_batch` was not delivering a fresh process per
+  render** (found while measuring D-DIVA-SUBSET; **fixed 2026-08-28**). It called `Pool.map`
+  with the default chunksize, which packs `ceil(n / (4 * workers))` payloads into one worker
+  *task*; `maxtasksperchild=1` retires a worker after one task, not after one render, so every
+  render past the first in a chunk was an in-process render. It bit only above `4 * num_workers`
+  payloads, which is why no existing test caught it: the isolation test used 4 payloads on 2
+  workers and `test_parallel_matches_serial_with_real_dexed` uses 2 on 2, both below the
+  threshold and therefore chunked to 1 anyway. Symptom, with 4 workers and 53 payloads: renders
+  diverged from their chunk's first render by ~8 dB LSD, exactly Diva's in-process figure above,
+  following the payload's position modulo the worker count. The fix is `chunksize=1`, guarded by
+  `test_isolation_survives_a_batch_longer_than_the_chunking_threshold` (9 payloads on 2 workers,
+  which yields 5 distinct processes instead of 9 without it). This was a Dexed bug as much as a
+  Diva one, and it mattered for the SynthRL reward path, which renders a whole batch per step —
+  though no completed run is affected, because `cluster/training_configs/synthrl_i_config.yaml`
+  selects `render_isolation: reuse`, a different backend. `ParallelInProcessRenderBackend` is
+  deliberately left chunked: it reuses one wrapper per worker by design, so chunking costs it
+  nothing.
 
 **Also observed, cosmetic**: Diva writes a machine report, a revision banner and a long run of
 `makeAutomatable` warnings to **stdout** as well as stderr on every instantiation, and it writes

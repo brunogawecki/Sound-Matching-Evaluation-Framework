@@ -94,6 +94,20 @@ def test_every_render_runs_in_its_own_fresh_process():
     assert len(pids) == len(patches)
 
 
+def test_isolation_survives_a_batch_longer_than_the_chunking_threshold():
+    # The case above cannot catch Pool.map's default chunking: it packs
+    # ceil(n / (4 * workers)) payloads per task, which is 1 until the batch exceeds
+    # 4 * num_workers. maxtasksperchild retires a worker per task, not per render, so
+    # without chunksize=1 the renders past that threshold share a process. The RL stage
+    # renders batches of tens of patches, so it sits well past it.
+    patches = [{"AMP": 0.5} for _ in range(9)]
+    with ParallelFreshProcessRenderBackend(
+        SETTINGS, num_workers=2, render_worker=pid_render
+    ) as backend:
+        pids = {int(rendered[0]) for rendered in backend.render_batch(patches)}
+    assert len(pids) == len(patches)
+
+
 def test_defaults_to_cpu_count_workers():
     with ParallelFreshProcessRenderBackend(SETTINGS, render_worker=fake_render) as backend:
         assert backend.num_workers == (os.cpu_count() or 1)

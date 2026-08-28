@@ -164,7 +164,8 @@ class ParallelFreshProcessRenderBackend:
     a pool of ``num_workers`` instead of one. The SynthRL RL stage renders a whole batch of
     predicted patches per training step; :meth:`render_batch` fans that batch across the pool.
     Each patch still gets its own single-use process, so parallelism changes only throughput,
-    not the per-render result.
+    not the per-render result -- but see :meth:`render_batch`, which has to defeat ``Pool.map``'s
+    default chunking to keep that true.
 
     ``render_worker`` is the picklable render function (defaults to the real Dexed render);
     tests inject a VST-free stand-in. Serial ``render`` is kept for interface parity with
@@ -195,9 +196,15 @@ class ParallelFreshProcessRenderBackend:
         return self._pool.apply(self._render_worker, (self._payload(params),))
 
     def render_batch(self, params_batch: List[Dict[str, float]]) -> List[np.ndarray]:
-        """Render a list of patches in parallel, preserving input order."""
+        """Render a list of patches in parallel, preserving input order.
+
+        ``chunksize=1`` is load-bearing, not a tuning knob. ``maxtasksperchild`` retires a
+        worker after one *task*, and ``Pool.map`` packs ``ceil(n / (4 * workers))`` payloads
+        into a task by default, so any batch longer than ``4 * num_workers`` would put several
+        renders in one process and silently lose the isolation this class exists for.
+        """
         payloads = [self._payload(params) for params in params_batch]
-        return self._pool.map(self._render_worker, payloads)
+        return self._pool.map(self._render_worker, payloads, chunksize=1)
 
     def close(self) -> None:
         self._pool.terminate()
