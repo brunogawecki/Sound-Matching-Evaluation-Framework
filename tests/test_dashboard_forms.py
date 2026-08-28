@@ -46,6 +46,7 @@ def test_synthetic_command_is_exact():
     assert argv == [
         sys.executable, "scripts/build_dataset.py", "synthetic",
         "--count", "64", "--seed", "7", "--run-name", "run_A_train", "--synth", "dexed",
+        "--workers", "1",
     ]
 
 

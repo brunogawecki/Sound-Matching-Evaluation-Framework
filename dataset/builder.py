@@ -12,7 +12,7 @@ import json
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -114,13 +114,12 @@ class DatasetBuilder:
         total = source.describe().get("count")
         rows: List[Dict[str, object]] = []
         try:
-            presets = tqdm(
-                source.iter_presets(), total=total, desc="Rendering",
+            rendered = tqdm(
+                self._iter_rendered(source), total=total, desc="Rendering",
                 unit="preset", disable=not show_progress,
             )
-            for index, preset in enumerate(presets):
+            for index, (kept_preset, audio, loudness) in enumerate(rendered):
                 sample_id = f"sample_{index:06d}"
-                kept_preset, audio, loudness = self._render_with_redraw(source, preset)
                 relative_path = f"audio/{sample_id}.wav"
                 wavfile.write(str(run_dir / relative_path), self._synth.sample_rate, audio.astype(np.float32))
                 rows.append(self._build_metadata_row(sample_id, relative_path, kept_preset, audio, loudness))
@@ -142,21 +141,73 @@ class DatasetBuilder:
             raise KeyError(f"Preset carries non-subset parameters: {sorted(extra)}")
         return {**self._defaults, **preset.params}
 
+    def _iter_rendered(
+        self, source: PresetSource
+    ) -> Iterator[Tuple[PresetRecord, np.ndarray, float]]:
+        """Yield ``(preset, audio, loudness)`` in source order.
+
+        A backend with a ``render_batch`` fans a chunk of presets across its workers; one
+        without renders them one at a time. Either way the results come back in source
+        order, so sample ids and metadata rows are unaffected by the choice.
+        """
+        batch_size = self._render_batch_size()
+        for batch in self._batched(source.iter_presets(), batch_size):
+            if batch_size == 1:
+                yield self._render_with_redraw(source, batch[0])
+                continue
+            waveforms = self._backend.render_batch([self._full_params(p) for p in batch])
+            for preset, audio in zip(batch, waveforms):
+                # The batch render counts as the first attempt, so it is handed to the
+                # redraw path rather than thrown away and repeated.
+                yield self._render_with_redraw(
+                    source, preset, audio, self._integrated_loudness(audio)
+                )
+
+    def _render_batch_size(self) -> int:
+        """How many presets to hand the backend at once: 1 unless it renders batches."""
+        if not hasattr(self._backend, "render_batch"):
+            return 1
+        # Enough to keep every worker fed without buffering a large pile of audio.
+        return max(1, 4 * int(getattr(self._backend, "num_workers", 1)))
+
+    @staticmethod
+    def _batched(
+        presets: Iterator[PresetRecord], size: int
+    ) -> Iterator[List[PresetRecord]]:
+        batch: List[PresetRecord] = []
+        for preset in presets:
+            batch.append(preset)
+            if len(batch) == size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
     def _render_with_redraw(
-        self, source: PresetSource, preset: PresetRecord
+        self,
+        source: PresetSource,
+        preset: PresetRecord,
+        audio: Optional[np.ndarray] = None,
+        loudness: Optional[float] = None,
     ) -> Tuple[PresetRecord, np.ndarray, float]:
-        """Render ``preset``, redrawing near-silent results until audible or capped."""
+        """Render ``preset``, redrawing near-silent results until audible or capped.
+
+        ``audio`` / ``loudness`` let the batch path pass in the render it already has, so
+        the first attempt is judged rather than repeated.
+        """
         attempt = 0
         current = preset
         while True:
-            audio = self._backend.render(self._full_params(current))
-            loudness = self._integrated_loudness(audio)
+            if audio is None:
+                audio = self._backend.render(self._full_params(current))
+                loudness = self._integrated_loudness(audio)
             if loudness >= self._min_loudness_lufs or attempt >= self._max_redraw_attempts:
                 return current, audio, loudness
             replacement = source.resample(current, attempt + 1)
             if replacement is None:
                 return current, audio, loudness
             current, attempt = replacement, attempt + 1
+            audio = None
 
     def _integrated_loudness(self, audio: np.ndarray) -> float:
         """Integrated loudness in LUFS (-inf for silence); gates out the release tail."""

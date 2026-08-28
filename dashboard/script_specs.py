@@ -69,6 +69,9 @@ _SPLIT_ARGS = (
 )
 _FRESH = ArgSpec("fresh_process", "--fresh-process", "bool", False,
                  help="Force every partition into a clean spawned process (slow, leak-free; D-REPRO).")
+_WORKERS = ArgSpec("workers", "--workers", "int", 1,
+                   help="Render this many presets in parallel. Fresh-process partitions only; "
+                        "each patch still gets its own process, so only throughput changes.")
 _RUN_NAME_OPT = ArgSpec("run_name", "--run-name", "str", "",
                         help="Output subdirectory name. Leave blank for the script default.")
 
@@ -86,6 +89,7 @@ BUILD_SYNTHETIC = ScriptSpec(
         ArgSpec("run_name", "--run-name", "str", "synthetic_smoke", help="Output subdirectory name."),
         _SYNTH,
         _FRESH,
+        _WORKERS,
     ),
 )
 
@@ -103,6 +107,7 @@ BUILD_HUMAN = ScriptSpec(
         *_SPLIT_ARGS,
         _RUN_NAME_OPT,
         _FRESH,
+        _WORKERS,
     ),
 )
 
@@ -128,6 +133,7 @@ BUILD_HYBRID = ScriptSpec(
         *_SPLIT_ARGS,
         _RUN_NAME_OPT,
         _FRESH,
+        _WORKERS,
     ),
 )
 

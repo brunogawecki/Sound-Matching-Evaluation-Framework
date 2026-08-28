@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from typing import Dict, Iterator, Optional
+from typing import Dict, Iterator, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -288,3 +288,94 @@ def test_parameter_space_override_rejects_a_name_the_synth_does_not_expose(tmp_p
         DatasetBuilder(
             FakeSynth(make_space()), render_settings=small_settings(), parameter_space=stray
         )
+
+
+# -- batched rendering (scripts/build_dataset.py --workers) ----------------------
+
+class _BatchingBackend:
+    """A backend that renders batches, like ParallelFreshProcessRenderBackend.
+
+    Records the batch sizes it was handed so the tests can tell batched from serial.
+    """
+
+    process_mode = "fresh"
+
+    def __init__(self, synth, num_workers: int):
+        self._synth = synth
+        self.num_workers = num_workers
+        self.batch_sizes: List[int] = []
+
+    def render(self, params) -> np.ndarray:
+        self._synth.set_parameters(params)
+        return self._synth.render_audio(60, 100, small_settings().duration_sec)
+
+    def render_batch(self, params_batch) -> List[np.ndarray]:
+        self.batch_sizes.append(len(params_batch))
+        return [self.render(params) for params in params_batch]
+
+    def close(self) -> None:
+        pass
+
+
+def test_batched_backend_produces_the_same_corpus_as_a_serial_one(tmp_path):
+    # --workers must change throughput only: same audio, same order, same metadata.
+    source = SyntheticPresetSource(make_space(), count=7, seed=3)
+    serial = build(tmp_path, source, run_name="serial")
+    synth = FakeSynth(make_space())
+    batched = DatasetBuilder(
+        synth, render_settings=small_settings(),
+        render_backend=_BatchingBackend(synth, num_workers=2),
+    ).build(SyntheticPresetSource(make_space(), count=7, seed=3),
+            run_name="batched", output_root=tmp_path)
+
+    assert serial["num_samples"] == batched["num_samples"] == 7
+    serial_rows = pd.read_csv(tmp_path / "serial" / "metadata.csv")
+    batched_rows = pd.read_csv(tmp_path / "batched" / "metadata.csv")
+    assert serial_rows.equals(batched_rows)
+    for sample_id in serial_rows["sample_id"]:
+        name = f"audio/{sample_id}.wav"
+        assert (tmp_path / "serial" / name).read_bytes() == (tmp_path / "batched" / name).read_bytes()
+
+
+def test_batch_size_follows_the_worker_count(tmp_path):
+    synth = FakeSynth(make_space())
+    backend = _BatchingBackend(synth, num_workers=2)
+    DatasetBuilder(
+        synth, render_settings=small_settings(), render_backend=backend
+    ).build(SyntheticPresetSource(make_space(), count=10, seed=0),
+            run_name="run", output_root=tmp_path)
+    # 4 * num_workers per batch, and the tail batch carries the remainder.
+    assert backend.batch_sizes == [8, 2]
+
+
+def test_a_backend_without_render_batch_stays_serial(tmp_path):
+    # The default in-process backend has no render_batch, so nothing batches.
+    synth = FakeSynth(make_space())
+    builder = DatasetBuilder(synth, render_settings=small_settings())
+    assert builder._render_batch_size() == 1
+
+
+def test_near_silent_redraw_still_works_inside_a_batch(tmp_path):
+    # The batch render counts as attempt 0; a generative source must still get its redraw.
+    class SilentThenLoud(PresetSource):
+        def iter_presets(self) -> Iterator[PresetRecord]:
+            for slot in range(4):
+                yield PresetRecord(params={"AMP": 0.0, "CAT": 0.0},
+                                   method=METHOD_SYNTHETIC, partition="train", slot=slot)
+
+        def resample(self, record, attempt) -> Optional[PresetRecord]:
+            return PresetRecord(params={"AMP": 0.9, "CAT": 0.0}, method=METHOD_SYNTHETIC,
+                                partition="train", slot=record.slot)
+
+        def describe(self):
+            return {"method": "silent-then-loud"}
+
+    synth = FakeSynth(make_space())
+    run_summary = DatasetBuilder(
+        synth, render_settings=small_settings(),
+        render_backend=_BatchingBackend(synth, num_workers=2),
+    ).build(SilentThenLoud(), run_name="redrawn", output_root=tmp_path)
+
+    assert run_summary["near_silent_count"] == 0  # every silent draw was replaced
+    rows = pd.read_csv(tmp_path / "redrawn" / "metadata.csv")
+    assert (rows["AMP"] == 0.9).all()
