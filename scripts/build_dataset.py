@@ -26,14 +26,20 @@ separate runs). Empty partitions are skipped::
 
     python scripts/build_dataset.py human --cartridges presets/
     python scripts/build_dataset.py human --synth diva --limit 500
+    python scripts/build_dataset.py human --synth diva --preset-format npz
 
     --presets          where the presets are. dexed: .syx files, a folder
                        (recurses for *.syx), a glob, or explicit paths, several
-                       at once [REQUIRED]. diva: the one collection, a
-                       diva_raw.zip or an extracted directory
-                       [default: config.DIVA_RAW_PATH].
+                       at once [REQUIRED]. diva: the one collection -- a
+                       directory of .h2p files [default: config.DIVA_PRESETS_PATH]
+                       or, with --preset-format npz, a diva_raw.zip or an
+                       extracted directory [default: config.DIVA_RAW_PATH].
                        Spelled --cartridges too, for the Dexed commands that
                        predate the flag being synth-neutral
+    --preset-format    diva only: "h2p" (default) is u-he's own installed
+                       library (factory + THIRD PARTY, realizes the full
+                       subset); "npz" is the older Flow Synthesizer diva_raw
+                       collection (realizes only 58 of 237 parameters)
     --limit            diva only: cap on raw presets read      [default: all]
     --partition        render only this half, "train" or "test"
                                                              [default: both]
@@ -87,8 +93,9 @@ Corpus-variance rule (D-DIVA-SUBSET): a subset parameter that every loaded prese
 holds at the same value leaves the estimated set and is locked at the presets' own
 value instead of the plugin's init patch, so the corpus serializes a narrower
 parameter space than the synth's. This is a no-op on preset collections that vary
-everything (the Dexed case) and drops 179 of 237 parameters on the Flow Synthesizer
-Diva collection. ``--keep-constant-params`` opts out.
+everything (the Dexed case, and Diva's default ``--preset-format h2p``) and drops
+179 of 237 parameters on the older ``--preset-format npz`` (Flow Synthesizer)
+collection. ``--keep-constant-params`` opts out.
 """
 import argparse
 import glob
@@ -119,10 +126,15 @@ from dataset.preset_sources import (
 )
 from dataset.dexed_preset_loader import DexedPresetLoader
 from dataset.diva_preset_loader import DivaPresetLoader
+from dataset.diva_h2p_preset_loader import DivaH2pPresetLoader
 from dataset.preset_loader_common import PresetSplit, restrict_to_realized
 import config
 
 SYNTH_CHOICES = ["dexed", "diva"]
+# diva: h2p is the diverse, hand-made source (D-DIVA-START amendment, 2026-08-30); npz is the
+# older Flow Synthesizer diva_raw collection, which realizes only 58 of the 237 subset
+# parameters and stays available for comparison.
+DIVA_PRESET_FORMATS = ["h2p", "npz"]
 
 # Wrappers this script built, held so they are not destroyed while the subcommand returns.
 # Diva reports from its destructor, and main() silences output only once the subcommand is
@@ -173,28 +185,44 @@ def _resolve_cartridges(patterns: list) -> list:
 def _load_split(synth, args: argparse.Namespace) -> PresetSplit:
     """Load, deduplicate and split the human presets for whichever synth is being built.
 
-    Only the reading differs per synth: Dexed takes any number of ``.syx`` cartridges,
-    Diva takes the one Flow Synthesizer collection (``diva_raw.zip`` or an extracted
-    directory). One split feeds both partitions, so train and test are disjoint by
-    construction (no seed to re-match across separate runs).
+    Only the reading differs per synth: Dexed takes any number of ``.syx`` cartridges, Diva
+    takes one preset collection selected by ``--preset-format`` (``h2p``, the default: u-he's
+    own installed library, factory + THIRD PARTY; ``npz``: the older Flow Synthesizer
+    ``diva_raw`` collection). One split feeds both partitions, so train and test are disjoint
+    by construction (no seed to re-match across separate runs).
     """
     space = synth.parameter_space
     if args.synth == "diva":
-        source_path = os.path.expanduser(args.presets[0] if args.presets else config.DIVA_RAW_PATH)
         if len(args.presets or []) > 1:
-            print("--presets takes a single path for diva (the corpus zip or directory).")
+            print("--presets takes a single path for diva (the preset directory or archive).")
             sys.exit(1)
+        preset_format = args.preset_format
+        if preset_format == "h2p":
+            source_path = os.path.expanduser(args.presets[0] if args.presets else config.DIVA_PRESETS_PATH)
+            loader = DivaH2pPresetLoader(
+                space, test_fraction=args.test_fraction, split_seed=args.split_seed,
+                dedup_threshold=args.dedup_threshold,
+            )
+            missing_message = (
+                f"Diva preset library not found at: {source_path}\n"
+                "Point --presets or DIVA_PRESETS_PATH at u-he's installed .h2p library "
+                "(see dataset/diva_h2p_preset_loader.py), or pass --preset-format npz."
+            )
+        else:
+            source_path = os.path.expanduser(args.presets[0] if args.presets else config.DIVA_RAW_PATH)
+            loader = DivaPresetLoader(
+                space, test_fraction=args.test_fraction, split_seed=args.split_seed,
+                dedup_threshold=args.dedup_threshold,
+            )
+            missing_message = (
+                f"Diva preset collection not found at: {source_path}\n"
+                "Download diva_raw.zip (see dataset/diva_preset_loader.py) or set DIVA_RAW_PATH."
+            )
         if not os.path.exists(source_path):
-            print(f"Diva preset collection not found at: {source_path}")
-            print("Download diva_raw.zip (see dataset/diva_preset_loader.py) or set DIVA_RAW_PATH.")
+            print(missing_message)
             sys.exit(1)
-        print(f"--- Reading Diva presets from {source_path} ---")
-        return DivaPresetLoader(
-            space,
-            test_fraction=args.test_fraction,
-            split_seed=args.split_seed,
-            dedup_threshold=args.dedup_threshold,
-        ).load(source_path, limit=args.limit, show_progress=True)
+        print(f"--- Reading Diva presets ({preset_format}) from {source_path} ---")
+        return loader.load(source_path, limit=args.limit, show_progress=True)
 
     if not args.presets:
         print("--cartridges is required for dexed.")
@@ -378,8 +406,15 @@ def _add_preset_source_flags(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument(
         "--presets", "--cartridges", dest="presets", nargs="+", default=None,
         help="dexed: .syx paths, folders or globs (required). "
-        "diva: the one preset collection, a diva_raw.zip or an extracted directory "
-        "(defaults to config.DIVA_RAW_PATH)",
+        "diva: the one preset collection -- a directory of .h2p files (--preset-format h2p, "
+        "the default; defaults to config.DIVA_PRESETS_PATH) or a diva_raw.zip / extracted "
+        "directory (--preset-format npz; defaults to config.DIVA_RAW_PATH)",
+    )
+    subparser.add_argument(
+        "--preset-format", choices=DIVA_PRESET_FORMATS, default="h2p",
+        help="diva only: h2p (default) is u-he's own installed library, factory + THIRD "
+        "PARTY, realizing the full D-DIVA-SUBSET space; npz is the older Flow Synthesizer "
+        "diva_raw collection, which realizes only 58 of 237 subset parameters",
     )
     subparser.add_argument("--limit", type=int, default=None,
                            help="diva: cap on raw presets read before dedup")

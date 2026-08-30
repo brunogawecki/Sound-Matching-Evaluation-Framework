@@ -23,6 +23,9 @@ DIVA_RAW_PATH = os.getenv(
     "DIVA_RAW_PATH",
     str(Path(__file__).parent.absolute() / "paper_repos" / "flow_synthesizer" / "diva_raw.zip"),
 )
+# u-he's own installed .h2p preset library (factory + THIRD PARTY): a diverse human corpus,
+# unlike diva_raw's narrow synthetic generation. See dataset/diva_h2p_preset_loader.py.
+DIVA_PRESETS_PATH = os.getenv("DIVA_PRESETS_PATH", "/Library/Audio/Presets/u-he/Diva")
 
 # Audio Rendering Defaults
 SAMPLE_RATE = int(os.getenv("DEFAULT_SAMPLE_RATE", 22050))

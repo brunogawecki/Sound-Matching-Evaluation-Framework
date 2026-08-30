@@ -4,7 +4,15 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-08-29 (D-DIVA-RENDER amended — Diva's ~126 ms parameter smoothing was contaminating the opening of every render; warm-up render added, Diva corpora rebuilt, the recorded in-process divergence corrected, Dexed measured clean. Earlier: 2026-08-25, D-DIVA-SUBSET locked — 237 of Diva's 281 parameters estimated; D-DIVA-RENDER locked — Diva reproduces fresh-process only; D-DIVA-START locked; D-NAMING amended for module-qualified names).
+Last updated: 2026-08-30 (D-DIVA-START amended — the `.h2p` parser is back in scope: `diva_raw`
+only realizes 58 of Diva's 237 subset parameters, too narrow to compare against Dexed's planned
+diverse human corpus, so the 1432 factory + third-party `.h2p` presets in Diva's local install
+become a second human-preset source. Earlier: 2026-08-29, D-DIVA-RENDER amended — Diva's ~126 ms
+parameter smoothing was contaminating the opening of every render; warm-up render added, Diva
+corpora rebuilt, the recorded in-process divergence corrected, Dexed measured clean. Earlier:
+2026-08-25, D-DIVA-SUBSET locked — 237 of Diva's 281 parameters estimated; D-DIVA-RENDER locked —
+Diva reproduces fresh-process only; D-DIVA-START locked; D-NAMING amended for module-qualified
+names).
 
 ---
 
@@ -1228,6 +1236,59 @@ This **supersedes** the earlier plan to parse Diva's 486 factory `.h2p` presets 
 opt-in. Two consequences: **no `.h2p` parser is built** (the planned `synth/diva/patch.py` is
 dropped), and the third-party-preset licensing question does not arise. The `.h2p` path stays
 available as a fallback if the dataset turns out to be unusable.
+
+**Amendment (2026-08-30): the `.h2p` path is reinstated, for comparability rather than as a
+fallback.** `diva_raw` is not the diverse human corpus its name suggests: Flow Synthesizer
+generated it by varying only 64 continuous parameters from one fixed base patch, so it realizes
+just 58 of Diva's 237 subset parameters (D-DIVA-SUBSET's corpus-variance rule narrows it to
+that). The roadmap's leading plan for Dexed is "train human → test human" on the genuinely
+diverse ~30k-voice preset-gen-vae SQLite collection (D4); pairing that against `diva_raw` would
+compare Dexed's real preset population to a narrow synthetic one wearing a "human" label, which
+confounds the synth-type comparison this project is built to isolate.
+
+Diva's local install's own preset library is the fix: **561 factory presets** (also correcting
+the count above — 486 undercounts the 8 category folders and misses 75 more sitting at the
+library's top level) plus **871 `THIRD PARTY`** ones, **1432 `.h2p` files total**. The user's call:
+use all 1432, factory and third-party alike, opt-in on the licensing question the original plan
+flagged. A `.h2p` file's keys are Diva's internal short codes (`Atk`, `KeyFlw`, `DMS1`, ...) in
+`#cm=<Module>` sections, not the module-qualified names `synth/diva/parameters.py` uses, and about
+a third of the discrete ones store an option index while the rest store the displayed value —
+so `synth/diva/patch.py` is back in scope: a committed `param_map.py` deriving the key
+correspondence per module (value-compatibility as a hard filter — which values a key's observed
+range can represent against the plugin's own display grid, `get_parameter_text` swept per
+parameter — name similarity to rank the survivors, module-internal order as a weak tie-break) and
+an `.h2p` loader mirroring `dataset/diva_preset_loader.py`'s shape, verified by round-tripping the
+map through `get_parameter_text` over all 1432 presets. `diva_raw` is not dropped — it stays
+available as a second, narrower human-preset source alongside the `.h2p` one.
+
+**Landed (2026-08-30).** `synth/diva/h2p_param_map.py` (derived by `scripts/derive_diva_h2p_map.py`,
+committed static data like `parameters.py`), `synth/diva/patch.py` (parse + decode),
+`dataset/diva_h2p_preset_loader.py` (mirrors `diva_preset_loader.py`). `scripts/build_dataset.py`
+gets `--preset-format {h2p,npz}` on `human`/`hybrid`, **defaulting to `h2p`** — every existing
+`human --synth diva` command without the flag now builds from the new source, not `diva_raw`.
+
+263 of 281 parameters got a key (all 237 of the subset); the 18 that didn't are `OPT` (whole
+module, 15), `Scope1` (2) and `PCore.LED Colour` — none contributes a subset parameter, and OPT's
+43 keys against 15 real parameters are mostly internal housekeeping with no synthesis meaning, so
+guessing at them was deliberately skipped rather than risked. Verified by re-parsing all 1432
+presets through the derived map and applying every decoded value back to the live plugin:
+**0 mismatches** against `get_parameter_text` on the 266,352 checks that have a display-text
+signal to check against (`linear`/`grid`/`label` decodings), and all 110,264 `index`-kind
+decodings (no such signal exists for these by construction — the plugin's display is a label the
+`.h2p` value can't reach) landed in bounds. Confirms the coverage claim directly: a 300-preset
+`h2p` build realizes 226 of 237 subset parameters (95%) against `diva_raw`'s fixed 58.
+
+One category of error survives every check above: a swap between two parameters with identical
+value ranges and similar names round-trips perfectly and looks bounds-correct, so it would pass
+silently. Per the user's decision, the map was not to be treated as trusted for a full corpus
+build until Bruno A/B'd a handful of named presets — headless render against the same preset
+loaded in Diva's own GUI — by ear. **Done, 2026-08-30: passed.** Four presets chosen to stress
+the parameters no automated check can verify (`index`-kind: no display-text signal exists to
+check against) -- `5 PERCUSSIVE/HS Davogs Lilt.h2p` (arpeggiator on), `1 BASS/HS Black Fuzz.h2p`
+(non-default filter model and LFO waveform), `1 BASS/HS Bass Nine.h2p` (mono mode), and
+`THIRD PARTY/Basari/BAS Desert Wind.h2p` — rendered headlessly and compared by ear against the
+same presets loaded in Diva's GUI. Indistinguishable. The map is now trusted for a full corpus
+build.
 
 **Scope of the Diva port.** Wrapper (`synth/diva/synth.py`), subset (`synth/diva/subset.py`,
 D-DIVA-SUBSET), preset loader, and a `--synth {dexed,diva}` flag on `scripts/build_dataset.py`.
