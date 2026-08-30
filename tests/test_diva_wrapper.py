@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from synth.diva import DivaWrapper
+from synth.diva import synth as diva_synth
 from synth.diva.parameters import DIVA_PARAMETER_NAMES
 
 PLUGIN_PATH = os.path.expanduser(config.DIVA_PATH)
@@ -231,6 +232,49 @@ def test_note_duration_releases_before_render_end():
 
     assert rms(released[-quarter:]) < 0.25 * rms(held[-quarter:])   # tail decayed away
     assert rms(released[:quarter]) == pytest.approx(rms(held[:quarter]), rel=0.05)
+
+
+# A patch with every oscillator off and the VCA closed. Nothing in it can make a sound, so
+# anything in its render arrived from somewhere else.
+SILENT_PATCH_OVERRIDES = {
+    "OSC.Triangle1On": 0.0, "OSC.Sine2On": 0.0, "OSC.Saw1On": 0.0, "OSC.Pwm1On": 0.0,
+    "OSC.Triangle2On": 0.0, "OSC.Saw2On": 0.0, "OSC.Pulse2On": 0.0, "OSC.PWM2On": 0.0,
+    "OSC.Noise1On": 0.0, "OSC.Volume1": 0.0, "OSC.Volume2": 0.0, "OSC.Volume3": 0.0,
+    "OSC.NoiseVol": 0.0, "VCA1.Volume": 0.0,
+}
+
+
+def test_render_does_not_carry_the_previous_patch():
+    """Diva smooths parameter changes over ~126 ms, so a note started at sample 0 opens on
+    whatever the plugin held before -- the init patch on a newly built wrapper, which is what
+    every fresh-process corpus render is. The warm-up render in ``render_audio`` absorbs it.
+    Without the warm-up this patch peaks at 0.151 in its first 50 ms (measured 2026-08-29);
+    see D-DIVA-RENDER in docs/DECISIONS.md."""
+    synth = make_wrapper()
+    patch = dict(synth.get_parameter_defaults())
+    patch.update(SILENT_PATCH_OVERRIDES)
+    synth.set_parameters(patch)
+
+    audio = synth.render_audio(midi_note=60, velocity=100, duration_sec=4.0, note_duration_sec=3.0)
+    opening = audio[:int(0.05 * synth.sample_rate)]
+    assert np.max(np.abs(opening)) < 1e-3
+
+
+def test_render_issues_one_warm_up_render_before_the_scored_one(monkeypatch):
+    """Pins the shape of the render call sequence, which the audio assertion above cannot see."""
+    calls = []
+    real_render_note = None
+
+    def recording_render_note(midi_note, velocity, note_duration_sec, total_duration_sec):
+        calls.append((note_duration_sec, total_duration_sec))
+        return real_render_note(midi_note, velocity, note_duration_sec, total_duration_sec)
+
+    synth = make_wrapper()
+    real_render_note = synth._renderer.render_note
+    monkeypatch.setattr(synth._renderer, "render_note", recording_render_note)
+    synth.render_audio(midi_note=60, velocity=100, duration_sec=2.0, note_duration_sec=1.0)
+
+    assert calls == [(diva_synth._WARMUP_SEC, diva_synth._WARMUP_SEC), (1.0, 2.0)]
 
 
 @pytest.mark.xfail(

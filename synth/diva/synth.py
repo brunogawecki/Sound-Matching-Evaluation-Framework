@@ -24,6 +24,13 @@ _SUPPORTED_RENDERERS = frozenset({"dawdreamer"})
 # 'PCore.LED Colour' is the GUI's LED tint and is silent.
 _EXCLUDED_PARAMS = frozenset({"main.Output", "PCore.LED Colour"})
 
+# Diva smooths parameter changes over ~126 ms of audio. Without a throwaway render to absorb
+# that, the note starting at sample 0 opens on the previous patch -- the init patch in a fresh
+# process, which is every corpus render (D-DIVA-RENDER). Measured: a patch with every
+# oscillator off and the VCA closed peaks at 0.151 in its first 50 ms, correlating +0.994 with
+# the init patch's own opening; 0.20 s of warm-up takes that to exactly 0.0.
+_WARMUP_SEC = 0.3
+
 
 class DivaWrapper(BaseSynthesizer):
     """
@@ -197,6 +204,9 @@ class DivaWrapper(BaseSynthesizer):
         note_duration_sec = min(note_duration_sec, duration_sec)
 
         with suppressed_plugin_output():
+            # Discarded: it exists only to let the parameter smoothing settle.
+            if _WARMUP_SEC > 0.0:
+                self._renderer.render_note(midi_note, velocity, _WARMUP_SEC, _WARMUP_SEC)
             audio = self._renderer.render_note(
                 midi_note, velocity, note_duration_sec, duration_sec
             )

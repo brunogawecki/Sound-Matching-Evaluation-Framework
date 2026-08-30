@@ -4,7 +4,7 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-08-25 (D-DIVA-SUBSET locked — 237 of Diva's 281 parameters estimated; D-DIVA-RENDER locked — Diva reproduces fresh-process only; D-DIVA-START locked; D-NAMING amended for module-qualified names).
+Last updated: 2026-08-29 (D-DIVA-RENDER amended — Diva's ~126 ms parameter smoothing was contaminating the opening of every render; warm-up render added, Diva corpora rebuilt, the recorded in-process divergence corrected, Dexed measured clean. Earlier: 2026-08-25, D-DIVA-SUBSET locked — 237 of Diva's 281 parameters estimated; D-DIVA-RENDER locked — Diva reproduces fresh-process only; D-DIVA-START locked; D-NAMING amended for module-qualified names).
 
 ---
 
@@ -95,7 +95,9 @@ Empirical basis (deep investigation, Phase 1 session):
 
 - Dexed keeps hidden engine state that survives — and is not reset by — parameter
   re-application, `load_graph` (prepareToPlay), `load_state`, processor rebuild,
-  warm-up notes, or OSC/LFO KEY SYNC settings. Behavior is consistent with
+  warm-up notes, or OSC/LFO KEY SYNC settings. (Not to be confused with the warm-up render
+  D-DIVA-RENDER adds for Diva: that one absorbs Diva's ~126 ms parameter smoothing, a
+  different mechanism, and Dexed was measured clean of it.) Behavior is consistent with
   stale/uninitialized per-voice memory: two fresh instances match only when their
   allocation + render histories are identical (freeing an engine and creating a new
   one reuses dirty memory and diverges).
@@ -1285,6 +1287,68 @@ in-process Diva corpus would not merely be noisy, it would contain empty audio f
 are fine. The decision is unchanged and the case for it is stronger; only the "energy is stable
 while the waveform is not" reading is retired.
 
+**Amendment (2026-08-29): the table above is inflated by a render warm-up bug, now fixed.**
+
+Diva smooths parameter changes over ~126 ms of audio. `set_parameters` writes the values and the
+note starts at sample 0, so the opening of a render was a crossfade out of whatever the plugin held
+before — in a fresh process, Diva's init patch. Every corpus render is fresh-process, so every
+render was a "render 1" and **every sample in every Diva corpus carried it**, right on the attack.
+
+Evidence (2026-08-29, `scripts/measure_diva_warmup.py`, same hardware and settings as above):
+
+- A patch with every oscillator off *and* the VCA closed — nothing in it can make a sound — peaked
+  at **0.151** in its first 50 ms against 0.0035 after 0.5 s, and that opening correlates
+  **+0.9945** with the init patch's own opening.
+- A throwaway render in front of the scored one removes it: warm-up 0.00 s → 0.151,
+  0.05 s → 0.103, 0.10 s → 0.018, 0.20 s → 0.000, 0.30 s → 0.000.
+
+**Fixed**: `DivaWrapper.render_audio` issues one discarded `render_note` of `_WARMUP_SEC = 0.3` s
+before the scored render. This is now part of the Diva render contract — "position 0 of a fresh
+process" means position 0 *after* the warm-up. Bit-identity across processes survives it (3 patches,
+two independent processes each, matching sha256), so nothing else in this entry's contract changes.
+`tests/test_diva_wrapper.py::test_render_does_not_carry_the_previous_patch` is the regression test.
+
+**What this costs the 2026-08-25 table.** Its three rows compare render 1 — the contaminated one —
+against renders 2-4, so they conflate this bug with Diva's analog drift and overstate the drift.
+Re-measured over 8 uniform-sampled subset patches, 5 consecutive renders each (medians):
+
+| comparison | waveform, max abs diff / peak | log-spectral distance | RMS drift |
+|---|---|---|---|
+| render 2 vs 1 | 1.278 | 10.87 dB | 143% |
+| render 3 vs 2 | 1.177 | 8.00 dB | 138% |
+| render 4 vs 2 | 1.222 | 7.81 dB | 136% |
+| render 5 vs 2 | 1.167 | 8.05 dB | 135% |
+
+The drift-only rows sit ~2.9 dB below the contaminated one, and the size of that gap is
+patch-dependent (one of the eight measured 23.2 dB for 2-vs-1 against 8.1 dB for 3-vs-2).
+
+**The decision is unchanged and the case for it is undiminished.** This bug is *not* what
+D-DIVA-RENDER is about: **0 of the 8 patches** had any two renders past the first agree, at ~8 dB
+LSD. Diva still does not reproduce in-process, and fresh-process is still the only valid path. The
+2026-08-28 amendment above also stands on its own — its silent-in-process patches were renders past
+the first, which the warm-up bug does not touch.
+
+**Dexed does not have this bug** (measured 2026-08-29, same probe, `--synth dexed`). A patch with
+all six operator output levels at 0 renders **exactly 0.0** from sample 0, and unrelated patches'
+openings correlate +0.002 on average — no different from a mid-render window (+0.005). No Dexed
+corpus, checkpoint or result is affected, and `DexedWrapper` is deliberately left unchanged.
+
+**Consequence: the four existing Diva corpora were rebuilt** (2026-08-29): `diva_smoke_train`,
+`diva_smoke_test`, `diva_test_100`, `diva_serial_10`. Their `run_summary.json` differ from the
+originals only in `git_revision` and `near_silent_count`, and their `metadata.csv` only in the
+audio-derived columns (`rms`, `loudness_lufs`, `near_silent`) — same presets, same order, same
+parameter values, corrected audio. Two things the rebuild revealed:
+
+- **Near-silence was being masked.** `near_silent` counts rose 4→6 (of 30), 17→24 (of 100) and
+  0→1 (of 10), and one `diva_test_100` sample is now *digitally silent*: the leftover init patch
+  had been its only audible content.
+- **The bug was flattering every audio metric.** Re-evaluating `MeanParameterBaseline` on
+  `diva_smoke_test` left the parameter metrics bit-identical (the model and targets never changed)
+  but moved every audio metric 2.4-15.3% **worse** — LSD 0.880 → 0.914, MFCC MSE 3138 → 3617.
+  The contamination was a *shared* component of the target render and the prediction re-render, so
+  it inflated their apparent agreement. Any Diva number produced before 2026-08-29 is optimistic by
+  roughly that margin.
+
 **Fresh processes are bit-identical.** Three separate processes each constructing a `DivaWrapper`
 and rendering the same patch produced byte-identical audio (max abs diff exactly 0.0). So the
 render contract D-REPRO already mandates is sufficient for Diva as it stands; what changes is
@@ -1540,6 +1604,15 @@ required to be bit-identical all three times. That control matters: the first at
 measurements used `Pool.map` without `chunksize=1`, which batches several renders into one worker
 task and therefore into one process, and every parameter then appeared audible at ~8 dB LSD, which
 is simply Diva's in-process divergence. See the note under **D-DIVA-RENDER**.
+
+**Caveat added 2026-08-29**: every render behind these figures predates the warm-up fix, so its
+first ~126 ms carried the init patch (see the 2026-08-29 amendment under **D-DIVA-RENDER**). No
+conclusion here changes. The drops argued on *bit-identical audio at every setting* are unaffected,
+because the contamination is identical across the settings compared and cancels. The drops argued
+on whole-render LSD are over a 4.0 s render of which the contaminated window is 3%, and the figures
+are large (2.84-12.8 dB). The one place to re-measure before relying on it again is the
+`VCF1.KeyFollow = 1.0` versus `VCF1.Frequency` 0.55 → 0.54 match at 2.04 dB, which is the entry's
+narrowest margin.
 
 
 ---
