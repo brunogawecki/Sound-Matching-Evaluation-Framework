@@ -23,7 +23,7 @@ from tqdm import tqdm
 import config
 from synth.base_synth import BaseSynthesizer
 from synth.parameter_space import ParameterSpace
-from .render_backends import DEFAULT_SYNTH, InProcessRenderBackend, RenderSettings
+from .render_backends import DEFAULT_SYNTH, InProcessRenderBackend, RenderSettings, RenderTimeoutError
 from .preset_sources import PresetRecord, PresetSource
 
 
@@ -113,23 +113,38 @@ class DatasetBuilder:
 
         total = source.describe().get("count")
         rows: List[Dict[str, object]] = []
+        dropped = 0
         try:
             rendered = tqdm(
                 self._iter_rendered(source), total=total, desc="Rendering",
                 unit="preset", disable=not show_progress,
             )
-            for index, (kept_preset, audio, loudness) in enumerate(rendered):
-                sample_id = f"sample_{index:06d}"
+            for result in rendered:
+                if result is None:
+                    # Every attempt (the original render plus redraws) either timed out or
+                    # ran out of redraws while the source could no longer replace it -- see
+                    # _render_with_redraw. Dropped rather than written with placeholder audio.
+                    dropped += 1
+                    continue
+                kept_preset, audio, loudness = result
+                sample_id = f"sample_{len(rows):06d}"
                 relative_path = f"audio/{sample_id}.wav"
                 wavfile.write(str(run_dir / relative_path), self._synth.sample_rate, audio.astype(np.float32))
                 rows.append(self._build_metadata_row(sample_id, relative_path, kept_preset, audio, loudness))
         finally:
             self._backend.close()
 
+        if dropped:
+            print(
+                f"Warning: {dropped} preset(s) never produced audio within the render timeout "
+                f"after {self._max_redraw_attempts} redraw attempt(s) and were dropped; corpus "
+                f"has {len(rows)} sample(s) instead of the requested {total}."
+            )
+
         df_metadata = pd.DataFrame(rows, columns=_LEADING_COLUMNS + self._subset_names + _TRAILING_COLUMNS)
         df_metadata.to_csv(run_dir / "metadata.csv", index=False)
 
-        run_summary = self._build_run_summary(run_name, source, rows)
+        run_summary = self._build_run_summary(run_name, source, rows, dropped)
         with open(run_dir / "run_summary.json", "w") as run_summary_file:
             json.dump(run_summary, run_summary_file, indent=2)
         return run_summary
@@ -143,8 +158,9 @@ class DatasetBuilder:
 
     def _iter_rendered(
         self, source: PresetSource
-    ) -> Iterator[Tuple[PresetRecord, np.ndarray, float]]:
-        """Yield ``(preset, audio, loudness)`` in source order.
+    ) -> Iterator[Optional[Tuple[PresetRecord, np.ndarray, float]]]:
+        """Yield ``(preset, audio, loudness)`` in source order, or ``None`` for a preset that
+        never produced audio at all (see ``_render_with_redraw``); the caller drops those.
 
         A backend with a ``render_batch`` fans a chunk of presets across its workers; one
         without renders them one at a time. Either way the results come back in source
@@ -157,11 +173,17 @@ class DatasetBuilder:
                 continue
             waveforms = self._backend.render_batch([self._full_params(p) for p in batch])
             for preset, audio in zip(batch, waveforms):
-                # The batch render counts as the first attempt, so it is handed to the
-                # redraw path rather than thrown away and repeated.
-                yield self._render_with_redraw(
-                    source, preset, audio, self._integrated_loudness(audio)
-                )
+                if audio is None:
+                    # A timed-out slot (ParallelFreshProcessRenderBackend.render_batch's
+                    # convention for "this one was killed"), not a render that ran and
+                    # happened to be silent.
+                    yield self._render_with_redraw(source, preset, timed_out=True)
+                else:
+                    # The batch render counts as the first attempt, so it is handed to the
+                    # redraw path rather than thrown away and repeated.
+                    yield self._render_with_redraw(
+                        source, preset, audio, self._integrated_loudness(audio)
+                    )
 
     def _render_batch_size(self) -> int:
         """How many presets to hand the backend at once: 1 unless it renders batches."""
@@ -189,25 +211,42 @@ class DatasetBuilder:
         preset: PresetRecord,
         audio: Optional[np.ndarray] = None,
         loudness: Optional[float] = None,
-    ) -> Tuple[PresetRecord, np.ndarray, float]:
-        """Render ``preset``, redrawing near-silent results until audible or capped.
+        timed_out: bool = False,
+    ) -> Optional[Tuple[PresetRecord, np.ndarray, float]]:
+        """Render ``preset``, redrawing near-silent or timed-out results until one succeeds.
 
-        ``audio`` / ``loudness`` let the batch path pass in the render it already has, so
-        the first attempt is judged rather than repeated.
+        ``audio`` / ``loudness`` let the batch path pass in the render it already has, so the
+        first attempt is judged rather than repeated; pass ``timed_out=True`` instead when
+        that attempt was killed for exceeding the render timeout (see ``RenderTimeoutError``)
+        rather than merely quiet.
+
+        Returns ``None`` if every attempt (the original draw plus up to
+        ``max_redraw_attempts`` redraws) either timed out, or ran out of redraws while
+        ``source`` could no longer supply a replacement (e.g. a fixed human preset) --
+        the caller drops that slot rather than inventing placeholder audio for a preset
+        that never actually rendered. A near-silent-but-real render is still kept as-is,
+        exactly as before this method also had to handle timeouts.
         """
         attempt = 0
         current = preset
         while True:
-            if audio is None:
-                audio = self._backend.render(self._full_params(current))
+            if audio is None and not timed_out:
+                try:
+                    audio = self._backend.render(self._full_params(current))
+                except RenderTimeoutError:
+                    timed_out = True
+            if timed_out:
+                give_up = attempt >= self._max_redraw_attempts
+            else:
                 loudness = self._integrated_loudness(audio)
-            if loudness >= self._min_loudness_lufs or attempt >= self._max_redraw_attempts:
-                return current, audio, loudness
+                give_up = loudness >= self._min_loudness_lufs or attempt >= self._max_redraw_attempts
+            if give_up:
+                return None if timed_out else (current, audio, loudness)
             replacement = source.resample(current, attempt + 1)
             if replacement is None:
-                return current, audio, loudness
+                return None if timed_out else (current, audio, loudness)
             current, attempt = replacement, attempt + 1
-            audio = None
+            audio, timed_out = None, False
 
     def _integrated_loudness(self, audio: np.ndarray) -> float:
         """Integrated loudness in LUFS (-inf for silence); gates out the release tail."""
@@ -238,7 +277,7 @@ class DatasetBuilder:
         return row
 
     def _build_run_summary(
-        self, run_name: str, source: PresetSource, rows: List[Dict[str, object]]
+        self, run_name: str, source: PresetSource, rows: List[Dict[str, object]], dropped: int = 0
     ) -> Dict[str, object]:
         near_silent_count = sum(1 for row in rows if row["near_silent"])
         method_counts: Dict[str, int] = {}
@@ -248,6 +287,7 @@ class DatasetBuilder:
             "run_name": run_name,
             "num_samples": len(rows),
             "near_silent_count": near_silent_count,
+            "render_timeout_dropped_count": dropped,
             "method_counts": method_counts,
             "render_settings": asdict(self._settings),
             "render_process": getattr(self._backend, "process_mode", "in-process"),

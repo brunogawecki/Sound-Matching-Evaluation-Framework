@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import os
+import time
 from dataclasses import dataclass
+from multiprocessing import connection as mp_connection
 from typing import Callable, ContextManager, Dict, List, Optional, Tuple, Type
 
 import numpy as np
@@ -87,7 +89,7 @@ class _SynthSpec:
     plugin_path_config_attribute: str
     open_output_suppressor: Callable[[], ContextManager[None]]
     # Whether the plugin logs from its destructor, which happens at worker-process exit and
-    # so escapes the suppressor around construction and rendering. See _worker_silencing.
+    # so escapes the suppressor around construction and rendering. See _render_worker_entry.
     logs_at_teardown: bool = False
 
 
@@ -138,10 +140,10 @@ def render_patch_in_fresh_process(
     """Render one patch at position 0 of a brand-new wrapper.
 
     Top-level (picklable) so it can run inside a spawned worker. Each call constructs its own
-    wrapper and renders a single patch, so when the worker process itself is fresh (spawn +
-    ``maxtasksperchild=1``) the render happens on a clean OS heap -- the only context in which
-    Dexed's hidden per-voice state is reset, and the only context in which Diva reproduces at
-    all (D-REPRO / D-DIVA-RENDER). Returns mono float32 audio.
+    wrapper and renders a single patch, so when the caller runs this inside a freshly spawned,
+    single-use process (see ``_spawn_render``) the render happens on a clean OS heap -- the
+    only context in which Dexed's hidden per-voice state is reset, and the only context in
+    which Diva reproduces at all (D-REPRO / D-DIVA-RENDER). Returns mono float32 audio.
     """
     patch, settings, renderer, synth_name = payload
     spec = _synth_spec(synth_name)
@@ -157,39 +159,116 @@ def render_patch_in_fresh_process(
     return np.asarray(audio, dtype=np.float32)
 
 
-def _silence_worker_output(synth_name: str) -> None:
-    """Silence the worker's fds 1 and 2 for its whole life (pool initializer).
-
-    Top-level so it survives the spawn pickle. Uses the permanent redirect rather than
-    entering the suppressor context and leaving it open: an un-referenced context manager is
-    garbage-collected, its ``finally`` restores the descriptors, and the noise comes straight
-    back. The worker's whole life is one render under ``maxtasksperchild=1``, and the point
-    is to still be suppressing when the plugin's destructor runs at process exit. Pool
-    workers hand exceptions back to the parent by pickle rather than stderr, so nothing an
-    error needs is lost.
-    """
-    from synth.plugin_output import silence_plugin_output_from_now_on
-
-    silence_plugin_output_from_now_on()
-
-
-def _worker_silencing(synth_name: str) -> Dict[str, object]:
-    """Pool kwargs that keep a teardown-chatty plugin quiet for the worker's whole life.
-
-    The suppressor inside the render call covers construction and rendering, but Diva logs
-    ~15 lines from its destructor, which runs after that context has closed and lands in the
-    middle of the progress bar. Dexed does not log at teardown and its worker is left exactly
-    as it was on purpose: its fresh-process reproducibility has a measured, undiagnosed
-    sensitivity to what its worker does at startup (see ``synth/plugin_output.py``).
-    """
-    if not _synth_spec(synth_name).logs_at_teardown:
-        return {}
-    return {"initializer": _silence_worker_output, "initargs": (synth_name,)}
-
-
 # A picklable ``(patch, settings, renderer, synth_name) -> mono audio`` render worker.
 # Top-level so it survives the spawn pickle; the default is the real render above.
 RenderWorker = Callable[[Tuple[Dict[str, float], RenderSettings, str, str]], np.ndarray]
+
+# Generous relative to a real render (measured well under 1s): a patch that takes this long
+# is not slow, it is hung -- e.g. a parameter combination that drives the plugin's DSP into a
+# runaway loop (observed on Diva under heavy random/augmented sampling). See RenderTimeoutError.
+DEFAULT_RENDER_TIMEOUT_SEC = 30.0
+
+
+class RenderTimeoutError(Exception):
+    """The worker process did not return a result -- killed after hanging, or it crashed on
+    its own (observed on Diva: a native crash in the plugin's DSP for a specific pathological
+    parameter combination, distinct from a hang and just as unpredictable in advance).
+
+    Raised by :meth:`FreshProcessRenderBackend.render`; reported as a ``None`` slot by
+    :meth:`ParallelFreshProcessRenderBackend.render_batch` (a single bad item must not block
+    the rest of the batch the way an exception propagating out of ``Pool.map`` would -- and
+    must not abort the whole build either, unlike a real bug in our own code, which still
+    raises normally). :class:`~dataset.builder.DatasetBuilder` treats either case as a
+    redraw-worthy failure, same machinery as a near-silent render, and drops the preset if no
+    redraw is possible.
+    """
+
+
+def _render_worker_entry(
+    render_worker: RenderWorker,
+    payload: Tuple[Dict[str, float], RenderSettings, str, str],
+    conn: "mp_connection.Connection",
+) -> None:
+    """Run one render in this fresh process, reporting the outcome back over ``conn``.
+
+    Top-level (picklable) so it survives the spawn pickle. Silences a teardown-chatty plugin's
+    stdout/stderr for this process's whole life -- it is one render long by construction (a
+    brand-new process per call, never reused), so there is no pool-initializer step separate
+    from this to hang the silencing off of; Diva logs ~15 lines from its destructor, which
+    runs after the render call returns, so the redirect has to outlive this function, not
+    just wrap it (see ``synth/plugin_output.py``). Exceptions cross the process boundary by
+    pickling them onto ``conn`` rather than by traceback on stderr, same as a Pool worker.
+    """
+    synth_name = payload[3]
+    if _synth_spec(synth_name).logs_at_teardown:
+        from synth.plugin_output import silence_plugin_output_from_now_on
+
+        silence_plugin_output_from_now_on()
+    try:
+        audio = render_worker(payload)
+        conn.send(("ok", audio))
+    except BaseException as exc:  # noqa: BLE001 -- forward any failure to the parent process
+        conn.send(("error", exc))
+    finally:
+        conn.close()
+
+
+def _spawn_render(
+    context: "mp.context.SpawnContext",
+    render_worker: RenderWorker,
+    payload: Tuple[Dict[str, float], RenderSettings, str, str],
+) -> Tuple["mp.process.BaseProcess", "mp_connection.Connection"]:
+    """Start one render in a brand-new process; the caller collects it via ``_collect_render``."""
+    parent_conn, child_conn = context.Pipe(duplex=False)
+    process = context.Process(target=_render_worker_entry, args=(render_worker, payload, child_conn))
+    process.start()
+    child_conn.close()  # only the child writes; drop the parent's copy of that end
+    return process, parent_conn
+
+
+def _reap(process: "mp.process.BaseProcess") -> None:
+    """Join a process that should already be finishing, escalating to a hard kill if it
+    somehow isn't -- never leaves a process behind for the caller to forget about."""
+    process.join(5.0)
+    if process.is_alive():
+        process.kill()
+        process.join()
+
+
+def _collect_render(
+    process: "mp.process.BaseProcess", conn: "mp_connection.Connection", timeout_sec: float
+) -> np.ndarray:
+    """Wait for one spawned render to finish, killing it and raising on timeout or crash.
+
+    A hung render can sit deep enough in native plugin code that it never checks for
+    signals, so ``terminate()`` (SIGTERM) is given a short grace period before escalating to
+    ``kill()`` (SIGKILL) -- observed necessary in practice, not a hypothetical. A render that
+    crashes outright closes its end of ``conn`` without ever sending -- ``recv()`` raises
+    ``EOFError`` for that, also observed in practice, and is treated the same as a timeout
+    rather than let the raw ``EOFError`` escape as if it were a bug in this code.
+    """
+    if conn.poll(timeout_sec):
+        try:
+            status, value = conn.recv()
+        except EOFError:
+            conn.close()
+            _reap(process)
+            raise RenderTimeoutError(
+                "Render worker exited without producing a result -- most likely a native "
+                "crash in the plugin's DSP for this specific patch, not a timeout."
+            )
+        conn.close()
+        _reap(process)
+        if status == "ok":
+            return value
+        raise value
+    process.terminate()
+    _reap(process)
+    conn.close()
+    raise RenderTimeoutError(
+        f"Render did not finish within {timeout_sec:.0f}s and was killed; the patch likely "
+        "drives the plugin's DSP into a runaway loop."
+    )
 
 
 class InProcessRenderBackend:
@@ -228,11 +307,13 @@ class InProcessRenderBackend:
 class FreshProcessRenderBackend:
     """Render each patch at position 0 of its own spawned worker (leak-free; test/eval path).
 
-    Holds a persistent single-worker pool with the **spawn** start method and
-    ``maxtasksperchild=1``, so the worker is torn down and a clean interpreter spawned for
-    every render -- a genuinely fresh heap per patch (never **fork**, which inherits the
-    parent's dirty memory). Serial: one render at a time. Call :meth:`close` (or use as a
-    context manager) to tear the pool down.
+    Every call to :meth:`render` starts a brand-new **spawn** (never **fork**) process, so
+    each render lands on a genuinely clean OS heap. Serial: one render at a time, with no
+    persistent pool to tear down -- :meth:`close` and the context-manager form are kept for
+    interface parity, but there is nothing left running between renders to close.
+
+    A render that exceeds ``timeout_sec`` is killed and raises :class:`RenderTimeoutError`
+    rather than hanging forever -- see that class's docstring.
     """
 
     process_mode = "fresh"
@@ -242,24 +323,22 @@ class FreshProcessRenderBackend:
         settings: RenderSettings,
         renderer: str = "dawdreamer",
         synth_name: str = DEFAULT_SYNTH,
+        timeout_sec: float = DEFAULT_RENDER_TIMEOUT_SEC,
     ):
         self._settings = settings
         self._renderer = renderer
         self._synth_name = synth_name
+        self._timeout_sec = float(timeout_sec)
         _synth_spec(synth_name)  # fail here, not inside a spawned worker
-        self._pool = mp.get_context("spawn").Pool(
-            processes=1, maxtasksperchild=1, **_worker_silencing(synth_name)
-        )
+        self._context = mp.get_context("spawn")
 
     def render(self, params: Dict[str, float]) -> np.ndarray:
-        return self._pool.apply(
-            render_patch_in_fresh_process,
-            ((params, self._settings, self._renderer, self._synth_name),),
-        )
+        payload = (params, self._settings, self._renderer, self._synth_name)
+        process, conn = _spawn_render(self._context, render_patch_in_fresh_process, payload)
+        return _collect_render(process, conn, self._timeout_sec)
 
     def close(self) -> None:
-        self._pool.terminate()
-        self._pool.join()
+        pass
 
     def __enter__(self) -> "FreshProcessRenderBackend":
         return self
@@ -272,12 +351,13 @@ class ParallelFreshProcessRenderBackend:
     """The fresh-process backend widened to ``num_workers`` parallel workers (RL reward path).
 
     Identical isolation to :class:`FreshProcessRenderBackend` -- same **spawn** start method,
-    same ``maxtasksperchild=1`` so every render lands on a clean OS heap (D-REPRO) -- but with
-    a pool of ``num_workers`` instead of one. The SynthRL RL stage renders a whole batch of
-    predicted patches per training step; :meth:`render_batch` fans that batch across the pool.
+    a genuinely new process per render -- but up to ``num_workers`` renders run concurrently.
+    The SynthRL RL stage renders a whole batch of predicted patches per training step;
+    :meth:`render_batch` fans that batch across up to ``num_workers`` renders at a time,
+    launching a fresh replacement the moment each slot finishes (or is killed for exceeding
+    ``timeout_sec``), so a hung render costs one slot's worth of time, not the whole batch's.
     Each patch still gets its own single-use process, so parallelism changes only throughput,
-    not the per-render result -- but see :meth:`render_batch`, which has to defeat ``Pool.map``'s
-    default chunking to keep that true.
+    not the per-render result.
 
     ``render_worker`` is the picklable render function (defaults to the real Dexed render);
     tests inject a VST-free stand-in. Serial ``render`` is kept for interface parity with
@@ -293,16 +373,16 @@ class ParallelFreshProcessRenderBackend:
         num_workers: Optional[int] = None,
         render_worker: RenderWorker = render_patch_in_fresh_process,
         synth_name: str = DEFAULT_SYNTH,
+        timeout_sec: float = DEFAULT_RENDER_TIMEOUT_SEC,
     ):
         self._settings = settings
         self._renderer = renderer
         self._render_worker = render_worker
         self._synth_name = synth_name
+        self._timeout_sec = float(timeout_sec)
         _synth_spec(synth_name)  # fail here, not inside a spawned worker
         self.num_workers = num_workers if num_workers is not None else (os.cpu_count() or 1)
-        self._pool = mp.get_context("spawn").Pool(
-            processes=self.num_workers, maxtasksperchild=1, **_worker_silencing(synth_name)
-        )
+        self._context = mp.get_context("spawn")
 
     def _payload(
         self, params: Dict[str, float]
@@ -310,22 +390,72 @@ class ParallelFreshProcessRenderBackend:
         return (params, self._settings, self._renderer, self._synth_name)
 
     def render(self, params: Dict[str, float]) -> np.ndarray:
-        return self._pool.apply(self._render_worker, (self._payload(params),))
+        process, conn = _spawn_render(self._context, self._render_worker, self._payload(params))
+        return _collect_render(process, conn, self._timeout_sec)
 
-    def render_batch(self, params_batch: List[Dict[str, float]]) -> List[np.ndarray]:
-        """Render a list of patches in parallel, preserving input order.
+    def render_batch(self, params_batch: List[Dict[str, float]]) -> List[Optional[np.ndarray]]:
+        """Render a list of patches with up to ``num_workers`` concurrent fresh processes.
 
-        ``chunksize=1`` is load-bearing, not a tuning knob. ``maxtasksperchild`` retires a
-        worker after one *task*, and ``Pool.map`` packs ``ceil(n / (4 * workers))`` payloads
-        into a task by default, so any batch longer than ``4 * num_workers`` would put several
-        renders in one process and silently lose the isolation this class exists for.
+        Preserves input order. A slot that times out **or whose worker crashes outright**
+        (a native crash in the plugin's DSP, not merely a hang -- observed in practice) is
+        killed/reaped and comes back as ``None`` rather than raising --
+        :class:`~dataset.builder.DatasetBuilder` treats that as a redraw-worthy failure, the
+        same as a near-silent render, instead of one bad patch aborting every other render
+        already in flight. A genuine exception raised by our own code (not the plugin dying)
+        is still re-raised, once every in-flight render has been collected or killed so
+        nothing is left orphaned.
         """
         payloads = [self._payload(params) for params in params_batch]
-        return self._pool.map(self._render_worker, payloads, chunksize=1)
+        total = len(payloads)
+        results: List[Optional[np.ndarray]] = [None] * total
+        in_flight: Dict[mp_connection.Connection, Tuple[int, "mp.process.BaseProcess", float]] = {}
+        next_index = 0
+        pending_error: Optional[BaseException] = None
+
+        def launch(index: int) -> None:
+            process, conn = _spawn_render(self._context, self._render_worker, payloads[index])
+            in_flight[conn] = (index, process, time.monotonic())
+
+        while next_index < total and len(in_flight) < self.num_workers:
+            launch(next_index)
+            next_index += 1
+
+        while in_flight:
+            deadline = min(started + self._timeout_sec for _, _, started in in_flight.values())
+            ready = set(mp_connection.wait(list(in_flight), timeout=max(0.0, deadline - time.monotonic())))
+            now = time.monotonic()
+            for conn, (index, process, started) in list(in_flight.items()):
+                if conn in ready:
+                    try:
+                        status, value = conn.recv()
+                    except EOFError:
+                        # The worker died before sending anything -- a crash, not a bug in our
+                        # code. results[index] stays None, same treatment as a timeout below.
+                        status, value = None, None
+                    conn.close()
+                    _reap(process)
+                    if status == "ok":
+                        results[index] = value
+                    elif status == "error" and pending_error is None:
+                        pending_error = value
+                elif now - started >= self._timeout_sec:
+                    process.terminate()
+                    _reap(process)
+                    conn.close()
+                    # results[index] stays None: a timed-out slot, not a hard failure.
+                else:
+                    continue
+                del in_flight[conn]
+                if next_index < total:
+                    launch(next_index)
+                    next_index += 1
+
+        if pending_error is not None:
+            raise pending_error
+        return results
 
     def close(self) -> None:
-        self._pool.terminate()
-        self._pool.join()
+        pass
 
     def __enter__(self) -> "ParallelFreshProcessRenderBackend":
         return self
