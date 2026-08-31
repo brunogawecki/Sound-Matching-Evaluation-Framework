@@ -237,3 +237,51 @@ def test_hybrid_rejects_unknown_mode_and_empty_humans():
         HybridPresetSource("interpolate", [human_preset()], space, count=1, seed=0)
     with pytest.raises(ValueError):
         HybridPresetSource(HybridPresetSource.BLEND, [], space, count=1, seed=0)
+
+
+# -- HybridPresetSource: mixed ------------------------------------------------
+
+def test_hybrid_mixed_includes_every_human_preset_exactly_once():
+    space = make_space()
+    humans = [human_preset(voice_index=i) for i in range(5)]
+    source = HybridPresetSource(
+        HybridPresetSource.MIXED, humans, space, count=50, seed=4, synthetic_ratio=0.5,
+    )
+    presets = list(source.iter_presets())
+    human_presets = [p for p in presets if p.method == METHOD_HUMAN]
+    assert len(human_presets) == 5
+    assert {p.voice_index for p in human_presets} == {0, 1, 2, 3, 4}
+    assert all(p.method in (METHOD_HUMAN, METHOD_AUGMENT, METHOD_SYNTHETIC) for p in presets)
+
+
+def test_hybrid_mixed_splits_remainder_by_synthetic_ratio_approximately():
+    space = make_space()
+    humans = [human_preset(voice_index=i) for i in range(4)]
+    source = HybridPresetSource(
+        HybridPresetSource.MIXED, humans, space, count=404, seed=7, synthetic_ratio=0.75,
+    )
+    remainder = [p for p in source.iter_presets() if p.method != METHOD_HUMAN]
+    assert len(remainder) == 400
+    synthetic_fraction = np.mean([p.method == METHOD_SYNTHETIC for p in remainder])
+    assert 0.65 < synthetic_fraction < 0.85
+
+
+def test_hybrid_mixed_human_picks_cannot_resample_but_rest_can():
+    space = make_space()
+    humans = [human_preset(voice_index=i) for i in range(3)]
+    source = HybridPresetSource(
+        HybridPresetSource.MIXED, humans, space, count=30, seed=3, synthetic_ratio=0.5,
+    )
+    for preset in source.iter_presets():
+        result = source.resample(preset, attempt=1)
+        if preset.method == METHOD_HUMAN:
+            assert result is None
+        else:
+            assert result is not None and result.method == preset.method
+
+
+def test_hybrid_mixed_rejects_count_smaller_than_human_pool():
+    space = make_space()
+    humans = [human_preset(voice_index=i) for i in range(10)]
+    with pytest.raises(ValueError):
+        HybridPresetSource(HybridPresetSource.MIXED, humans, space, count=5, seed=0)

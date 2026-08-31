@@ -56,19 +56,25 @@ separate runs). Empty partitions are skipped::
 ``hybrid`` -- human train presets combined with synthetic material::
 
     python scripts/build_dataset.py hybrid --cartridges presets/ --mode blend --count 128
+    python scripts/build_dataset.py hybrid --synth diva --mode mixed --count 23448 \
+        --synthetic-ratio 0.706 --num-perturbed-params 6 --jitter 0.08 --flip-categoricals
 
     --presets          same as for ``human``                 [REQUIRED for dexed]
-    --mode             "blend" mixes in whole synthetic draws; "augment"
-                       perturbs human presets                [default: blend]
-    --count            how many presets to render            [default: 64]
+    --mode             "blend" mixes in whole synthetic draws; "augment" perturbs
+                       human presets; "mixed" includes every human-train preset
+                       exactly once, then splits the rest of --count between
+                       augment and synthetic (see below)      [default: blend]
+    --count            how many presets to render. mixed: must be >= the number
+                       of human-train presets                 [default: 64]
     --seed             master seed for the sampler           [default: 0]
-    --synthetic-ratio  blend only: probability each slot is synthetic
-                                                             [default: 0.5]
-    --num-perturbed-params  augment only: how many parameters to change
+    --synthetic-ratio  blend: probability each slot is synthetic. mixed:
+                       probability each *non-human* slot is synthetic rather
+                       than augmented                         [default: 0.5]
+    --num-perturbed-params  augment/mixed: how many parameters to change
                                                              [default: 2]
-    --jitter           augment only: size of the continuous nudge
+    --jitter           augment/mixed: size of the continuous nudge
                                                              [default: 0.05]
-    --flip-categoricals  augment only: also allow categorical params to flip
+    --flip-categoricals  augment/mixed: also allow categorical params to flip
                                                              [default: off]
     --test-fraction    share held out as the test set        [default: 0.00]
     --split-seed       seed for the train/test shuffle       [default: 0]
@@ -467,7 +473,11 @@ def build_parser() -> argparse.ArgumentParser:
     human.set_defaults(func=build_human)
 
     hybrid = subparsers.add_parser("hybrid", help="human-train presets blended/augmented with synthetic")
-    hybrid.add_argument("--mode", choices=[HybridPresetSource.BLEND, HybridPresetSource.AUGMENT], default=HybridPresetSource.BLEND)
+    hybrid.add_argument(
+        "--mode",
+        choices=[HybridPresetSource.BLEND, HybridPresetSource.AUGMENT, HybridPresetSource.MIXED],
+        default=HybridPresetSource.BLEND,
+    )
     hybrid.add_argument("--count", type=int, default=64, help="number of presets to render")
     hybrid.add_argument("--seed", type=int, default=0, help="master seed for the sampler")
     hybrid.add_argument("--synthetic-ratio", type=float, default=0.5, help="blend: P(synthetic per slot)")
