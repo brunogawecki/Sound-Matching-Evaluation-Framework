@@ -4,10 +4,16 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-08-30 (D-DIVA-START amended — the `.h2p` parser is back in scope: `diva_raw`
-only realizes 58 of Diva's 237 subset parameters, too narrow to compare against Dexed's planned
-diverse human corpus, so the 1432 factory + third-party `.h2p` presets in Diva's local install
-become a second human-preset source. Earlier: 2026-08-29, D-DIVA-RENDER amended — Diva's ~126 ms
+Last updated: 2026-08-31 (D4's Diva train set revised — a plain `augment`-mode corpus was
+replaced with a fixed 1084-human + 6570-augmented + 15794-synthetic split, still 23,448 total to
+match Dexed, after `augment` proved structurally unable to explore beyond narrow neighborhoods
+around the 1084 real presets and a naive human-quota above 1084 would have meant sampling those
+presets with exact-duplicate replacement. Earlier, 2026-08-30: D4 landed for Diva — train/test
+split (0.2/0.2, matching Dexed) first proposed as `augment`-only. Earlier same day: D-DIVA-START
+amended — the `.h2p` parser is back in scope: `diva_raw` only realizes 58 of Diva's 237 subset
+parameters, too narrow to compare against Dexed's planned diverse human corpus, so the 1432
+factory + third-party `.h2p` presets in Diva's local install become a second human-preset
+source. Earlier: 2026-08-29, D-DIVA-RENDER amended — Diva's ~126 ms
 parameter smoothing was contaminating the opening of every render; warm-up render added, Diva
 corpora rebuilt, the recorded in-process divergence corrected, Dexed measured clean. Earlier:
 2026-08-25, D-DIVA-SUBSET locked — 237 of Diva's 281 parameters estimated; D-DIVA-RENDER locked —
@@ -1702,9 +1708,48 @@ Change offline, so a voice is applied as parameters, not loaded as a patch — t
 set, and the final train/test composition. The built importer currently covers DX7 `.syx`; a
 non-SysEx source (e.g. Surge `.fxp`) would need its own importer.
 
-**Scope**: D4 is about **Dexed**. Diva's preset source is settled separately (D-DIVA-START: the
-Flow Synthesizer 11k dataset); how that corpus splits into train and test is its own open question,
-raised when the Diva loader lands.
+**Scope**: D4 is about **Dexed**. Diva's preset source is settled separately (D-DIVA-START,
+amended 2026-08-30: u-he's own installed `.h2p` library, 1432 factory + third-party presets, not
+the Flow Synthesizer collection); how that corpus splits into train and test is its own open
+question, raised when the Diva loader lands.
+
+**Landed (2026-08-30, revised 2026-08-31): Diva's train/test split and the size-matching hybrid.**
+Diva's `.h2p` library gives 1355 unique presets after dedup, two orders of magnitude short of the
+~29k-voice Dexed human corpus below. Training Diva on its own real-preset count against Dexed's
+would confound the FM-vs-subtractive comparison: a worse Diva score could mean "harder to invert"
+or just "far less training data," with no way to tell which apart.
+
+- **Split**: `--test-fraction 0.2 --split-seed 0`, matching Dexed's `full_preset-gen-vae` split
+  fraction exactly — **1084 human train presets / 271 human test presets**. The test set is
+  real presets only, on both synths (271 Diva vs Dexed's 5,862), each used once; per-sample
+  metrics don't need matched test-set sizes to be comparable, and synthesizing test material
+  would defeat the point of evaluating on real presets.
+- **Train set (revised 2026-08-31): a fixed human block plus a weighted augment/synthetic
+  remainder, not plain `augment`.** The original plan (`augment`-only, every one of 23,448
+  slots a perturbation of one of the 1084 real parents) was replaced after two problems
+  surfaced in discussion: (1) the goal shifted to exploring as much of the parameter space as
+  possible, which `augment` cannot do structurally — every child keeps ~231 of 237 parameters
+  pinned to one real preset's value, so no amount of jitter/perturbation-count tuning explores
+  beyond narrow neighborhoods around 1084 fixed points; and (2) hitting a target count by
+  sampling a small pool *with replacement* (e.g. a "human" quota above 1084) creates exact
+  duplicate training examples, which add no information, only reweight the loss toward
+  whichever presets happened to be redrawn.
+  The fix keeps all three sources but sizes them correctly:
+  - **1084 human** — every real train preset, exactly once, no repeats.
+  - **6570 augmented** — `HybridPresetSource`'s `augment` behavior (a handful of parameters
+    perturbed off a real parent: continuous nudges plus categorical reassignment), for
+    realistic local exploration around real presets.
+  - **15794 synthetic** — independent uniform draws over the full 237-parameter subset
+    (`ParameterSpace.sample_constrained`), for broad joint-space coverage no finite real
+    preset collection or local perturbation of one can reach.
+  Total: **23,448**, matching Dexed's real train count. Needs a new `HybridPresetSource` mode
+  (a fixed human block is not what `blend`'s per-slot coin flip or `augment`'s always-perturb
+  behavior produce) — see the corresponding build-tracking issue for the implementation.
+- **Caveat, stated rather than hidden**: only 1084 + 6570 = 7654 of the 23,448 training
+  examples (33%) trace back to a real preset at all (once verbatim, or perturbed); the
+  remaining 67% are context-free random draws with no grounding in actual sound design. This
+  matches Dexed's training-set *scale*, not its *composition* — Dexed's 23,448 are all
+  independently real; the majority of Diva's are not real presets, augmented or otherwise.
 
 **Update (roadmap)**: the leading plan is now "train human → test human" on the
 **preset-gen-vae human DX7 collection** (`paper_repos/preset-gen-vae/synth/dexed_presets.sqlite`,

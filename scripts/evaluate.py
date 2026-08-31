@@ -2,8 +2,8 @@
 
 Loads a model from its checkpoint and a corpus from disk, runs the
 :class:`~evaluation.evaluator.Evaluator` (which re-renders each prediction in a fresh
-process at position 0 -- D-REPRO -- so it needs the Dexed VST locally), and writes
-``results/<corpus_name>/<model_name>/{per_sample.csv, eval_summary.json}``.
+process at position 0 -- D-REPRO -- so it needs the corpus's own synth's VST locally), and
+writes ``results/<corpus_name>/<model_name>/{per_sample.csv, eval_summary.json}``.
 
 Pair with ``scripts/fit_model.py``, which produces the checkpoint::
 
@@ -19,7 +19,7 @@ Pair with ``scripts/fit_model.py``, which produces the checkpoint::
     --save-audio-n    cap on how many samples get saved             [default: 20]
 """
 import argparse
-import os
+import json
 import sys
 from pathlib import Path
 
@@ -27,19 +27,25 @@ from pathlib import Path
 # top-level packages (config, evaluation, dataset, models) import from anywhere.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import config
+from dataset.render_backends import DEFAULT_SYNTH, synth_plugin_path
 from dataset.torch_dataset import RenderedCorpusDataset
 from evaluation.evaluator import EvaluationResult, Evaluator
 from models.registry import MODEL_REGISTRY
 
 
-def _require_dexed() -> None:
-    """The re-render path needs the local VST; fail early with a clear message."""
-    plugin_path = os.path.expanduser(config.DEXED_PATH)
-    if not os.path.exists(plugin_path):
-        print(f"Could not find Dexed plugin at: {plugin_path}")
+def _require_plugin(corpus_dir: Path) -> None:
+    """The re-render path needs the corpus's own synth's VST; fail early with a clear message.
+
+    Reads "synth" from the corpus's own run_summary.json (default "dexed", matching
+    Evaluator's fallback) rather than assuming Dexed -- a Diva corpus needs Diva's plugin.
+    """
+    with open(corpus_dir / "run_summary.json") as summary_file:
+        synth_name = json.load(summary_file).get("synth", DEFAULT_SYNTH)
+    plugin_path = synth_plugin_path(synth_name)
+    if not Path(plugin_path).exists():
+        print(f"Could not find the {synth_name} plugin at: {plugin_path}")
         print("The Evaluator re-renders predictions, which needs the VST (D-REPRO).")
-        print("Please update DEXED_PATH in your .env file.")
+        print(f"Please update the {synth_name} plugin path in your .env file.")
         sys.exit(1)
 
 
@@ -73,7 +79,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    _require_dexed()
+    corpus_dir = Path(args.corpus)
+    _require_plugin(corpus_dir)
 
     checkpoint_path = Path(args.checkpoint)
     if not checkpoint_path.exists():
@@ -82,7 +89,7 @@ def main() -> None:
 
     model = MODEL_REGISTRY[args.model].model_class()
     model.load(checkpoint_path)
-    corpus = RenderedCorpusDataset.load(args.corpus)
+    corpus = RenderedCorpusDataset.load(corpus_dir)
 
     print(f"--- Evaluating {args.model} on '{corpus.corpus_dir.name}' ({len(corpus)} samples) ---")
     result = Evaluator(corpus).evaluate(
