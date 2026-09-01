@@ -4,7 +4,11 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-08-31 (D4's Diva train set revised — a plain `augment`-mode corpus was
+Last updated: 2026-09-01 (D4's Diva mixed-mode corpus built and verified — `diva_h2p_hybrid_train`
+(23,448, `HybridPresetSource.MIXED`) and `diva_h2p_test` (271 real presets) both exist;
+`scripts/evaluate.py`'s plugin preflight fixed to read the corpus's own synth instead of assuming
+Dexed; first matched `MeanParameterBaseline` result recorded on both corpora as a floor baseline.
+Earlier, 2026-08-31: D4's Diva train set revised — a plain `augment`-mode corpus was
 replaced with a fixed 1084-human + 6570-augmented + 15794-synthetic split, still 23,448 total to
 match Dexed, after `augment` proved structurally unable to explore beyond narrow neighborhoods
 around the 1084 real presets and a naive human-quota above 1084 would have meant sampling those
@@ -1742,14 +1746,45 @@ or just "far less training data," with no way to tell which apart.
   - **15794 synthetic** — independent uniform draws over the full 237-parameter subset
     (`ParameterSpace.sample_constrained`), for broad joint-space coverage no finite real
     preset collection or local perturbation of one can reach.
-  Total: **23,448**, matching Dexed's real train count. Needs a new `HybridPresetSource` mode
-  (a fixed human block is not what `blend`'s per-slot coin flip or `augment`'s always-perturb
-  behavior produce) — see the corresponding build-tracking issue for the implementation.
+  Total: **23,448**, matching Dexed's real train count. Implemented as
+  `HybridPresetSource.MIXED` (`dataset/preset_sources.py`) — neither existing mode produces a
+  fixed block (`blend` coin-flips per slot, `augment` always perturbs), so `MIXED` fixes the
+  human block first and then weights each remaining slot between `augment` and independent
+  synthetic sampling via `synthetic_ratio`.
 - **Caveat, stated rather than hidden**: only 1084 + 6570 = 7654 of the 23,448 training
   examples (33%) trace back to a real preset at all (once verbatim, or perturbed); the
   remaining 67% are context-free random draws with no grounding in actual sound design. This
   matches Dexed's training-set *scale*, not its *composition* — Dexed's 23,448 are all
   independently real; the majority of Diva's are not real presets, augmented or otherwise.
+
+**Built (2026-09-01)**: `dataset/diva_h2p_hybrid_train` (`--mode mixed --synthetic-ratio 0.7063`)
+and the matching `dataset/diva_h2p_test` (271 real presets, same split) both exist. Realized
+counts came out 1084 human / 6660 augmented / 15704 synthetic — close to but not exactly the
+6570/15794 targets above, since `synthetic_ratio` weights each remaining slot independently
+rather than filling exact quotas. The fresh-process render timeout/crash fix (below) dropped 0
+of the 23,448 slots on the successful build.
+
+`scripts/evaluate.py`'s plugin preflight check was hardcoded to Dexed regardless of the corpus's
+actual synth; fixed to read `synth` from `run_summary.json` and resolve the matching plugin path
+(`e7b7d71`), mirroring what `Evaluator` already did. With that fix, `fit_model.py` and
+`evaluate.py` ran on both corpora with no Diva-specific flags anywhere, confirming the
+corpus-driven design (D-SELFDESC) needs no second-synth wiring in either script. First matched
+`MeanParameterBaseline` result (each synth fit on its own 23,448-preset train set, evaluated on
+its own human test set):
+
+| metric | Dexed (n=5862) | Diva (n=271) |
+|---|---|---|
+| param_mae | 0.180 | 0.209 |
+| param_accuracy | 0.593 | 0.763 |
+| lsd | 1.134 | 1.044 |
+| mel_mae | 31.4 | 26.4 |
+| mfcc_mae | 42.8 | 37.4 |
+| integrated_loudness_error | 15.7 | 9.17 |
+
+This is a floor baseline, not a real-model comparison — no conclusion about Dexed vs. Diva
+difficulty should be drawn from it. Diva's n=271 vs. Dexed's n=5862 also gives it a
+substantially wider confidence interval; bootstrap both before comparing real model results on
+this pair of corpora.
 
 **Update (roadmap)**: the leading plan is now "train human → test human" on the
 **preset-gen-vae human DX7 collection** (`paper_repos/preset-gen-vae/synth/dexed_presets.sqlite`,
