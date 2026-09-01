@@ -98,7 +98,7 @@ class _FakeRenderBackend:
 class _FakeEvalBackend:
     """Stands in for FreshProcessRenderBackend at eval time (Evaluator re-render)."""
 
-    def __init__(self, settings, renderer="dawdreamer"):
+    def __init__(self, settings, renderer="dawdreamer", synth_name="dexed"):
         pass
 
     def render(self, params):

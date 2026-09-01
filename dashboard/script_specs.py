@@ -43,20 +43,35 @@ class ScriptSpec:
 
 # --- shared arg groups ------------------------------------------------------
 
-_CARTRIDGES = ArgSpec(
-    "cartridges", "--cartridges", "paths", required=True,
-    help="One .syx path, glob, or folder per line (a folder recurses for *.syx).",
-    label="Cartridges (.syx paths / globs / folders)",
+_SYNTH = ArgSpec(
+    "synth", "--synth", "choice", "dexed", choices=("dexed", "diva"),
+    help="Which synthesizer to render. Diva always renders fresh-process (D-DIVA-RENDER).",
+    label="Synth",
+)
+_PRESETS = ArgSpec(
+    "presets", "--presets", "paths",
+    help="dexed: one .syx path, glob, or folder per line (a folder recurses for *.syx). "
+         "diva: the one preset collection, a diva_raw.zip or an extracted directory "
+         "(blank uses config.DIVA_RAW_PATH).",
+    label="Presets (.syx paths / globs / folders, or the Diva collection)",
 )
 _SPLIT_ARGS = (
+    ArgSpec("limit", "--limit", "str", "",
+            help="diva only: cap on raw presets read before dedup. Blank reads all 11,217."),
     ArgSpec("test_fraction", "--test-fraction", "float", 0.0,
-            help="Share held out as the test set; 0.0 renders every voice as train."),
+            help="Share held out as the test set; 0.0 renders every preset as train."),
     ArgSpec("split_seed", "--split-seed", "int", 0, help="Seed for the train/test shuffle."),
     ArgSpec("dedup_threshold", "--dedup-threshold", "float", 0.001,
             help="Distance below which two presets collapse to one."),
+    ArgSpec("keep_constant_params", "--keep-constant-params", "bool", False,
+            help="Keep subset parameters the presets never vary, instead of dropping them and "
+                 "locking them at the presets' own values (D-DIVA-SUBSET's corpus-variance rule)."),
 )
 _FRESH = ArgSpec("fresh_process", "--fresh-process", "bool", False,
                  help="Force every partition into a clean spawned process (slow, leak-free; D-REPRO).")
+_WORKERS = ArgSpec("workers", "--workers", "int", 1,
+                   help="Render this many presets in parallel. Fresh-process partitions only; "
+                        "each patch still gets its own process, so only throughput changes.")
 _RUN_NAME_OPT = ArgSpec("run_name", "--run-name", "str", "",
                         help="Output subdirectory name. Leave blank for the script default.")
 
@@ -72,7 +87,9 @@ BUILD_SYNTHETIC = ScriptSpec(
         ArgSpec("count", "--count", "int", 16, help="How many presets to render."),
         ArgSpec("seed", "--seed", "int", 0, help="Master seed for the sampler."),
         ArgSpec("run_name", "--run-name", "str", "synthetic_smoke", help="Output subdirectory name."),
+        _SYNTH,
         _FRESH,
+        _WORKERS,
     ),
 )
 
@@ -80,14 +97,17 @@ BUILD_HUMAN = ScriptSpec(
     key="human",
     script="scripts/build_dataset.py",
     subcommand="human",
-    description="Real DX7 voices from .syx cartridges, projected onto the D1 subset.",
+    description="Real presets projected onto the estimated subset: DX7 .syx voices, or the "
+                "Flow Synthesizer Diva collection.",
     args=(
-        _CARTRIDGES,
+        _SYNTH,
+        _PRESETS,
         ArgSpec("partition", "--partition", "choice", "", choices=("train", "test"),
                 help="Render only this partition. Blank renders both."),
         *_SPLIT_ARGS,
         _RUN_NAME_OPT,
         _FRESH,
+        _WORKERS,
     ),
 )
 
@@ -97,7 +117,8 @@ BUILD_HYBRID = ScriptSpec(
     subcommand="hybrid",
     description="Human-train presets blended with, or augmented by, synthetic material.",
     args=(
-        _CARTRIDGES,
+        _SYNTH,
+        _PRESETS,
         ArgSpec("mode", "--mode", "choice", "blend", choices=("blend", "augment"),
                 help="blend mixes in whole synthetic draws; augment perturbs human presets."),
         ArgSpec("count", "--count", "int", 64, help="How many presets to render."),
@@ -112,6 +133,7 @@ BUILD_HYBRID = ScriptSpec(
         *_SPLIT_ARGS,
         _RUN_NAME_OPT,
         _FRESH,
+        _WORKERS,
     ),
 )
 

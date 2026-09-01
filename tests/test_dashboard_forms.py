@@ -45,7 +45,8 @@ def test_synthetic_command_is_exact():
     )
     assert argv == [
         sys.executable, "scripts/build_dataset.py", "synthetic",
-        "--count", "64", "--seed", "7", "--run-name", "run_A_train",
+        "--count", "64", "--seed", "7", "--run-name", "run_A_train", "--synth", "dexed",
+        "--workers", "1",
     ]
 
 
@@ -60,11 +61,10 @@ def test_bool_flag_is_bare_when_true_absent_when_false():
 
 
 def test_paths_split_and_blank_choice_omitted():
-    argv = build_command(BUILD_HUMAN, {"cartridges": "a.syx\nb.syx", "partition": ""})
-    assert argv[:6] == [
-        sys.executable, "scripts/build_dataset.py", "human",
-        "--cartridges", "a.syx", "b.syx",
-    ]
+    argv = build_command(BUILD_HUMAN, {"presets": "a.syx\nb.syx", "partition": ""})
+    assert argv[:3] == [sys.executable, "scripts/build_dataset.py", "human"]
+    presets = argv.index("--presets")
+    assert argv[presets:presets + 3] == ["--presets", "a.syx", "b.syx"]
     assert "--partition" not in argv  # blank choice -> script default (both)
     # unspecified args fall back to their declared defaults
     assert "--test-fraction" in argv and "--dedup-threshold" in argv
@@ -75,10 +75,11 @@ def test_paths_preserves_spaces_within_a_line():
     # must survive as one argv token, not be split into two.
     argv = build_command(
         BUILD_HUMAN,
-        {"cartridges": "/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges"},
+        {"presets": "/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges"},
     )
-    assert argv[:5] == [
-        sys.executable, "scripts/build_dataset.py", "human", "--cartridges",
+    presets = argv.index("--presets")
+    assert argv[presets:presets + 2] == [
+        "--presets",
         "/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges",
     ]
 
@@ -88,17 +89,24 @@ def test_paths_strips_surrounding_quotes():
     # the quote characters into the actual path.
     argv = build_command(
         BUILD_HUMAN,
-        {"cartridges": "'/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges'"},
+        {"presets": "'/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges'"},
     )
-    assert argv[:5] == [
-        sys.executable, "scripts/build_dataset.py", "human", "--cartridges",
+    presets = argv.index("--presets")
+    assert argv[presets:presets + 2] == [
+        "--presets",
         "/Users/bruno/Library/Application Support/DigitalSuburban/Dexed/Cartridges",
     ]
 
 
+def test_blank_presets_is_allowed_so_diva_can_fall_back_to_its_default_collection():
+    # --presets is required for dexed and optional for diva (config.DIVA_RAW_PATH), which a
+    # flat ArgSpec cannot express; the script rejects the dexed case itself.
+    argv = build_command(BUILD_HUMAN, {"presets": "", "synth": "diva"})
+    assert "--presets" not in argv
+    assert argv[argv.index("--synth") + 1] == "diva"
+
+
 def test_required_missing_raises():
-    with pytest.raises(ValueError):
-        build_command(BUILD_HUMAN, {"cartridges": ""})
     with pytest.raises(ValueError):
         build_command(EVALUATE, {"checkpoint": "", "corpus": "c", "model": "MeanParameterBaseline"})
 

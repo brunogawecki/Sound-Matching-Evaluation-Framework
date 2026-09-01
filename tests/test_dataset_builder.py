@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from typing import Dict, Iterator, Optional
+from typing import Dict, Iterator, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -13,7 +13,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 from synth.parameter_space import ParameterSpecification, ParameterSpace
 from dataset.builder import DatasetBuilder, RenderSettings
-from dataset.preset_sources import METHOD_SYNTHETIC, PresetRecord, PresetSource, SyntheticPresetSource
+from dataset.render_backends import RenderTimeoutError
+from dataset.preset_sources import (
+    METHOD_HUMAN,
+    METHOD_SYNTHETIC,
+    PresetRecord,
+    PresetSource,
+    SyntheticPresetSource,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +253,243 @@ def test_builds_human_corpus_end_to_end_with_dexed(tmp_path):
     assert (frame["method"] == "human").all()
     assert (frame["partition"] == "test").all()
     assert frame["source_file"].notna().all()
+
+
+# -- corpus-scoped subset and base patch (D-DIVA-SUBSET's corpus-variance rule) ---
+
+def test_parameter_space_override_narrows_what_the_corpus_estimates(tmp_path):
+    # A source that only ever varies AMP: the corpus estimates AMP alone, and CAT is
+    # locked at a base-patch value the synth's own init patch does not carry.
+    narrowed = make_space().restrict(["AMP"])
+
+    class AmpOnlySource(PresetSource):
+        def iter_presets(self) -> Iterator[PresetRecord]:
+            for slot, amp in enumerate((0.3, 0.6, 0.9)):
+                yield PresetRecord(
+                    params={"AMP": amp}, method=METHOD_SYNTHETIC, partition="train", slot=slot
+                )
+
+        def describe(self):
+            return {"method": "amp-only"}
+
+    run_summary = build(
+        tmp_path, AmpOnlySource(),
+        parameter_space=narrowed, default_params={"CAT": 1.0},
+    )
+    space = ParameterSpace.from_dict(run_summary["parameter_space"])
+    assert space.names == ["AMP"]                      # the override, not the synth's subset
+    assert run_summary["default_params"]["CAT"] == 1.0  # the source's base patch, not 0.0
+
+
+def test_default_params_rejects_a_name_the_synth_does_not_expose(tmp_path):
+    with pytest.raises(KeyError, match="default_params names the synth does not expose"):
+        DatasetBuilder(
+            FakeSynth(make_space()), render_settings=small_settings(),
+            default_params={"NOPE": 0.0},
+        )
+
+
+def test_parameter_space_override_rejects_a_name_the_synth_does_not_expose(tmp_path):
+    stray = ParameterSpace([ParameterSpecification(name="NOPE", kind="continuous", default=0.0)])
+    with pytest.raises(KeyError, match="parameter_space names the synth does not expose"):
+        DatasetBuilder(
+            FakeSynth(make_space()), render_settings=small_settings(), parameter_space=stray
+        )
+
+
+# -- batched rendering (scripts/build_dataset.py --workers) ----------------------
+
+class _BatchingBackend:
+    """A backend that renders batches, like ParallelFreshProcessRenderBackend.
+
+    Records the batch sizes it was handed so the tests can tell batched from serial.
+    """
+
+    process_mode = "fresh"
+
+    def __init__(self, synth, num_workers: int):
+        self._synth = synth
+        self.num_workers = num_workers
+        self.batch_sizes: List[int] = []
+
+    def render(self, params) -> np.ndarray:
+        self._synth.set_parameters(params)
+        return self._synth.render_audio(60, 100, small_settings().duration_sec)
+
+    def render_batch(self, params_batch) -> List[np.ndarray]:
+        self.batch_sizes.append(len(params_batch))
+        return [self.render(params) for params in params_batch]
+
+    def close(self) -> None:
+        pass
+
+
+def test_batched_backend_produces_the_same_corpus_as_a_serial_one(tmp_path):
+    # --workers must change throughput only: same audio, same order, same metadata.
+    source = SyntheticPresetSource(make_space(), count=7, seed=3)
+    serial = build(tmp_path, source, run_name="serial")
+    synth = FakeSynth(make_space())
+    batched = DatasetBuilder(
+        synth, render_settings=small_settings(),
+        render_backend=_BatchingBackend(synth, num_workers=2),
+    ).build(SyntheticPresetSource(make_space(), count=7, seed=3),
+            run_name="batched", output_root=tmp_path)
+
+    assert serial["num_samples"] == batched["num_samples"] == 7
+    serial_rows = pd.read_csv(tmp_path / "serial" / "metadata.csv")
+    batched_rows = pd.read_csv(tmp_path / "batched" / "metadata.csv")
+    assert serial_rows.equals(batched_rows)
+    for sample_id in serial_rows["sample_id"]:
+        name = f"audio/{sample_id}.wav"
+        assert (tmp_path / "serial" / name).read_bytes() == (tmp_path / "batched" / name).read_bytes()
+
+
+def test_batch_size_follows_the_worker_count(tmp_path):
+    synth = FakeSynth(make_space())
+    backend = _BatchingBackend(synth, num_workers=2)
+    DatasetBuilder(
+        synth, render_settings=small_settings(), render_backend=backend
+    ).build(SyntheticPresetSource(make_space(), count=10, seed=0),
+            run_name="run", output_root=tmp_path)
+    # 4 * num_workers per batch, and the tail batch carries the remainder.
+    assert backend.batch_sizes == [8, 2]
+
+
+def test_a_backend_without_render_batch_stays_serial(tmp_path):
+    # The default in-process backend has no render_batch, so nothing batches.
+    synth = FakeSynth(make_space())
+    builder = DatasetBuilder(synth, render_settings=small_settings())
+    assert builder._render_batch_size() == 1
+
+
+def test_near_silent_redraw_still_works_inside_a_batch(tmp_path):
+    # The batch render counts as attempt 0; a generative source must still get its redraw.
+    class SilentThenLoud(PresetSource):
+        def iter_presets(self) -> Iterator[PresetRecord]:
+            for slot in range(4):
+                yield PresetRecord(params={"AMP": 0.0, "CAT": 0.0},
+                                   method=METHOD_SYNTHETIC, partition="train", slot=slot)
+
+        def resample(self, record, attempt) -> Optional[PresetRecord]:
+            return PresetRecord(params={"AMP": 0.9, "CAT": 0.0}, method=METHOD_SYNTHETIC,
+                                partition="train", slot=record.slot)
+
+        def describe(self):
+            return {"method": "silent-then-loud"}
+
+    synth = FakeSynth(make_space())
+    run_summary = DatasetBuilder(
+        synth, render_settings=small_settings(),
+        render_backend=_BatchingBackend(synth, num_workers=2),
+    ).build(SilentThenLoud(), run_name="redrawn", output_root=tmp_path)
+
+    assert run_summary["near_silent_count"] == 0  # every silent draw was replaced
+    rows = pd.read_csv(tmp_path / "redrawn" / "metadata.csv")
+    assert (rows["AMP"] == 0.9).all()
+
+
+# -- render timeouts (a hung fresh-process render, not a real Dexed/Diva render) --------------
+
+class _TimeoutOnceBackend:
+    """A serial backend whose first render times out; every later one renders normally."""
+
+    process_mode = "fresh"
+
+    def __init__(self):
+        self._synth = FakeSynth(make_space())
+        self._calls = 0
+
+    def render(self, params) -> np.ndarray:
+        self._calls += 1
+        if self._calls == 1:
+            raise RenderTimeoutError("boom")
+        self._synth.set_parameters(params)
+        return self._synth.render_audio(60, 100, small_settings().duration_sec)
+
+    def close(self) -> None:
+        pass
+
+
+class _AlwaysTimesOutBackend:
+    """A serial backend where every render times out (a genuinely unrenderable patch)."""
+
+    process_mode = "fresh"
+
+    def render(self, params) -> np.ndarray:
+        raise RenderTimeoutError("boom")
+
+    def close(self) -> None:
+        pass
+
+
+class _NoResampleSource(PresetSource):
+    """A single fixed preset that cannot be redrawn, like a real human preset."""
+
+    def iter_presets(self) -> Iterator[PresetRecord]:
+        yield PresetRecord(
+            params={"AMP": 0.8, "CAT": 0.0}, method=METHOD_HUMAN, partition="train", voice_index=0,
+        )
+
+    def resample(self, record, attempt) -> Optional[PresetRecord]:
+        return None
+
+    def describe(self):
+        return {"method": "no-resample"}
+
+
+def test_render_timeout_is_redrawn_like_near_silence(tmp_path):
+    source = ScriptedSource(first_amp=0.8, resample_amp=0.8)
+    run_summary = build(tmp_path, source, render_backend=_TimeoutOnceBackend())
+    assert run_summary["num_samples"] == 1
+    assert run_summary["render_timeout_dropped_count"] == 0
+
+
+def test_render_timeout_with_no_resample_drops_the_preset(tmp_path):
+    run_summary = build(tmp_path, _NoResampleSource(), render_backend=_AlwaysTimesOutBackend())
+    assert run_summary["num_samples"] == 0
+    assert run_summary["render_timeout_dropped_count"] == 1
+    frame = pd.read_csv(tmp_path / "run" / "metadata.csv")
+    assert len(frame) == 0
+
+
+_TIMEOUT_SENTINEL_AMP = -1.0
+
+
+class _BatchingBackendWithTimeout(_BatchingBackend):
+    """Like _BatchingBackend, but a render at the sentinel AMP reports as timed out
+    (``render_batch``'s ``None``-slot convention -- see ParallelFreshProcessRenderBackend)."""
+
+    def render_batch(self, params_batch) -> List[Optional[np.ndarray]]:
+        self.batch_sizes.append(len(params_batch))
+        return [
+            None if params.get("AMP") == _TIMEOUT_SENTINEL_AMP else self.render(params)
+            for params in params_batch
+        ]
+
+
+def test_batch_render_timeout_slot_is_redrawn(tmp_path):
+    class TimeoutThenLoud(PresetSource):
+        def iter_presets(self) -> Iterator[PresetRecord]:
+            for slot, amp in enumerate((0.8, _TIMEOUT_SENTINEL_AMP, 0.8)):
+                yield PresetRecord(
+                    params={"AMP": amp, "CAT": 0.0}, method=METHOD_SYNTHETIC,
+                    partition="train", slot=slot,
+                )
+
+        def resample(self, record, attempt) -> Optional[PresetRecord]:
+            return PresetRecord(
+                params={"AMP": 0.8, "CAT": 0.0}, method=METHOD_SYNTHETIC,
+                partition="train", slot=record.slot,
+            )
+
+        def describe(self):
+            return {"method": "timeout-then-loud"}
+
+    synth = FakeSynth(make_space())
+    run_summary = DatasetBuilder(
+        synth, render_settings=small_settings(),
+        render_backend=_BatchingBackendWithTimeout(synth, num_workers=2),
+    ).build(TimeoutThenLoud(), run_name="run", output_root=tmp_path)
+
+    assert run_summary["num_samples"] == 3
+    assert run_summary["render_timeout_dropped_count"] == 0

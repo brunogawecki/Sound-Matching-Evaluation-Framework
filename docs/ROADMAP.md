@@ -3,10 +3,13 @@
 This is the **decomposition** of the work between today's state (a corpus, a model interface, a
 trivial baseline, and a working Evaluator) and the project's goal (a comparative benchmark across
 model families on Dexed). It is high-level on purpose: each task below gets its own detailed-design
-session later. Scope is **Dexed-only** (D-ORDER) — the full pipeline must be proven on Dexed before
-any second synth — and the roadmap **ends at "benchmark results produced."** Thesis prose/figures,
-the #12 dashboard (built — see `ARCHITECTURE.md`, but tangential to the benchmark path), and
-Surge XT are out of scope.
+session later. The benchmark path is **Dexed-only** (D-ORDER) — the full pipeline had to be proven on
+Dexed before any second synth — and the roadmap **ends at "benchmark results produced."** Thesis
+prose/figures and the #12 dashboard (built — see `ARCHITECTURE.md`, but tangential to the benchmark
+path) are out of scope.
+
+**A second synth is now in scope, in parallel** — see "Diva" below. It runs alongside Phase 6 rather
+than replacing it; the benchmark table is still Dexed.
 
 The split with the rest of `docs/` is the usual one: **this file owns the *decomposition and
 ordering*; `DECISIONS.md` owns the *why*; GitHub issues own the *do*.** Open decisions resolve in
@@ -32,6 +35,43 @@ What does **not** exist yet:
   the paper's multi-modal encoder + grouped-FC parameter classifier is still future work.
 - **No final human test set (D4), no benchmark orchestration, no benchmark table** — Phase 6. The
   existing results rows are pipeline shakedowns, not benchmark numbers.
+
+## Diva (second synth)
+
+**u-he Diva is the second synthesizer** (D-DIVA-START, LOCKED 2026-08-25), an approved exception to
+D-ORDER's ordering and to this file's former Dexed-only scope. Surge XT is no longer the plan. Diva
+is subtractive where Dexed is FM, it hosts as a plain VST3, and it has an 11,218-preset public
+dataset that ships parameter vectors (Flow Synthesizer, Esling et al.), so a human Diva corpus can be
+re-rendered under this project's own contract.
+
+Landed so far: `synth/diva/parameters.py`, the committed 281-parameter module-qualified name table,
+plus its plugin-gated test. Diva's plugin names are not unique, so parameters are addressed
+module-qualified (`VCF1.Model`) — see the D-NAMING amendment.
+
+`DivaWrapper` is built: 279 exposed parameters (281 minus master output and the GUI LED tint),
+continuous/discrete split read off the plugin and frozen, DawDreamer-only. Rendering Diva is
+**fresh-process only** — it does not reproduce in-process at all (**D-DIVA-RENDER**).
+
+The estimated subset is settled: **237 of the 281** parameters (**D-DIVA-SUBSET**), a 1100-dimension
+ML-side vector against Dexed's 333.
+
+The render layer and the preset loaders are synth-neutral (`dataset/render_backends.py` carries a
+synth registry, `dataset/preset_loader_common.py` holds the shared dedup/split half), and
+`dataset/diva_preset_loader.py` reads the 11,217-preset Flow Synthesizer corpus.
+
+That corpus varies only 64 of Diva's 281 parameters and no categoricals at all -- the paper kept
+continuous parameters only and fixed the rest. So the **Diva human corpus estimates 58 parameters,
+not 237**: D-DIVA-SUBSET's list is unchanged, but the corpus-variance rule narrows the space per
+corpus (`restrict_to_realized`). A second, synthetic Diva corpus over the full 237 is the planned
+way to exercise the categoricals; it is not scheduled.
+
+`scripts/build_dataset.py` takes `--synth {dexed,diva}` on all three subcommands, and a corpus now
+records which synth built it, so the Evaluator re-renders on the right one. The full pipeline runs
+end to end on Diva: build, `RenderedCorpusDataset` with no live VST, fit, evaluate. `SynthRLi` is
+out of scope for Diva (it is the only family that renders inside the training loop, D-RL-RENDER).
+
+`tests/test_diva_wrapper.py` covers the parameter universe, addressing, the renderer
+restriction and the render contract. Still to build: a full-size Diva corpus.
 
 ## Sequencing — vertical slice first
 
@@ -117,4 +157,5 @@ locally with the live VST — it does not fit the cluster training harness.)*
 - **Results aggregation** — comparative table across families, plus the metric-panel rank-correlation
   pruning (D-EVAL names `per_sample.csv` as the source of truth). **Finish line.**
 
-**Out of scope:** the #12 dashboard, the second synth (Surge XT), thesis prose/figures.
+**Out of scope:** the #12 dashboard, thesis prose/figures. The Diva work above runs in parallel and
+does not enter this table.

@@ -108,6 +108,26 @@ class ParameterSpace:
     def parameter_specs(self) -> List[ParameterSpecification]:
         return list(self._parameter_specs)
 
+    def restrict(self, names: List[str]) -> "ParameterSpace":
+        """A narrower space holding only ``names``, in this space's order.
+
+        Used to strip parameters a preset source never varies, which a model would
+        otherwise be scored on for free (see the corpus-variance rule under
+        D-DIVA-SUBSET in docs/DECISIONS.md). Whatever is dropped must then be locked
+        at the value the source froze it at, which is the caller's job.
+
+        Raises:
+            KeyError: If a name is not in this space.
+        """
+        unknown = set(names) - set(self._names)
+        if unknown:
+            raise KeyError(f"Not parameters of this space: {sorted(unknown)}")
+        keep = set(names)
+        return ParameterSpace([
+            parameter_spec for parameter_spec in self._parameter_specs
+            if parameter_spec.name in keep
+        ])
+
     @property
     def names(self) -> List[str]:
         return list(self._names)

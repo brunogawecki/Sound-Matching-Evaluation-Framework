@@ -4,7 +4,25 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-07-27 (D-RL-RENDER amended — in-process reuse built as an opt-in fast reward path; leakage measured, no in-process reset exists).
+Last updated: 2026-09-01 (D4's Diva mixed-mode corpus built and verified — `diva_h2p_hybrid_train`
+(23,448, `HybridPresetSource.MIXED`) and `diva_h2p_test` (271 real presets) both exist;
+`scripts/evaluate.py`'s plugin preflight fixed to read the corpus's own synth instead of assuming
+Dexed; first matched `MeanParameterBaseline` result recorded on both corpora as a floor baseline.
+Earlier, 2026-08-31: D4's Diva train set revised — a plain `augment`-mode corpus was
+replaced with a fixed 1084-human + 6570-augmented + 15794-synthetic split, still 23,448 total to
+match Dexed, after `augment` proved structurally unable to explore beyond narrow neighborhoods
+around the 1084 real presets and a naive human-quota above 1084 would have meant sampling those
+presets with exact-duplicate replacement. Earlier, 2026-08-30: D4 landed for Diva — train/test
+split (0.2/0.2, matching Dexed) first proposed as `augment`-only. Earlier same day: D-DIVA-START
+amended — the `.h2p` parser is back in scope: `diva_raw` only realizes 58 of Diva's 237 subset
+parameters, too narrow to compare against Dexed's planned diverse human corpus, so the 1432
+factory + third-party `.h2p` presets in Diva's local install become a second human-preset
+source. Earlier: 2026-08-29, D-DIVA-RENDER amended — Diva's ~126 ms
+parameter smoothing was contaminating the opening of every render; warm-up render added, Diva
+corpora rebuilt, the recorded in-process divergence corrected, Dexed measured clean. Earlier:
+2026-08-25, D-DIVA-SUBSET locked — 237 of Diva's 281 parameters estimated; D-DIVA-RENDER locked —
+Diva reproduces fresh-process only; D-DIVA-START locked; D-NAMING amended for module-qualified
+names).
 
 ---
 
@@ -21,7 +39,21 @@ numeric index. Each wrapper builds a name→index map from the live plugin
 relative to the classic Dexed layout the original code assumed. Index-based addressing
 caused two critical bugs (see `PROJECT_CONTEXT.md` review follow-up / git history).
 Name-based addressing kills this class of bug and is self-documenting. The same
-convention applies to the future Surge XT wrapper.
+convention applies to every further wrapper.
+
+**Amended 2026-08-25 (Diva).** A name only addresses a parameter if the plugin's names are
+unique, which Dexed's are and Diva's are not (56 names shared by 147 parameters). Where they
+collide, the canonical name is **module-qualified**, `<Module>.<Name>` — `LFO1.Rate`,
+`VCF1.Model`. This is the same rule, not a new one: the requirement is a stable, unique,
+human-readable key, and the module prefix is what makes one exist. Indices stay out of every
+public API.
+
+Two constraints follow. The module is **not** reported by VST3, so a wrapper whose plugin needs
+qualification carries a committed name table validated against the live plugin, rather than
+deriving names at `__init__` (`synth/diva/parameters.py`, `tests/test_diva_parameters.py`); and
+each such wrapper owns the translation from its qualified names down to the bare names the plugin
+answers to. Above the wrapper — subsets, `ParameterSpace`, corpus metadata, model code — only the
+qualified name is ever seen. See **D-DIVA-START**.
 
 ### D-EXCLUDED — VST-level extra parameters are invisible above the wrapper
 
@@ -81,7 +113,9 @@ Empirical basis (deep investigation, Phase 1 session):
 
 - Dexed keeps hidden engine state that survives — and is not reset by — parameter
   re-application, `load_graph` (prepareToPlay), `load_state`, processor rebuild,
-  warm-up notes, or OSC/LFO KEY SYNC settings. Behavior is consistent with
+  warm-up notes, or OSC/LFO KEY SYNC settings. (Not to be confused with the warm-up render
+  D-DIVA-RENDER adds for Diva: that one absorbs Diva's ~126 ms parameter smoothing, a
+  different mechanism, and Dexed was measured clean of it.) Behavior is consistent with
   stale/uninitialized per-voice memory: two fresh instances match only when their
   allocation + render histories are identical (freeing an engine and creating a new
   one reuses dirty memory and diverges).
@@ -150,8 +184,13 @@ entry.
 
 Build the full pipeline (wrapper fixes → ParameterSpace → DatasetBuilder → PyTorch dataset →
 BaseModel + trivial baseline → metric panel) on **Dexed only**, producing a first results
-table. The Surge XT wrapper comes after, re-using the proven recipe. Rationale: fastest
+table. The second synth's wrapper comes after, re-using the proven recipe. Rationale: fastest
 end-to-end feedback; avoids a second subset decision while D1 is open.
+
+**Exception granted 2026-08-25 (D-DIVA-START).** The second synth is **Diva**, not Surge XT, and
+it starts before the benchmark table is finished. D-ORDER's condition is satisfied rather than
+waived: the Dexed slice runs end to end and D1 is locked, so neither reason for the ordering still
+applies. The rest of D-ORDER stands — Diva re-uses the proven recipe, it does not fork it.
 
 ### D-RENDERER — Rendering library is pluggable; DawDreamer is the default
 
@@ -172,6 +211,14 @@ wrapper, so it works with any renderer unchanged.
   in run metadata.
 - Engine choice was de-risked empirically by `scripts/benchmark_renderers.py`, which compares
   total render time (primary) and cross-engine audio agreement (secondary) over seeded patches.
+- **Amended 2026-08-25: pluggability is per wrapper, not universal.** `DivaWrapper` accepts
+  **DawDreamer only** and raises on any other renderer. Diva's parameter *index space* is
+  engine-specific — Pedalboard reports 2271 parameters where DawDreamer reports 2362, because it
+  drops the 91 whose names collide, so index 280 is a MIDI CC under Pedalboard and the last
+  synthesis parameter under DawDreamer. Diva's name→index table (which cannot be rebuilt from the
+  plugin, see D-DIVA-START) is written against DawDreamer, so another engine would silently
+  repoint every parameter. Refusing is the only safe behaviour. Dexed stays pluggable: its names
+  are unique, so its map is rebuilt per engine.
 
 **Benchmark results (2026-06-15)** — append-only; the decision above is unchanged.
 
@@ -476,6 +523,18 @@ step and runs locally on the Mac — see the Evaluator record below.) Consequenc
 deliberately **not** re-exported from `dataset/__init__`, and `dataset/__init__` exposes the
 generation API lazily (PEP 562 `__getattr__`), so importing the Dataset never drags in the
 synth / render stack. `torch` is added as a dependency (the framework's first torch user).
+
+**Amendment (2026-08-28): the corpus also records which synth built it.** With a second synth in
+the framework, the serialized `ParameterSpace` no longer identifies the plugin: Diva's narrowed
+corpus space (see D-DIVA-SUBSET) names 58 parameters that mean nothing to Dexed. So
+`run_summary.json` carries a `"synth"` field, written from the wrapper's `synth_name` and read back
+as a key of `dataset/render_backends._SYNTH_REGISTRY`. The Evaluator uses it to re-render on the
+synth the corpus was built with, instead of assuming Dexed (D-EVAL: the contract comes from the
+corpus, never from `config.py`).
+
+Unlike the render-contract fields, `"synth"` is **optional on read** and defaults to `dexed`: every
+corpus built before the field existed is Dexed, so old corpora keep evaluating unchanged rather than
+being invalidated.
 
 **Feasibility spike (2026-07-21)** — append-only; the decision above is unchanged. Tested whether the
 "setup choice, not a hard platform limit" claim actually holds, on the real PUT cluster
@@ -1111,6 +1170,522 @@ run planning: 200 epochs needs ~118 h, so `synthrl_i_config.yaml` truncates to 3
 
 Map and port fidelity: `docs/SYNTHRL_PORT.md`.
 
+### D-DIVA-START — u-he Diva is the second synthesizer (LOCKED 2026-08-25)
+
+The framework gets a second synthesizer, **u-he Diva**, before the Dexed benchmark table is
+finished. Diva is subtractive / analog-modelling where Dexed is FM, so the pair spans two synthesis
+paradigms rather than two instances of one — which is what turns the benchmark from a single-synth
+result into a comparative one.
+
+**This is an approved exception to D-ORDER and to the ROADMAP's Dexed-only scope**, taken by the
+user. It does not reopen D-ORDER: the Dexed vertical slice is already proven end to end (Phase 4
+plus every Phase 5 port), and D1 is locked, so the risk D-ORDER guarded against — a second subset
+decision taken while the first one was still open — no longer exists.
+
+**Why Diva** (feasibility survey over Surge XT, Diva, TAL-NoiseMaker and Vital, 2026-08-25):
+
+- It is a plain VST3, so `DawDreamerRenderer` hosts it unchanged. Vital has no usable headless
+  Python path.
+- It has a large public preset dataset that ships **parameter vectors, not just audio** (below).
+  Surge XT and TAL-NoiseMaker have no comparable dataset, and Surge's `.fxp` presets are an opaque
+  plugin chunk neither renderer will load.
+- It has direct precedent in the sound-matching literature (Esling et al., *Flow Synthesizer*,
+  DAFx 2019 / MDPI 2020), which is the source of both the parameter map and the dataset below.
+- It is installed and licensed on the user's machine.
+
+Surge XT is no longer the planned second synth. Where earlier entries name it (D-ORDER,
+D-RENDERER, D-FAMILIES) they should be read as "the second synth".
+
+**Parameter addressing: module-qualified names.** Diva reports **2362 VST3 parameters**. 2080 are
+`MIDI CC` JUCE passthroughs and one is `Program`, leaving **281 real parameters at indices 0–280** —
+comparable to Dexed's 152, not to the raw 2362. The 2081 non-synthesis parameters are excluded above
+the wrapper exactly as Dexed's are (D-EXCLUDED).
+
+Diva's plugin-reported names are **not unique**: 56 names are shared by 147 parameters (six `Rate`,
+six `Wet`, five `Model`, five `Feedback`, …). Taken as-is they would silently collapse 91 parameters
+in any name→index map, and `ParameterSpace.__init__` would raise on the duplicates. So a Diva
+parameter is addressed above the wrapper by its **module-qualified name** — `LFO1.Rate`,
+`VCF1.Model` — per the D-NAMING amendment.
+
+The module is not recoverable from the plugin. VST3 reports the bare display name only, and Diva
+ships no machine-readable parameter list (checked the `.vst3` bundle Resources, the
+`Locale/en.uhe-locale` strings, `NKS/u-he-Diva.xml` and the GUI `Scripts/EditorSetup.txt`); the Flow
+Synthesizer authors state they established the correspondence by hand. Changing renderer does not
+help: `PedalboardRenderer` only appears to report unique names because it drops the 91 colliding
+parameters, while DawDreamer reports them honestly. RenderMan remains unsupported (D-RENDERER).
+
+**The map is therefore a static, committed table**, `synth/diva/parameters.py`
+(`DIVA_PARAMETER_NAMES`; position in the list *is* the plugin parameter index), never recomputed at
+import time. It was derived from `code/synth/diva_params.txt` in `acids-ircam/flow_synthesizer`,
+which lists all 281 as `Module: Name` for Diva ~1.4. Diva 1.4.7 inserted 16 parameters, so the
+indices had drifted; realigning on the names pairs 265 exactly, and the 16 additions
+(`LFO1.Polarity`, `OSC.DigitalShape2..4`, `VCF1.ShapeMix`, `Phase1.Depth`, …) sit interior to known
+module blocks and take their neighbours' module. Result: 281/281, unique, no collisions.
+
+**Validated twice, independently**: `tests/test_diva_parameters.py` checks the table against the
+live plugin index by index (plugin-gated, and fails loudly if a Diva update reshuffles indices), and
+the preset dataset's own `param` keys overlap the table 281/281.
+
+**Preset source: the Flow Synthesizer Diva dataset**, `diva_raw.zip` (1.32 GB,
+https://nubo.ircam.fr/index.php/s/nL3NQomqxced6eJ) — **11,218 `.npz` files**, one per preset, named
+`<md5>_60_100.npz`. Each carries `param` (all 281 module-qualified names → values already normalized
+to [0, 1], keyed `'VCF1: Model'` where this project's table uses `'VCF1.Model'`), `audio` (88320
+float16 samples, ≈4.0 s at 22.05 kHz) and `chars` (a (10, 3) semantic-descriptor array).
+
+Because it ships **parameters and not only audio**, the shipped audio is not used: every preset is
+**re-rendered under this project's own contract** (D3 / D-REPRO / D-EVAL), exactly as the Dexed human
+corpora are. Its note 60 / velocity 100 / 4.0 s / 22.05 kHz happening to match D3 is a convenience,
+not a licence to reuse someone else's renders.
+
+One thing to check on first contact with the data, before building anything large from it: the
+realized distribution of every subset parameter across the 11,218 presets. If the corpus was
+generated rather than collected, parameters Flow Synthesizer froze are constant in it and must be
+dropped from the subset. See the deferred rule under **D-DIVA-SUBSET**.
+
+This **supersedes** the earlier plan to parse Diva's 486 factory `.h2p` presets with `THIRD PARTY`
+opt-in. Two consequences: **no `.h2p` parser is built** (the planned `synth/diva/patch.py` is
+dropped), and the third-party-preset licensing question does not arise. The `.h2p` path stays
+available as a fallback if the dataset turns out to be unusable.
+
+**Amendment (2026-08-30): the `.h2p` path is reinstated, for comparability rather than as a
+fallback.** `diva_raw` is not the diverse human corpus its name suggests: Flow Synthesizer
+generated it by varying only 64 continuous parameters from one fixed base patch, so it realizes
+just 58 of Diva's 237 subset parameters (D-DIVA-SUBSET's corpus-variance rule narrows it to
+that). The roadmap's leading plan for Dexed is "train human → test human" on the genuinely
+diverse ~30k-voice preset-gen-vae SQLite collection (D4); pairing that against `diva_raw` would
+compare Dexed's real preset population to a narrow synthetic one wearing a "human" label, which
+confounds the synth-type comparison this project is built to isolate.
+
+Diva's local install's own preset library is the fix: **561 factory presets** (also correcting
+the count above — 486 undercounts the 8 category folders and misses 75 more sitting at the
+library's top level) plus **871 `THIRD PARTY`** ones, **1432 `.h2p` files total**. The user's call:
+use all 1432, factory and third-party alike, opt-in on the licensing question the original plan
+flagged. A `.h2p` file's keys are Diva's internal short codes (`Atk`, `KeyFlw`, `DMS1`, ...) in
+`#cm=<Module>` sections, not the module-qualified names `synth/diva/parameters.py` uses, and about
+a third of the discrete ones store an option index while the rest store the displayed value —
+so `synth/diva/patch.py` is back in scope: a committed `param_map.py` deriving the key
+correspondence per module (value-compatibility as a hard filter — which values a key's observed
+range can represent against the plugin's own display grid, `get_parameter_text` swept per
+parameter — name similarity to rank the survivors, module-internal order as a weak tie-break) and
+an `.h2p` loader mirroring `dataset/diva_preset_loader.py`'s shape, verified by round-tripping the
+map through `get_parameter_text` over all 1432 presets. `diva_raw` is not dropped — it stays
+available as a second, narrower human-preset source alongside the `.h2p` one.
+
+**Landed (2026-08-30).** `synth/diva/h2p_param_map.py` (derived by `scripts/derive_diva_h2p_map.py`,
+committed static data like `parameters.py`), `synth/diva/patch.py` (parse + decode),
+`dataset/diva_h2p_preset_loader.py` (mirrors `diva_preset_loader.py`). `scripts/build_dataset.py`
+gets `--preset-format {h2p,npz}` on `human`/`hybrid`, **defaulting to `h2p`** — every existing
+`human --synth diva` command without the flag now builds from the new source, not `diva_raw`.
+
+263 of 281 parameters got a key (all 237 of the subset); the 18 that didn't are `OPT` (whole
+module, 15), `Scope1` (2) and `PCore.LED Colour` — none contributes a subset parameter, and OPT's
+43 keys against 15 real parameters are mostly internal housekeeping with no synthesis meaning, so
+guessing at them was deliberately skipped rather than risked. Verified by re-parsing all 1432
+presets through the derived map and applying every decoded value back to the live plugin:
+**0 mismatches** against `get_parameter_text` on the 266,352 checks that have a display-text
+signal to check against (`linear`/`grid`/`label` decodings), and all 110,264 `index`-kind
+decodings (no such signal exists for these by construction — the plugin's display is a label the
+`.h2p` value can't reach) landed in bounds. Confirms the coverage claim directly: a 300-preset
+`h2p` build realizes 226 of 237 subset parameters (95%) against `diva_raw`'s fixed 58.
+
+One category of error survives every check above: a swap between two parameters with identical
+value ranges and similar names round-trips perfectly and looks bounds-correct, so it would pass
+silently. Per the user's decision, the map was not to be treated as trusted for a full corpus
+build until Bruno A/B'd a handful of named presets — headless render against the same preset
+loaded in Diva's own GUI — by ear. **Done, 2026-08-30: passed.** Four presets chosen to stress
+the parameters no automated check can verify (`index`-kind: no display-text signal exists to
+check against) -- `5 PERCUSSIVE/HS Davogs Lilt.h2p` (arpeggiator on), `1 BASS/HS Black Fuzz.h2p`
+(non-default filter model and LFO waveform), `1 BASS/HS Bass Nine.h2p` (mono mode), and
+`THIRD PARTY/Basari/BAS Desert Wind.h2p` — rendered headlessly and compared by ear against the
+same presets loaded in Diva's GUI. Indistinguishable. The map is now trusted for a full corpus
+build.
+
+**Scope of the Diva port.** Wrapper (`synth/diva/synth.py`), subset (`synth/diva/subset.py`,
+D-DIVA-SUBSET), preset loader, and a `--synth {dexed,diva}` flag on `scripts/build_dataset.py`.
+Shared machinery moves into synth-neutral modules rather than being duplicated: `_make_wrapper` in
+`dataset/render_backends.py` becomes registry-backed, and the synth-agnostic half of
+`dataset/dexed_preset_loader.py` moves to a common module.
+
+`SynthRLi` is **out of scope for Diva**. It is the only registered family that renders with a live
+VST inside the training loop (D-RL-RENDER, verified across `models/registry.py`), and its cost was
+measured on Dexed only; every other family trains from a corpus with no plugin present (D-SELFDESC),
+so a built Diva corpus is enough for them. Consequently only `InProcessRenderBackend` and
+`FreshProcessRenderBackend` need to work with Diva — the two `Parallel*` backends are not validated
+against it.
+
+**Answered when the wrapper landed** (both were flagged here as not-to-be-assumed-from-Dexed, and
+both were measured rather than inherited): Diva does not reproduce in-process at all, far worse than
+Dexed's hidden-voice-state leak, but is bit-identical fresh-process — see **D-DIVA-RENDER**. And Diva
+needs a *wider* noise workaround than Dexed's, because it writes to stdout as well as stderr;
+`suppressed_stderr` moved to `synth/plugin_output.py` and gained a both-descriptor sibling.
+
+### D-DIVA-RENDER — Diva renders fresh-process only (LOCKED 2026-08-25)
+
+Diva corpora and evaluations render **one fresh process per render, at position 0**. The
+in-process reuse path (`InProcessRenderBackend`, and the `ParallelInProcessRenderBackend` the RL
+reward loop uses) is **not valid for Diva** and must refuse to run with it.
+
+This is stronger than D-REPRO's Dexed finding. Dexed leaks a little hidden voice state between
+in-process renders; Diva does not reproduce in-process at all.
+
+**Measurements (2026-08-25, `DivaWrapper`, DawDreamer, 22050 Hz, D3 render settings, Diva 1.4.7
+on Apple M5 / macOS 26.6.2).** Four consecutive renders of one identical patch through a single
+wrapper, parameter state re-applied before each:
+
+| comparison | waveform, max abs diff / peak | log-spectral distance | RMS drift |
+|---|---|---|---|
+| render 2 vs 1 | 1.393 | 7.72 dB | 0.24% |
+| render 3 vs 1 | 1.379 | 7.97 dB | 0.24% |
+| render 4 vs 1 | 1.400 | 7.85 dB | 0.18% |
+
+No two renders agreed, and the divergence starts at sample 16. Loudness is stable while the
+waveform is not, which is what per-note randomized oscillator phase / voice assignment looks like
+— Diva is an analog emulation and this is a feature of it. For scale, ~7.9 dB log-spectral
+distance is as large as the p90 *cross-engine* (DawDreamer vs Pedalboard) disagreement recorded
+for Dexed under D-RENDERER. It is not a rounding artefact.
+
+**Ruled out**: re-applying the full parameter state before each render (the fix that works for
+Dexed); zeroing all five `OPT.*Slop` parameters; zeroing `OSC.Drift`; raising `OPT.Accuracy` to
+`divine`. `VCC.MultiCore` is already `Off` in the loaded patch, so it is not the cause either.
+Each was tested and each left the divergence intact.
+
+**Amendment (2026-08-28): "loudness is stable" does not generalize.** The 0.18-0.24% RMS drift
+above holds for the patch it was measured on, not for Diva in general. Re-measured over eight
+uniform-sampled subset patches, consecutive in-process renders drifted **17.3%** in RMS on a loud
+one (peak 20.7) and 97.8% on a quiet one. Worse, five of those eight patches rendered *digitally
+silent* in-process while the same patches rendered audibly through fresh processes — so an
+in-process Diva corpus would not merely be noisy, it would contain empty audio for patches that
+are fine. The decision is unchanged and the case for it is stronger; only the "energy is stable
+while the waveform is not" reading is retired.
+
+**Amendment (2026-08-29): the table above is inflated by a render warm-up bug, now fixed.**
+
+Diva smooths parameter changes over ~126 ms of audio. `set_parameters` writes the values and the
+note starts at sample 0, so the opening of a render was a crossfade out of whatever the plugin held
+before — in a fresh process, Diva's init patch. Every corpus render is fresh-process, so every
+render was a "render 1" and **every sample in every Diva corpus carried it**, right on the attack.
+
+Evidence (2026-08-29, `scripts/measure_diva_warmup.py`, same hardware and settings as above):
+
+- A patch with every oscillator off *and* the VCA closed — nothing in it can make a sound — peaked
+  at **0.151** in its first 50 ms against 0.0035 after 0.5 s, and that opening correlates
+  **+0.9945** with the init patch's own opening.
+- A throwaway render in front of the scored one removes it: warm-up 0.00 s → 0.151,
+  0.05 s → 0.103, 0.10 s → 0.018, 0.20 s → 0.000, 0.30 s → 0.000.
+
+**Fixed**: `DivaWrapper.render_audio` issues one discarded `render_note` of `_WARMUP_SEC = 0.3` s
+before the scored render. This is now part of the Diva render contract — "position 0 of a fresh
+process" means position 0 *after* the warm-up. Bit-identity across processes survives it (3 patches,
+two independent processes each, matching sha256), so nothing else in this entry's contract changes.
+`tests/test_diva_wrapper.py::test_render_does_not_carry_the_previous_patch` is the regression test.
+
+**What this costs the 2026-08-25 table.** Its three rows compare render 1 — the contaminated one —
+against renders 2-4, so they conflate this bug with Diva's analog drift and overstate the drift.
+Re-measured over 8 uniform-sampled subset patches, 5 consecutive renders each (medians):
+
+| comparison | waveform, max abs diff / peak | log-spectral distance | RMS drift |
+|---|---|---|---|
+| render 2 vs 1 | 1.278 | 10.87 dB | 143% |
+| render 3 vs 2 | 1.177 | 8.00 dB | 138% |
+| render 4 vs 2 | 1.222 | 7.81 dB | 136% |
+| render 5 vs 2 | 1.167 | 8.05 dB | 135% |
+
+The drift-only rows sit ~2.9 dB below the contaminated one, and the size of that gap is
+patch-dependent (one of the eight measured 23.2 dB for 2-vs-1 against 8.1 dB for 3-vs-2).
+
+**The decision is unchanged and the case for it is undiminished.** This bug is *not* what
+D-DIVA-RENDER is about: **0 of the 8 patches** had any two renders past the first agree, at ~8 dB
+LSD. Diva still does not reproduce in-process, and fresh-process is still the only valid path. The
+2026-08-28 amendment above also stands on its own — its silent-in-process patches were renders past
+the first, which the warm-up bug does not touch.
+
+**Dexed does not have this bug** (measured 2026-08-29, same probe, `--synth dexed`). A patch with
+all six operator output levels at 0 renders **exactly 0.0** from sample 0, and unrelated patches'
+openings correlate +0.002 on average — no different from a mid-render window (+0.005). No Dexed
+corpus, checkpoint or result is affected, and `DexedWrapper` is deliberately left unchanged.
+
+**Consequence: the four existing Diva corpora were rebuilt** (2026-08-29): `diva_smoke_train`,
+`diva_smoke_test`, `diva_test_100`, `diva_serial_10`. Their `run_summary.json` differ from the
+originals only in `git_revision` and `near_silent_count`, and their `metadata.csv` only in the
+audio-derived columns (`rms`, `loudness_lufs`, `near_silent`) — same presets, same order, same
+parameter values, corrected audio. Two things the rebuild revealed:
+
+- **Near-silence was being masked.** `near_silent` counts rose 4→6 (of 30), 17→24 (of 100) and
+  0→1 (of 10), and one `diva_test_100` sample is now *digitally silent*: the leftover init patch
+  had been its only audible content.
+- **The bug was flattering every audio metric.** Re-evaluating `MeanParameterBaseline` on
+  `diva_smoke_test` left the parameter metrics bit-identical (the model and targets never changed)
+  but moved every audio metric 2.4-15.3% **worse** — LSD 0.880 → 0.914, MFCC MSE 3138 → 3617.
+  The contamination was a *shared* component of the target render and the prediction re-render, so
+  it inflated their apparent agreement. Any Diva number produced before 2026-08-29 is optimistic by
+  roughly that margin.
+
+**Fresh processes are bit-identical.** Three separate processes each constructing a `DivaWrapper`
+and rendering the same patch produced byte-identical audio (max abs diff exactly 0.0). So the
+render contract D-REPRO already mandates is sufficient for Diva as it stands; what changes is
+that for Diva it is the *only* option, not the strict setting of two.
+
+**Consequences.**
+
+- `FreshProcessRenderBackend` / `ParallelFreshProcessRenderBackend` are the only valid Diva
+  backends. The synth registry work must make choosing an in-process backend for Diva an error,
+  not a silent quality loss.
+  Implemented 2026-08-28: `BaseSynthesizer.supports_in_process_render` (True by default, False
+  on `DivaWrapper`), checked by both in-process backends.
+
+  **This costs almost nothing** (measured 2026-08-28, 12 random patches, 4.0 s at 22050 Hz,
+  10 workers, per render):
+
+  | synth | construct | in-process | fresh | parallel fresh | fresh / in-process |
+  |---|---|---|---|---|---|
+  | Dexed | 0.024 s | 0.004 s | 0.121 s | 0.031 s | 28.3x |
+  | Diva | 0.038 s | 0.138 s | 0.279 s | 0.058 s | **2.0x** |
+
+  Diva's own render dominates its cost, so process isolation is a 2x tax rather than Dexed's
+  28x, where a 4 ms render is swamped by process overhead. At 0.058 s per render the full
+  11,218-preset corpus is ~11 minutes, so throughput is not a reason to revisit this.
+- `SynthRLi` stays out of scope for Diva (already recorded under D-DIVA-START). Its fast reward
+  path is in-process reuse, which Diva cannot use, so it would be forced onto the slow path.
+- Nothing changes for training or evaluation of the other families: they consume a built corpus
+  and never render (D-SELFDESC), and the Evaluator already re-renders fresh-process (D-EVAL).
+- **`ParallelFreshProcessRenderBackend.render_batch` was not delivering a fresh process per
+  render** (found while measuring D-DIVA-SUBSET; **fixed 2026-08-28**). It called `Pool.map`
+  with the default chunksize, which packs `ceil(n / (4 * workers))` payloads into one worker
+  *task*; `maxtasksperchild=1` retires a worker after one task, not after one render, so every
+  render past the first in a chunk was an in-process render. It bit only above `4 * num_workers`
+  payloads, which is why no existing test caught it: the isolation test used 4 payloads on 2
+  workers and `test_parallel_matches_serial_with_real_dexed` uses 2 on 2, both below the
+  threshold and therefore chunked to 1 anyway. Symptom, with 4 workers and 53 payloads: renders
+  diverged from their chunk's first render by ~8 dB LSD, exactly Diva's in-process figure above,
+  following the payload's position modulo the worker count. The fix is `chunksize=1`, guarded by
+  `test_isolation_survives_a_batch_longer_than_the_chunking_threshold` (9 payloads on 2 workers,
+  which yields 5 distinct processes instead of 9 without it). This was a Dexed bug as much as a
+  Diva one, and it mattered for the SynthRL reward path, which renders a whole batch per step —
+  though no completed run is affected, because `cluster/training_configs/synthrl_i_config.yaml`
+  selects `render_isolation: reuse`, a different backend. `ParallelInProcessRenderBackend` is
+  deliberately left chunked: it reuses one wrapper per worker by design, so chunking costs it
+  nothing.
+
+**Also observed, cosmetic**: Diva writes a machine report, a revision banner and a long run of
+`makeAutomatable` warnings to **stdout** as well as stderr on every instantiation, and it writes
+a log file to `~/Desktop/Diva.log` that the host cannot redirect. `synth/plugin_output.py`
+provides `suppressed_plugin_output()` (both file descriptors) alongside the existing
+`suppressed_stderr()`; the desktop log file is unavoidable.
+
+### D-DIVA-SUBSET — Diva parameter subset (LOCKED 2026-08-25)
+
+The models estimate **237 of Diva's 281 real parameters**. The other 44 stay at the plugin's
+freshly-loaded patch state and are never estimated. `synth/diva/subset.py` is the definition,
+`tests/test_diva_subset.py` pins it.
+
+This is the Diva analogue of **D1** and it takes D1's rule unchanged: keep the learnable voice, drop
+what is **non-identifiable under D3** (one fixed note, C4, at fixed velocity 100, rendered to mono).
+Diva's non-identifiable set is larger and much less obvious than Dexed's, so every drop below was
+**measured on the live plugin** rather than argued from the manual.
+
+| dropped | n | why |
+|---|---|---|
+| `main.Output`, `PCore.LED Colour` | 2 | Already hidden by the wrapper: a master gain outside the patch, and a GUI tint. |
+| `OPT.*` (whole module) | 15 | `Accuracy` / `OfflineAcc` are CPU-versus-fidelity render settings that must stay fixed for a comparable corpus, and D-DIVA-RENDER's bit-identity rests on them. The five `*Slop` knobs scale pseudo-random per-voice drift: audible (`TuneSlop` 0 → 1 is worth 1.49 max-diff / 12.6 dB LSD) but the realization is a property of our render process, not of the patch. `V1Mod`..`V8Mod` are per-voice modulation offsets. |
+| `Scope1.Frequency`, `Scope1.Scale` | 2 | The on-screen oscilloscope. **Bit-identical audio at every setting** (measured). |
+| `VCC.*` except `Voice Stack` and `Transpose` | 12 | Voice allocation and inter-note behaviour, none of it revealable by one held note: polyphony count, keyboard mode, note priority, glide (needs a note to glide from, and **bit-identical at every setting**), pitch-bend range (no bend sent), `TuningMode` (no microtuning table loaded), `MultiCore` (a threading switch that must stay off to render reproducibly). `FineTuneCents` is the master-tune knob, the analogue of the `MASTER TUNE ADJ` that D1 drops for Dexed. |
+| `ENV{1,2}.Velocity`, `ENV{1,2}.KeyFollow`, `HPF.KeyFollow`, `VCF1.KeyFollow` | 6 | D1's dropped class under Diva's names. |
+| `VCA1.Pan`, `VCA1.PanModulation`, `VCA1.PanModDepth` | 3 | The render contract is mono. |
+| `Rtary{1,2}.Controller`, `ARP.Direction`, `ARP.Order` | 4 | Each selects a MIDI controller or reorders held notes. Neither exists under D3: no CC, wheel or aftertouch is sent, and the arpeggiator has exactly one note. **All options of each render bit-identically** (measured). |
+
+**On key-follow and velocity depth.** Unlike Dexed's keyboard scaling, these are not literally
+inaudible at a fixed note: `VCF1.KeyFollow` 0 → 1 moves the sound by 2.84 dB LSD. They are dropped
+because at one fixed note and velocity each collapses to a *constant* offset on the thing it scales,
+so it is confounded with that parameter. Measured: the `VCF1.KeyFollow = 1.0` render is matched to
+2.04 dB by simply moving `VCF1.Frequency` from 0.55 to 0.54, i.e. most of key-follow's whole range
+is reproducible by a ~0.02 shift in cutoff. That is the many-to-one D-KIND warns about, and it is
+the same reason D1 drops the Dexed equivalents.
+
+**On pan.** Panning survives a mono render only as the pan law's level trim, and it is symmetric
+about centre: pan 0.25 and pan 0.75 render **identically** (0.3338 max-diff / 3.1 dB LSD against
+centre, the same figure for both), and hard-left versus hard-right differ by 0.3 dB. That is a
+two-to-one map onto a level change `VCA1.Volume` already covers.
+
+**On what is kept that looks droppable.** `VCC.Voice Stack` (unison, up to 6) survives: it is
+strongly audible (up to 3.06 max-diff / 12.8 dB LSD), fully reproducible fresh-process at every
+setting, and its render cost is bounded and small (0.05 s at 1 voice → 0.25 s at 6, against a
+~0.2 s plugin instantiation that dominates either way). `ARP.OnOff` / `Octaves` / `Multiply` /
+`Restart` survive because an arpeggiator does change a single held note audibly (`Octaves` 1 → 4 is
+worth 10.7 dB LSD); only the two that permute the order of held notes are dropped.
+
+**Kind (D-KIND).** Kind follows the plugin's own discreteness with no exception list: all 102
+stepped parameters in the subset are categorical, the other 135 continuous. This is safe for Diva
+in a way it was not for Dexed, because every parameter Diva reports as stepped is a mode, model,
+waveform, switch or source selector whose adjacent steps are perceptually discontinuous. Diva has
+no stepped-but-smooth parameter of the 0-99 level kind that forced D1's per-parameter judgement.
+One consequence worth naming: `VCC.Transpose` is **categorical (49)** whereas the Dexed `TRANSPOSE`
+is continuous. That is not a change of rule. Dexed's VST3 does not report `TRANSPOSE` as discrete
+at all, so the wrapper had no grid to snap to; Diva reports its 49 semitone steps, and semitone
+steps are exactly the perceptual discontinuity D-KIND makes categorical.
+
+**Resulting ML-side vector**: 135 continuous + 102 one-hot blocks = **1100 dimensions**, against
+Dexed's 103 parameters / 333 dimensions. Diva's space is roughly 3.3x wider, which is the honest
+cost of a second synth of a different type and is itself a result worth reporting.
+
+**Comparison point, Flow Synthesizer** (Esling et al.), now read off rather than assumed. Their
+repo carries their estimated sets as `code/synth/params/{16,32,64,128}contparams.txt`. The name
+says it: they estimate **continuous parameters only**. Their largest set is 128 of Diva's 164
+continuous parameters and contains **none** of the 117 stepped ones, so `OSC.Model`, `VCF1.Model`,
+`LFO*.Waveform` and every switch is frozen. Their 64- and 128-parameter sets *do* include
+`ENV{1,2}.KeyFollow`, `ENV{1,2}.Velocity` and `VCF1.KeyFollow`, which this subset drops for the
+reason above. Their 281 names match `synth/diva/parameters.py` exactly after `': '` → `'.'`, which
+is a third independent confirmation of that table.
+
+In particular **they never estimate a modulation route**. All 27 source selectors are constants of
+their experiment, fixed per dataset in `code/synth/synthesize.py`:
+
+| their config | used for | live routes |
+|---|---|---|
+| `param_default_32.json` | the real datasets | `OSC.Tune1ModSrc=Env2`, `OSC.ShapeSrc=LFO2`, `VCF1.FreqModSrc=Env2`, `VCF1.FreqMod2Src=LFO2`, `VCF1.ShapeModSrc=LFO2`; the other 22 `none` |
+| `param_nomod.json` | the `toy` dataset | all `none` except `HPF.FreqModSrc=Env2` |
+
+So their task is *fixed modulation topology, estimate the depths and knobs through it*: every preset
+shares one wiring and the model never infers routing. This framework does **not** follow them, for
+two reasons. `ParameterSpace` supports categoricals natively (D-KIND), so the stepped parameters
+cost nothing structurally. And the benchmark is a comparison *across synths*: D1 estimates Dexed's
+`ALGORITHM`, 32 one-hot dimensions that are precisely the DX7's modulation topology, and Diva's
+source selectors are its direct analogue. Freezing Diva's routing while estimating Dexed's would
+put a structural asymmetry into the one thing the benchmark measures, and would flatter Diva's
+numbers for a reason unrelated to the model families. Their choice suits their research question
+(latent control of a fixed patch topology), not ours.
+
+**Deferred to corpus evidence: the modulation-source selectors.** 26 of the 237 kept parameters are
+24-option source selectors (27 exist; `VCA1.PanModulation` is dropped with the rest of pan), so they
+alone account for **624 of the 1100** ML dimensions. Some of those 24 options cannot be told apart
+under D3 — five name MIDI controllers that are never sent — which means irreducible classification
+error and a wide output layer spent on it. Restricting the option lists is mechanically supported:
+`ParameterSpecification.options` is an explicit list, so a categorical may carry a subset of the
+plugin's grid.
+
+It is **not** restricted here, and the reason is that the only evidence available at this point was
+bad. The measured collapse partitions the 24 options cleanly by the **parity of their index**, which
+is not a semantic explanation, and the derived-source options (`Rectify`, `Invert`, `Adder`, ...)
+measured as inert only because the probe had forced the `MOD.*` sources to `none`. Locking an option
+list on an unexplained mechanism is worse than carrying the full grid, which is also what D1 does
+for `ALGORITHM` (32) and `F COARSE` (32).
+
+**The rule to apply instead**, once the preset corpus is in hand (it is not yet downloaded) and
+**before any large Diva corpus is built**: compute the realized distribution of every subset
+parameter across all 11,218 presets, then
+
+- **zero variance across the corpus → drop the parameter.** It is a constant of the preset source,
+  not something a model can learn or be scored on.
+- **categorical whose realized options are a strict subset → restrict `options` to the realized
+  set.**
+
+That is mechanical, synth-agnostic, catches dead parameters outside the modulation section too, and
+rests on a defensible statement ("the corpus never uses these") rather than on a parity coincidence.
+
+**Why this may matter a lot here.** 11,218 is far more than any Diva preset bank ships, which
+suggests the corpus is generated rather than collected. If it was generated under Flow Synthesizer's
+`param_default_32.json` (see above), the routing is constant across every preset and the rule strips
+most of those 624 dimensions automatically. If instead they are genuine user presets with varied
+routing, the full grids stay and the Dexed-symmetry argument above carries. The data decides.
+
+**The data decided (2026-08-28).** `diva_raw.zip` was downloaded and every one of its 11,217
+presets read (`dataset/diva_preset_loader.py`; the archive holds 11,217 `.npz` files, not the
+11,218 quoted above). Its `param` keys are Diva's own module-qualified names written
+`'VCF1: Model'`, and translating that separator to `.` maps **all 281 onto
+`synth/diva/parameters.py` exactly**, nothing left over on either side. Values are already in the
+plugin's `[0, 1]` scale and every discrete parameter lands exactly on its option grid.
+
+The variance result is unambiguous:
+
+| | count |
+|---|---|
+| parameters in the corpus | 281 |
+| parameters that vary at all | **64** |
+| parameters constant across all 11,217 presets | 217 |
+| D-DIVA-SUBSET parameters that vary | **58** of 237 |
+| D-DIVA-SUBSET parameters that are constant | **179** of 237 |
+
+The 64 varying names are exactly Flow Synthesizer's own
+`code/synth/params/64contparams.txt`, and all 217 constants agree to 1e-5 with every value in
+`code/synth/param_default_32.json`. So the corpus is real presets **projected onto Flow
+Synthesizer's 64 continuous parameters and re-seated on their fixed base patch**. Not one
+categorical parameter varies, which confirms from the data what the routing table above inferred
+from their code: they estimate continuous parameters only.
+
+The six parameters that vary in the corpus but are *not* in D-DIVA-SUBSET are
+`ENV1.KeyFollow`, `ENV1.Velocity`, `ENV2.KeyFollow`, `ENV2.Velocity`, `VCF1.KeyFollow` and
+`VCA1.PanModDepth` — precisely the key-follow, velocity-depth and pan parameters dropped above as
+non-identifiable under D3. Flow Synthesizer estimates them because it does not hold note and
+velocity fixed the way D3 does.
+
+**Resolution (2026-08-28): build on `diva_raw` and let the rule narrow the corpus.** The rule is
+applied mechanically, so the Diva human corpus estimates the **58 continuous parameters the corpus
+actually varies**, ML dimension 58 (down from 1100), and no categoricals. The alternative, parsing
+the 561 factory `.h2p` presets, was priced and rejected for now: their keys are abbreviated
+(`Freq`, `KeyScl`, `SkRev`) and do not match the VST3 names, a file carries 341 keys against the
+plugin's 281 so positional alignment drifts inside a module, and the values are in real-world units
+needing a per-parameter inversion built from `get_parameter_text` sweeps. That is a hand-verified
+281-entry translation table plus a value inversion, for 4% of the preset count. See the follow-up
+below.
+
+**D-DIVA-SUBSET's 237-parameter list is unchanged.** It stays the synth's canonical subset. What
+narrows is the **corpus**, not the synth: `ParameterSpace.restrict` and
+`dataset.preset_loader_common.restrict_to_realized` apply the rule to a loaded preset set, and
+`DatasetBuilder` takes the resulting space through its `parameter_space` argument. Each corpus
+serializes its own space into `run_summary.json`, which D-SELFDESC already required, so two Diva
+corpora with different spaces coexist. Models trained on one are comparable only within it.
+
+**The dropped parameters are locked at the corpus' base patch, not Diva's init patch.** 49 of the
+217 constants disagree with the freshly-loaded Diva patch, so locking at the wrapper's defaults
+would render the presets on a different instrument from the one they were written for. Measured on
+one preset: peak 0.185 on the corpus base patch against 0.117 on the init patch. `DatasetBuilder`
+therefore also takes `default_params`, which `restrict_to_realized` returns alongside the narrowed
+space.
+
+**Three module groups keep this framework's defaults instead**, all outside the 237-parameter
+subset already: `OPT` (Accuracy and the five slop knobs -- render-quality settings, and
+D-DIVA-RENDER's bit-identity was measured at our values, not at the corpus' draft-quality
+`Accuracy=0`), `Scope1` (the oscilloscope, measured bit-identical at every setting), and `VCC`
+(voice allocation, glide and pitch-bend range, non-identifiable under D3 by construction). This
+means our renders are not sample-comparable with the audio shipped in `diva_raw`, which was already
+true: every sound is re-rendered under D3 regardless.
+
+**Follow-up: a second, synthetic Diva corpus over the full 237.** `SyntheticPresetSource` already
+takes the wrapper's own space, so a uniform-sampled Diva corpus needs no new machinery and would
+exercise the 102 categoricals and the one-hot path that the `diva_raw` corpus leaves untouched.
+Not scheduled.
+
+What it needs first is **not** what Dexed needed. 100 uniform draws over the 237-parameter subset,
+rendered fresh-process under D3, came out: 0 digitally silent, 2 near-silent (peak < 0.01), 62
+usable, and **36 clipping above full scale**, max peak 25.3. So Diva's uniform-sampling problem is
+level, not silence — the opposite of the Dexed case D-AUDIBLE was written for, where draws collapse
+to inaudible. `audible_sampling_ranges` is the wrong tool; what this needs is a level constraint or
+a normalization step, plus a `min_loudness_lufs` recalibration. Measured 2026-08-28.
+
+**Two constraints on whoever applies it.** The `ParameterSpace` is serialized into
+`run_summary.json` (D-SELFDESC), so narrowing an option list invalidates any corpus already built —
+which is exactly why this must land before the big build, and why keeping the grids wide now costs
+nothing. And the subset is shared by the synthetic and human preset sources: whatever the rule
+strips must be stripped for both, or uniform sampling would vary parameters the human corpus holds
+constant.
+
+**Measurement provenance** (2026-08-25, `DivaWrapper`, DawDreamer, 22050 Hz, D3 render settings,
+Diva 1.4.7 on Apple M5 / macOS 26.6.2). Every figure above comes from fresh-process renders
+(D-DIVA-RENDER), one process per render, with a control patch rendered first, mid-run and last and
+required to be bit-identical all three times. That control matters: the first attempt at these
+measurements used `Pool.map` without `chunksize=1`, which batches several renders into one worker
+task and therefore into one process, and every parameter then appeared audible at ~8 dB LSD, which
+is simply Diva's in-process divergence. See the note under **D-DIVA-RENDER**.
+
+**Caveat added 2026-08-29**: every render behind these figures predates the warm-up fix, so its
+first ~126 ms carried the init patch (see the 2026-08-29 amendment under **D-DIVA-RENDER**). No
+conclusion here changes. The drops argued on *bit-identical audio at every setting* are unaffected,
+because the contamination is identical across the settings compared and cancels. The drops argued
+on whole-render LSD are over a 4.0 s render of which the contaminated window is 3%, and the figures
+are large (2.84-12.8 dB). The one place to re-measure before relying on it again is the
+`VCF1.KeyFollow = 1.0` versus `VCF1.Frequency` 0.55 → 0.54 match at 2.04 dB, which is the entry's
+narrowest margin.
+
+
 ---
 
 ## OPEN
@@ -1136,6 +1711,80 @@ Change offline, so a voice is applied as parameters, not loaded as a patch — t
 **Still open**: which cartridge collection(s) — or other source — actually become the benchmark test
 set, and the final train/test composition. The built importer currently covers DX7 `.syx`; a
 non-SysEx source (e.g. Surge `.fxp`) would need its own importer.
+
+**Scope**: D4 is about **Dexed**. Diva's preset source is settled separately (D-DIVA-START,
+amended 2026-08-30: u-he's own installed `.h2p` library, 1432 factory + third-party presets, not
+the Flow Synthesizer collection); how that corpus splits into train and test is its own open
+question, raised when the Diva loader lands.
+
+**Landed (2026-08-30, revised 2026-08-31): Diva's train/test split and the size-matching hybrid.**
+Diva's `.h2p` library gives 1355 unique presets after dedup, two orders of magnitude short of the
+~29k-voice Dexed human corpus below. Training Diva on its own real-preset count against Dexed's
+would confound the FM-vs-subtractive comparison: a worse Diva score could mean "harder to invert"
+or just "far less training data," with no way to tell which apart.
+
+- **Split**: `--test-fraction 0.2 --split-seed 0`, matching Dexed's `full_preset-gen-vae` split
+  fraction exactly — **1084 human train presets / 271 human test presets**. The test set is
+  real presets only, on both synths (271 Diva vs Dexed's 5,862), each used once; per-sample
+  metrics don't need matched test-set sizes to be comparable, and synthesizing test material
+  would defeat the point of evaluating on real presets.
+- **Train set (revised 2026-08-31): a fixed human block plus a weighted augment/synthetic
+  remainder, not plain `augment`.** The original plan (`augment`-only, every one of 23,448
+  slots a perturbation of one of the 1084 real parents) was replaced after two problems
+  surfaced in discussion: (1) the goal shifted to exploring as much of the parameter space as
+  possible, which `augment` cannot do structurally — every child keeps ~231 of 237 parameters
+  pinned to one real preset's value, so no amount of jitter/perturbation-count tuning explores
+  beyond narrow neighborhoods around 1084 fixed points; and (2) hitting a target count by
+  sampling a small pool *with replacement* (e.g. a "human" quota above 1084) creates exact
+  duplicate training examples, which add no information, only reweight the loss toward
+  whichever presets happened to be redrawn.
+  The fix keeps all three sources but sizes them correctly:
+  - **1084 human** — every real train preset, exactly once, no repeats.
+  - **6570 augmented** — `HybridPresetSource`'s `augment` behavior (a handful of parameters
+    perturbed off a real parent: continuous nudges plus categorical reassignment), for
+    realistic local exploration around real presets.
+  - **15794 synthetic** — independent uniform draws over the full 237-parameter subset
+    (`ParameterSpace.sample_constrained`), for broad joint-space coverage no finite real
+    preset collection or local perturbation of one can reach.
+  Total: **23,448**, matching Dexed's real train count. Implemented as
+  `HybridPresetSource.MIXED` (`dataset/preset_sources.py`) — neither existing mode produces a
+  fixed block (`blend` coin-flips per slot, `augment` always perturbs), so `MIXED` fixes the
+  human block first and then weights each remaining slot between `augment` and independent
+  synthetic sampling via `synthetic_ratio`.
+- **Caveat, stated rather than hidden**: only 1084 + 6570 = 7654 of the 23,448 training
+  examples (33%) trace back to a real preset at all (once verbatim, or perturbed); the
+  remaining 67% are context-free random draws with no grounding in actual sound design. This
+  matches Dexed's training-set *scale*, not its *composition* — Dexed's 23,448 are all
+  independently real; the majority of Diva's are not real presets, augmented or otherwise.
+
+**Built (2026-09-01)**: `dataset/diva_h2p_hybrid_train` (`--mode mixed --synthetic-ratio 0.7063`)
+and the matching `dataset/diva_h2p_test` (271 real presets, same split) both exist. Realized
+counts came out 1084 human / 6660 augmented / 15704 synthetic — close to but not exactly the
+6570/15794 targets above, since `synthetic_ratio` weights each remaining slot independently
+rather than filling exact quotas. The fresh-process render timeout/crash fix (below) dropped 0
+of the 23,448 slots on the successful build.
+
+`scripts/evaluate.py`'s plugin preflight check was hardcoded to Dexed regardless of the corpus's
+actual synth; fixed to read `synth` from `run_summary.json` and resolve the matching plugin path
+(`e7b7d71`), mirroring what `Evaluator` already did. With that fix, `fit_model.py` and
+`evaluate.py` ran on both corpora with no Diva-specific flags anywhere, confirming the
+corpus-driven design (D-SELFDESC) needs no second-synth wiring in either script. First matched
+`MeanParameterBaseline` result (each synth fit on its own 23,448-preset train set, evaluated on
+its own human test set):
+
+| metric | Dexed (n=5862) | Diva (n=271) |
+|---|---|---|
+| param_mae | 0.180 | 0.209 |
+| param_accuracy | 0.593 | 0.763 |
+| lsd | 1.134 | 1.044 |
+| mel_mae | 31.4 | 26.4 |
+| mfcc_mae | 42.8 | 37.4 |
+| integrated_loudness_error | 15.7 | 9.17 |
+
+This is a floor baseline, not a real-model comparison — no conclusion about Dexed vs. Diva
+difficulty should be drawn from it. Diva's n=271 vs. Dexed's n=5862 also gives it a
+substantially wider confidence interval; bootstrap both before comparing real model results on
+this pair of corpora.
 
 **Update (roadmap)**: the leading plan is now "train human → test human" on the
 **preset-gen-vae human DX7 collection** (`paper_repos/preset-gen-vae/synth/dexed_presets.sqlite`,
@@ -1168,4 +1817,11 @@ porting it later is "point stage 2 at a second synth's corpus with the parameter
 actually needs is the second-synth commitment here, plus a `BaseSynthesizer` wrapper, a corpus, and a
 cluster feasibility spike for that plugin.
 
+**Update 2026-08-25**: the second synth is now committed — **Diva** (D-DIVA-START), not Surge XT.
+That does **not** unblock `SynthRL-o`. Its remaining cost is the in-training-loop render (D-RL-RENDER)
+against a plugin whose throughput has never been measured, and `SynthRLi` is explicitly out of scope
+for Diva for that reason; stage 3 inherits the same blocker. Whether a second synth adds *families*
+is still open here.
+
 **Blocks**: Phase 5. Resolve here before the Phase 5 family tasks start.
+

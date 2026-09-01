@@ -59,7 +59,7 @@ from synth.dexed import DexedWrapper, suppressed_stderr
 from synth.dexed.cartridge import NUM_VOICES, validate_cartridge, voice_names, voice_parameters
 from dataset.render_backends import (
     RenderSettings,
-    _make_wrapper,
+    make_wrapper,
     render_patch_in_fresh_process,
 )
 
@@ -138,7 +138,7 @@ def time_reuse_arm(
     load_start = time.perf_counter()
     try:
         with suppressed_stderr():
-            wrapper = _make_wrapper(renderer)
+            wrapper = make_wrapper(renderer)
     except Exception as error:  # noqa: BLE001 - report and skip, do not abort the whole run
         print(f"  [{renderer}] could not be constructed: {error}")
         return [], [], float("nan")
@@ -176,7 +176,7 @@ def time_reload_arm(
         wrapper = None  # free the previous engine before rebuilding (faithful teardown)
         reload_start = time.perf_counter()
         with suppressed_stderr():
-            wrapper = _make_wrapper("dawdreamer")
+            wrapper = make_wrapper("dawdreamer")
         reload_elapsed = time.perf_counter() - reload_start
 
         wrapper.set_parameters(patch)
@@ -208,7 +208,7 @@ def time_subprocess_arm(
     """
     context = mp.get_context("spawn")
     settings = RenderSettings.from_config()
-    payloads = [(patch, settings, "dawdreamer") for patch in patches]
+    payloads = [(patch, settings, "dawdreamer", "dexed") for patch in patches]
     renders: List[np.ndarray] = []
     per_render_seconds: List[float] = []
     last = time.perf_counter()

@@ -75,9 +75,10 @@ def _write_corpus(corpus_dir, waveforms, params_rows) -> None:
 class _FakeBackend:
     """Stands in for FreshProcessRenderBackend: returns a fixed waveform, no VST."""
 
-    def __init__(self, settings, renderer="dawdreamer"):
+    def __init__(self, settings, renderer="dawdreamer", synth_name="dexed"):
         self.settings = settings
         self.renderer = renderer
+        self.synth_name = synth_name
         self.closed = False
         self.rendered_params = []
 
@@ -141,8 +142,8 @@ def test_re_render_merges_prediction_over_defaults(corpus, tmp_path, monkeypatch
     # Re-instantiate the patched backend so we can inspect what it was asked to render.
     captured = {}
 
-    def _factory(settings, renderer="dawdreamer"):
-        backend = _FakeBackend(settings, renderer)
+    def _factory(*args, **kwargs):
+        backend = _FakeBackend(*args, **kwargs)
         captured["backend"] = backend
         return backend
 
@@ -296,6 +297,58 @@ def test_missing_render_field_is_a_hard_error(tmp_path, monkeypatch):
     corpus = RenderedCorpusDataset.load(corpus_dir)
     with pytest.raises(ValueError, match="render-contract fields"):
         Evaluator(corpus)
+
+
+# -- which synth the corpus is re-rendered on --------------------------------
+
+def _evaluated_backend(tmp_path, monkeypatch, synth=None):
+    """Run one evaluation over a fixture corpus and hand back the backend it used."""
+    from dataset.torch_dataset import RenderedCorpusDataset
+
+    corpus_dir = tmp_path / "run_synth"
+    _write_corpus(corpus_dir, [_sine()], [{"AMP": 0.2, "CAT": 0.0}])
+    summary = json.loads((corpus_dir / "run_summary.json").read_text())
+    if synth is None:
+        summary.pop("synth", None)
+    else:
+        summary["synth"] = synth
+    (corpus_dir / "run_summary.json").write_text(json.dumps(summary))
+
+    backends = []
+
+    def _record(*args, **kwargs):
+        backend = _FakeBackend(*args, **kwargs)
+        backends.append(backend)
+        return backend
+
+    monkeypatch.setattr(evaluator_module, "FreshProcessRenderBackend", _record)
+    evaluator = Evaluator(RenderedCorpusDataset.load(corpus_dir))
+    evaluator.evaluate(_FakeModel({"AMP": 0.2, "CAT": 0.0}), out_dir=tmp_path / "out")
+    return evaluator, backends[0]
+
+
+def test_corpus_without_a_synth_field_is_re_rendered_on_dexed(tmp_path, monkeypatch):
+    # Every corpus built before the framework had a second synth is Dexed and carries no
+    # "synth" key, so this field is optional where the render-contract fields are required.
+    evaluator, backend = _evaluated_backend(tmp_path, monkeypatch, synth=None)
+    assert evaluator._synth_name == "dexed"
+    assert backend.synth_name == "dexed"
+
+
+def test_corpus_is_re_rendered_on_the_synth_that_built_it(tmp_path, monkeypatch):
+    evaluator, backend = _evaluated_backend(tmp_path, monkeypatch, synth="diva")
+    assert evaluator._synth_name == "diva"
+    assert backend.synth_name == "diva"
+
+
+def test_every_wrapper_names_a_synth_the_render_registry_knows():
+    # run_summary.json's "synth" is written from the wrapper and read back as a registry
+    # key; the two must not drift apart.
+    from dataset.render_backends import _SYNTH_REGISTRY
+    from synth.dexed import DexedWrapper
+    from synth.diva import DivaWrapper
+
+    assert {DexedWrapper.synth_name, DivaWrapper.synth_name} == set(_SYNTH_REGISTRY)
 
 
 # -- plugin-dependent: perfect-prediction floor (D-REPRO) --------------------

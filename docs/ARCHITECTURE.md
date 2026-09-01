@@ -1,8 +1,9 @@
 # Architecture — pipeline and module map
 
-The framework renders Dexed (DX7) presets to audio, trains models to predict the
-parameters back from that audio, and scores the predictions with a fixed metric panel.
-This doc answers "what file does what, and in which order does data flow through them".
+The framework renders synthesizer presets to audio — Dexed (DX7) and u-he Diva
+(D-DIVA-START), selected per run via `--synth` — trains models to predict the parameters
+back from that audio, and scores the predictions with a fixed metric panel. This doc
+answers "what file does what, and in which order does data flow through them".
 
 It states facts only. The *why* behind a design lives in [`DECISIONS.md`](DECISIONS.md)
 (referenced inline by ID, e.g. D-REPRO); project terms are defined in
@@ -16,16 +17,20 @@ flowchart TD
         RAND["Random draws<br>synth/parameter_space.py"]
         SYX["DX7 .syx cartridges<br>synth/dexed/cartridge.py<br>dataset/dexed_preset_loader.py"]
         SQL["preset-gen-vae SQLite DB<br>dataset/dexed_sqlite_preset_loader.py"]
+        DIVAH2P["Diva's installed .h2p library<br>synth/diva/patch.py<br>dataset/diva_h2p_preset_loader.py"]
+        DIVANPZ["Flow Synthesizer .npz presets<br>dataset/diva_preset_loader.py"]
         SRC["PresetSource<br>dataset/preset_sources.py"]
         RAND --> SRC
         SYX --> SRC
         SQL --> SRC
+        DIVAH2P --> SRC
+        DIVANPZ --> SRC
     end
 
     subgraph BUILD["2 · Dataset build"]
         BUILDER["DatasetBuilder<br>dataset/builder.py"]
         BACKEND["Render backend<br>dataset/render_backends.py"]
-        WRAPPER["DexedWrapper<br>synth/dexed/synth.py"]
+        WRAPPER["Synth wrapper (--synth)<br>synth/dexed/synth.py or synth/diva/synth.py"]
         ENGINE["Renderer<br>synth/renderers/"]
         BUILDER --> BACKEND --> WRAPPER --> ENGINE
     end
@@ -66,8 +71,8 @@ A typical full run, script by script:
 3. `scripts/evaluate.py` — load the checkpoint, score it on the held-out corpus, write
    `results/<corpus>/<model>/`.
 
-Steps 1 and 3 need the Dexed VST locally (they render audio); step 2 does not — it reads
-only the corpus on disk, so training can run on a cluster.
+Steps 1 and 3 need the corpus's synth VST locally (they render audio); step 2 does not —
+it reads only the corpus on disk, so training can run on a cluster.
 
 Every step can be driven either from the terminal (the scripts above) or from the local
 Streamlit **dashboard**, which builds and subprocesses the exact same commands. See the
@@ -89,9 +94,15 @@ directories. Everything else reads paths from here, never from `.env` directly.
 | `dexed/synth.py` | `DexedWrapper`, the concrete Dexed implementation. Addresses parameters by plugin-reported name (D-NAMING) and delegates all rendering to a pluggable `Renderer`. |
 | `dexed/subset.py` | The locked 103-parameter Dexed subset (D1). Builds the project's `ParameterSpace` from a live wrapper. |
 | `dexed/cartridge.py` | Parses DX7 `.syx` cartridges (32-voice bulk dumps) into named Dexed parameter dicts, normalized the way Dexed normalizes them. |
+| `diva/synth.py` | `DivaWrapper`, the second synthesizer (u-he Diva, D-DIVA-START). Diva's plugin-reported names collide (e.g. six parameters called `Rate`), so parameters are addressed by **module-qualified name** (`'VCF1.Model'`) resolved through the static table in `diva/parameters.py` — VST3 never reports the owning module. DawDreamer-only (Pedalboard drops the colliding names and shifts every index). `render_audio` issues one discarded ~0.3 s warm-up render before the scored one, to absorb Diva's own parameter-smoothing rather than the previous patch's tail (see D-DIVA-RENDER). |
+| `diva/parameters.py` | `DIVA_PARAMETER_NAMES`: the static, committed index→module-qualified-name table (position in the list is the plugin index), derived from the Flow Synthesizer project and checked against the live plugin at wrapper construction. |
+| `diva/subset.py` | The locked 237-of-281-parameter Diva subset (D-DIVA-SUBSET). Builds the project's `ParameterSpace` from a live `DivaWrapper`, the same shape as `dexed/subset.py`. |
+| `diva/h2p_param_map.py` | `H2P_PARAMETER_MAP`: the static, committed `(module, .h2p key) -> Decoding` table (parameter name + `linear`/`grid`/`label`/`index` decode kind), derived by `scripts/derive_diva_h2p_map.py` from the live plugin's display grids and the whole local `.h2p` preset library. Never recomputed at import time, for the same reason `parameters.py` isn't. |
+| `diva/patch.py` | `parse_h2p` (reads a `.h2p` file's `#cm=` sections into `{module: {key: raw_value}}`, stopping at the binary tail) and `patch_parameters` (decodes through `h2p_param_map.py` into module-qualified names → normalized `[0, 1]` floats). |
+| `plugin_output.py` | `suppressed_plugin_output` / `silence_plugin_output_from_now_on`: fd-level stdout+stderr suppression, needed because Diva logs to stdout as well as stderr and logs again from its destructor at process teardown (Dexed keeps its own narrower `suppressed_stderr` in `dexed/synth.py` rather than importing this — see the module docstring for why). |
 | `renderers/base.py` | `Renderer`, the only engine-specific layer: enumerate parameters, set one by index, render a note. |
-| `renderers/dawdreamer_renderer.py` | Default engine, backed by DawDreamer. |
-| `renderers/pedalboard_renderer.py` | Second engine, backed by Pedalboard; used to cross-check renders (D-RENDERER). Never mixed with DawDreamer within a run. |
+| `renderers/dawdreamer_renderer.py` | Default engine, backed by DawDreamer. The only renderer Diva supports. |
+| `renderers/pedalboard_renderer.py` | Second engine, backed by Pedalboard; used to cross-check Dexed renders (D-RENDERER). Never mixed with DawDreamer within a run. |
 
 ### `dataset/` — corpus building and loading
 
@@ -99,12 +110,16 @@ directories. Everything else reads paths from here, never from `.env` directly.
 | --- | --- |
 | `preset_sources.py` | `PresetSource` decides *which* presets exist: synthetic (random draws), human (real presets projected onto the subset), or hybrid (a blend). Deterministic in the master seed. |
 | `builder.py` | `DatasetBuilder` renders a `PresetSource` into a corpus: one WAV + one metadata row per preset, plus `run_summary.json`. Re-runs with the same seed are bit-identical. |
-| `render_backends.py` | *How* each render runs: `RenderSettings` (the render contract) plus in-process and fresh-process backends. Fresh-process renders each preset in a new OS process at position 0 (D-REPRO). |
-| `dexed_preset_loader.py` | Loads `.syx` cartridge voices, deduplicates near-twins on their subset projection, and makes a seeded, disjoint train/test split. |
+| `render_backends.py` | *How* each render runs: `RenderSettings` (the render contract) plus a registry-backed `make_wrapper(renderer, synth_name)` (`dexed` / `diva`) and the render backends — `InProcessRenderBackend` (fast, reused wrapper), `FreshProcessRenderBackend` (one spawned worker per render at position 0, D-REPRO), and parallel variants `Parallel{Fresh,InProcess}RenderBackend` (opt-in via `--workers`, SynthRL's RL reward path; not validated against Diva). Diva always takes the fresh-process path (D-DIVA-RENDER) regardless of `--fresh-process`, since it does not reproduce in-process at all. |
+| `preset_loader_common.py` | The synth-agnostic half every human-preset loader shares: `LoadedPreset`, near-twin deduplication on the subset projection, the seeded train/test split, and `restrict_to_realized` (drops subset parameters a preset source never varies — the corpus-variance rule under D-DIVA-SUBSET). Only the file reading is synth-specific. |
+| `dexed_preset_loader.py` | Loads `.syx` cartridge voices via `preset_loader_common`. |
 | `dexed_sqlite_preset_loader.py` | Same job for the ~30k-voice preset-gen-vae DX7 SQLite database (`paper_repos/preset-gen-vae/`). |
+| `diva_preset_loader.py` | Loads the Flow Synthesizer `diva_raw.zip` collection (11,218 `.npz` presets, one per file) via `preset_loader_common`. Names are matched onto `synth/diva/parameters.py` by string (the corpus writes `'VCF1: Model'`, this project `'VCF1.Model'`); the shipped audio is discarded and every preset is re-rendered under this project's own contract. Realizes only 58 of 237 subset parameters (it was itself generated by varying 64 continuous parameters off one fixed base patch), which is why it is no longer the default. |
+| `diva_h2p_preset_loader.py` | Loads u-he's own installed `.h2p` preset library (factory + `THIRD PARTY`, 1432 files) via `preset_loader_common`, decoding through `synth/diva/patch.py`. The default Diva human source (`--preset-format h2p` on `scripts/build_dataset.py`) since D-DIVA-START's 2026-08-30 amendment: real, hand-made presets realize 226 of 237 subset parameters at 300 presets, against `diva_preset_loader.py`'s fixed 58. |
 | `torch_dataset.py` | `RenderedCorpusDataset`: PyTorch view of a corpus on disk, emitting `(raw waveform, ML-side target vector)` pairs. Rebuilds the `ParameterSpace` from `run_summary.json`, so no VST is needed (D-SELFDESC). Feature extraction is each model's own job. |
 
-Built corpora land under `dataset/<run-name>/` (gitignored).
+`scripts/build_dataset.py` takes `--synth {dexed,diva}` (default `dexed`) on every
+subcommand. Built corpora land under `dataset/<run-name>/` (gitignored).
 
 ### `models/` — the model families
 
@@ -138,7 +153,7 @@ Built corpora land under `dataset/<run-name>/` (gitignored).
 | `registry.py` | `METRIC_PANEL`: 13 per-sample metric specs across the parameter, magnitude, timbre, loudness, and pitch axes. Holds specs; never runs them. |
 | `metrics/parameter.py` | Parameter-axis metrics over ML-side vectors (secondary/diagnostic). |
 | `metrics/audio_based.py` | Audio metrics over raw waveforms: spectral magnitude, MFCC timbre, loudness, and F0 pitch. Embedding-based perceptual metrics are out of scope (D-METRIC-PERCEPTUAL). |
-| `evaluator.py` | `Evaluator`: per corpus sample, predict → re-render the prediction fresh-process (D-REPRO) → run the panel. Writes `results/<corpus>/<model>/{per_sample.csv, eval_summary.json}`. Reads the render contract from the corpus, never from `config.py` (D-EVAL). |
+| `evaluator.py` | `Evaluator`: per corpus sample, predict → re-render the prediction fresh-process (D-REPRO) → run the panel. Writes `results/<corpus>/<model>/{per_sample.csv, eval_summary.json}`. Reads the render contract **and the synth** from the corpus, never from `config.py` (D-EVAL); a corpus built before the second synth carries no `"synth"` key and defaults to Dexed. |
 
 Outputs under `results/` and `checkpoints/` are gitignored.
 
@@ -148,13 +163,15 @@ Outputs under `results/` and `checkpoints/` are gitignored.
 | --- | --- |
 | `verify_dexed.py` | Smoke-test: renders a random patch through the local VST, writes a verification WAV, exits non-zero on failure. |
 | `render_preset.py` | Renders one voice of a `.syx` cartridge to WAV for listening. |
-| `build_dataset.py` | CLI around `DatasetBuilder`: build a synthetic, human, or hybrid corpus. |
+| `build_dataset.py` | CLI around `DatasetBuilder`: build a synthetic, human, or hybrid corpus. `--synth {dexed,diva}` (default `dexed`) picks the synthesizer; `--preset-format {h2p,npz}` (default `h2p`) picks Diva's human source; `--workers N` parallelizes fresh-process partitions across worker processes without changing the rendered audio. |
 | `build_presetgen_corpus.py` | Builds a training corpus from the preset-gen-vae SQLite collection. |
 | `fit_model.py` | Fits any registered model family (`--model`) on a corpus, saves the checkpoint `evaluate.py` loads. |
 | `evaluate.py` | Runs a checkpoint through the `Evaluator` on a corpus; writes the results table. |
 | `benchmark_renderers.py` | D-RENDERER experiment: speed and audio agreement of the three render strategies (reuse, reload, Pedalboard). |
 | `measure_context_leakage.py` | D-RENDERER experiment: tests whether cross-engine divergence is within-engine context leakage. |
 | `render_divergence_examples.py` | D-RENDERER experiment: renders the most divergent patches through all three strategies for side-by-side listening. |
+| `measure_diva_warmup.py` | D-DIVA-RENDER experiment: measures Diva's render-opening contamination (parameter-smoothing crossfade from the previous patch) across a warm-up sweep; `--synth dexed` runs the same probes against Dexed as a control. |
+| `derive_diva_h2p_map.py` | Derives `synth/diva/h2p_param_map.py`: sweeps the live plugin's display grids, scans every `.h2p` preset under `config.DIVA_PRESETS_PATH`, and runs a per-module bipartite assignment (value compatibility as a hard filter, name similarity as the ranker) to resolve each `.h2p` key onto its parameter. `--write-map` regenerates the committed table; otherwise prints the report (coverage, contested rows). |
 
 ### `dashboard/` — the local control panel
 

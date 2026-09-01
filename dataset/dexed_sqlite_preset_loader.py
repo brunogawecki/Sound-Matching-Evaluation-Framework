@@ -33,7 +33,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from synth.parameter_space import ParameterSpace
-from .dexed_preset_loader import (
+from .preset_loader_common import (
     LoadedPreset,
     PresetSplit,
     deduplicate_presets,

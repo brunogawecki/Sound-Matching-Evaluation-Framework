@@ -13,11 +13,19 @@ DEXED_PATH = os.getenv("DEXED_PATH", "/Library/Audio/Plug-Ins/VST3/Dexed.vst3")
 DIVA_PATH = os.getenv("DIVA_PATH", "/Library/Audio/Plug-Ins/VST3/Diva.vst3")
 SURGE_XT_PATH = os.getenv("SURGE_XT_PATH", "/Library/Audio/Plug-Ins/VST3/Surge XT.vst3")
 
-# Human preset collections (Git LFS-backed; run `git lfs pull` to materialize)
+# Human preset collections. The Dexed database is Git LFS-backed (`git lfs pull` to
+# materialize); the Diva corpus is a 1.4 GB manual download, see dataset/diva_preset_loader.py.
 PRESETGEN_DB_PATH = os.getenv(
     "PRESETGEN_DB_PATH",
     str(Path(__file__).parent.absolute() / "paper_repos" / "preset-gen-vae" / "synth" / "dexed_presets.sqlite"),
 )
+DIVA_RAW_PATH = os.getenv(
+    "DIVA_RAW_PATH",
+    str(Path(__file__).parent.absolute() / "paper_repos" / "flow_synthesizer" / "diva_raw.zip"),
+)
+# u-he's own installed .h2p preset library (factory + THIRD PARTY): a diverse human corpus,
+# unlike diva_raw's narrow synthetic generation. See dataset/diva_h2p_preset_loader.py.
+DIVA_PRESETS_PATH = os.getenv("DIVA_PRESETS_PATH", "/Library/Audio/Presets/u-he/Diva")
 
 # Audio Rendering Defaults
 SAMPLE_RATE = int(os.getenv("DEFAULT_SAMPLE_RATE", 22050))

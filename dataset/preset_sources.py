@@ -21,7 +21,7 @@ import numpy as np
 from synth.parameter_space import ParameterSpace
 
 if TYPE_CHECKING:
-    from .dexed_preset_loader import LoadedPreset
+    from .preset_loader_common import LoadedPreset
 
 # Record-level provenance tags (the dataset-level method lives in the run summary).
 METHOD_SYNTHETIC = "synthetic"
@@ -218,13 +218,25 @@ class CorpusPresetSource(PresetSource):
 class HybridPresetSource(PresetSource):
     """Combine human-train presets with synthetic material (the "hybrid" method).
 
-    Two construction modes:
+    Three construction modes:
 
     * ``"blend"`` -- each slot is, with probability ``synthetic_ratio``, a fresh
-      synthetic draw; otherwise a randomly chosen human-train preset.
+      synthetic draw; otherwise a randomly chosen human-train preset (drawn with
+      replacement, so a small human pool repeats verbatim to fill a larger count).
     * ``"augment"`` -- each slot perturbs a randomly chosen human-train preset:
       ``num_perturbed_params`` parameters are jittered (continuous) or flipped
       (categorical, only if ``flip_categoricals``), tagged with its parent.
+    * ``"mixed"`` -- a fixed human block plus a weighted augment/synthetic
+      remainder, for when the human pool is too small relative to ``count`` for
+      ``blend``'s with-replacement repeats to make sense. Every human-train
+      preset appears **exactly once** (``count`` must be at least
+      ``len(human_presets)``); the remaining ``count - len(human_presets)``
+      slots split between ``augment`` (probability ``1 - synthetic_ratio``) and
+      fresh synthetic draws (probability ``synthetic_ratio``), using the same
+      ``num_perturbed_params`` / ``jitter`` / ``flip_categoricals`` knobs as
+      plain ``augment``. This keeps every real preset present once (no
+      information-free duplicates) while letting the remainder explore beyond
+      the narrow neighborhoods local perturbation alone can reach.
 
     Material derives only from the human **train** partition, so it never leaks
     the held-out human test set into training.
@@ -232,6 +244,7 @@ class HybridPresetSource(PresetSource):
 
     BLEND = "blend"
     AUGMENT = "augment"
+    MIXED = "mixed"
 
     def __init__(
         self,
@@ -248,12 +261,18 @@ class HybridPresetSource(PresetSource):
         partition: str = "train",
         sampling_ranges: Optional[Dict[str, Tuple[float, float]]] = None,
     ):
-        if mode not in (self.BLEND, self.AUGMENT):
+        if mode not in (self.BLEND, self.AUGMENT, self.MIXED):
             raise ValueError(
-                f"Unknown hybrid mode '{mode}'; expected '{self.BLEND}' or '{self.AUGMENT}'."
+                f"Unknown hybrid mode '{mode}'; expected '{self.BLEND}', '{self.AUGMENT}' or "
+                f"'{self.MIXED}'."
             )
         if not human_presets:
             raise ValueError("HybridPresetSource requires at least one human (train) preset.")
+        if mode == self.MIXED and count < len(human_presets):
+            raise ValueError(
+                f"'mixed' mode includes every human-train preset exactly once "
+                f"({len(human_presets)} of them); count ({count}) must be at least that many."
+            )
         self._mode = mode
         self._human_presets = list(human_presets)
         self._parameter_space = parameter_space
@@ -323,9 +342,31 @@ class HybridPresetSource(PresetSource):
             slot=slot,
         )
 
+    # -- mixed -----------------------------------------------------------------
+    def _mixed_slot(self, slot: int, attempt: int) -> PresetRecord:
+        # The first len(human_presets) slots are the fixed human block, one preset
+        # each, in loader order -- never redrawn (see resample below).
+        if slot < len(self._human_presets):
+            return replace(self._human_presets[slot], partition=self._partition, slot=slot)
+        # Tags 3/4 here are disjoint from augment's own 0/1 and blend's 0/1/2, so a
+        # slot's synthetic-vs-augment assignment is stable across resample attempts
+        # (attempt only perturbs the draw within whichever branch was chosen).
+        if _rng(self._seed, slot, 3).random() < self._synthetic_ratio:
+            return PresetRecord(
+                params=self._parameter_space.sample_constrained(
+                    _rng(self._seed, slot, 4, attempt), self._sampling_ranges
+                ),
+                method=METHOD_SYNTHETIC,
+                partition=self._partition,
+                slot=slot,
+            )
+        return self._augment_slot(slot, attempt)
+
     def _build_slot(self, slot: int, attempt: int) -> PresetRecord:
         if self._mode == self.BLEND:
             return self._blend_slot(slot, attempt)
+        if self._mode == self.MIXED:
+            return self._mixed_slot(slot, attempt)
         return self._augment_slot(slot, attempt)
 
     def iter_presets(self) -> Iterator[PresetRecord]:
@@ -333,7 +374,8 @@ class HybridPresetSource(PresetSource):
             yield self._build_slot(slot, 0)
 
     def resample(self, record: PresetRecord, attempt: int) -> Optional[PresetRecord]:
-        # A blended human pick is a fixed preset and cannot be redrawn.
+        # A human pick (blend's coin flip, or mixed's fixed block) is a fixed preset
+        # and cannot be redrawn.
         if record.method == METHOD_HUMAN:
             return None
         return self._build_slot(record.slot, attempt)
@@ -349,6 +391,12 @@ class HybridPresetSource(PresetSource):
         }
         if self._mode == self.BLEND:
             summary["synthetic_ratio"] = self._synthetic_ratio
+            summary["sampling_ranges"] = dict(self._sampling_ranges)
+        elif self._mode == self.MIXED:
+            summary["synthetic_ratio"] = self._synthetic_ratio
+            summary["num_perturbed_params"] = self._num_perturbed_params
+            summary["jitter"] = self._jitter
+            summary["flip_categoricals"] = self._flip_categoricals
             summary["sampling_ranges"] = dict(self._sampling_ranges)
         else:
             summary["num_perturbed_params"] = self._num_perturbed_params

@@ -42,14 +42,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 from synth.dexed import DexedWrapper
+from dataset.render_backends import RenderSettings
 from scripts.benchmark_renderers import (
     DEFAULT_CARTRIDGES_DIR,
     build_cartridge_patches,
     build_patches,
     suppressed_stderr,
-    _make_wrapper,
+    make_wrapper,
     _render,
-    _render_patch_in_fresh_process,
+    render_patch_in_fresh_process,
 )
 
 # Random-mode defaults: most divergent patches from host_agreement_3way_seed0.csv
@@ -87,17 +88,17 @@ def render_arm_sequence(arm, patches, selected, max_index):
         # the hidden voice state (used as the clean reference, not an engine-level fix).
         # Only the selected patches are rendered; context replay is unnecessary.
         context = mp.get_context("spawn")
+        settings = RenderSettings.from_config()
+        payloads = [(patches[i], settings, "dawdreamer", "dexed") for i in selected_sorted]
         with context.Pool(processes=1, maxtasksperchild=1) as pool:
-            results = pool.map(
-                _render_patch_in_fresh_process, [patches[i] for i in selected_sorted]
-            )
+            results = pool.map(render_patch_in_fresh_process, payloads, chunksize=1)
         for index, audio in zip(selected_sorted, results):
             captured[index] = np.asarray(audio)
         return captured
     if arm in ("reuse", "pedalboard"):
         renderer = "dawdreamer" if arm == "reuse" else "pedalboard"
         with suppressed_stderr():
-            wrapper = _make_wrapper(renderer)
+            wrapper = make_wrapper(renderer)
         for i in range(max_index + 1):
             wrapper.set_parameters(patches[i])
             audio = _render(wrapper)
@@ -108,7 +109,7 @@ def render_arm_sequence(arm, patches, selected, max_index):
         for i in range(max_index + 1):
             wrapper = None  # drop previous engine before rebuilding (faithful teardown)
             with suppressed_stderr():
-                wrapper = _make_wrapper("dawdreamer")
+                wrapper = make_wrapper("dawdreamer")
             wrapper.set_parameters(patches[i])
             audio = _render(wrapper)
             if i in selected:

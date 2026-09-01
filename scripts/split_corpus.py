@@ -33,7 +33,7 @@ from synth.dexed import DexedWrapper
 from dataset.builder import DatasetBuilder
 from dataset.render_backends import FreshProcessRenderBackend, RenderSettings
 from dataset.preset_sources import CorpusPresetSource
-from dataset.dexed_preset_loader import split_indices
+from dataset.preset_loader_common import split_indices
 from dataset.corpus_splitter import (
     assert_splittable,
     clean_records,
