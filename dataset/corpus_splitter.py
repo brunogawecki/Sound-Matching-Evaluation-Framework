@@ -24,6 +24,7 @@ import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 import config
@@ -75,6 +76,46 @@ def split_source_description(
         "split_seed": int(split_seed),
         "count": int(count),
     }
+
+
+def subsample_indices(count: int, size: int, seed: int = 0) -> List[int]:
+    """Seeded selection of ``size`` positions out of ``range(count)``, ascending.
+
+    Same determinism shape as :func:`~dataset.preset_loader_common.split_indices`
+    (permute with the seed, take a prefix), so a subsampled corpus is reproducible
+    from its recorded ``subsample_seed`` alone.
+    """
+    if size > count:
+        raise ValueError(f"Cannot subsample {size} samples from a corpus of {count}.")
+    order = np.random.default_rng(seed).permutation(count)
+    selected = set(order[:size].tolist())
+    return [index for index in range(count) if index in selected]
+
+
+def subsample_source_description(
+    summary: Dict[str, object],
+    subsample_from: str,
+    subsample_seed: int,
+    count: int,
+    source_count: int,
+) -> Dict[str, object]:
+    """The run-summary ``source`` block for a subsampled corpus.
+
+    Keeps the source's own ``method`` / ``partition`` and the split provenance that
+    produced it, then records the subsample on top, so the chain back to the original
+    build stays readable in one file.
+    """
+    source = summary.get("source") or {}
+    description = dict(source) if isinstance(source, dict) else {}
+    description.update(
+        {
+            "subsample_from": subsample_from,
+            "subsample_seed": int(subsample_seed),
+            "subsample_source_count": int(source_count),
+            "count": int(count),
+        }
+    )
+    return description
 
 
 def clean_records(df_partition: pd.DataFrame) -> List[Dict[str, object]]:

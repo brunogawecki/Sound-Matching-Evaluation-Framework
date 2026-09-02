@@ -69,3 +69,13 @@ class BaseModel(abc.ABC):
     @abc.abstractmethod
     def load(self, path: Path) -> None:
         """Restore a model saved by :meth:`save` (no dataset or VST needed)."""
+
+    def to_device(self, device: str) -> None:
+        """Move the fitted model onto ``device`` for :meth:`predict`.
+
+        A no-op by default: models with no tensors (the mean baseline) ignore it.
+        Opt-in per eval run rather than automatic, because the right device is
+        family-specific -- measured on this project's Mac, MPS is ~7x faster than CPU
+        for IS2's batch-64 finetuning convolutions but ~23% *slower* for the
+        flow-matching families' 400 sequential batch-1 field evaluations.
+        """

@@ -21,6 +21,8 @@ from dataset.corpus_splitter import (
     load_corpus,
     source_method,
     split_source_description,
+    subsample_indices,
+    subsample_source_description,
     write_copied_partition,
 )
 from dataset.preset_loader_common import split_indices
@@ -126,6 +128,40 @@ def test_split_source_description_shape():
         "method": "human", "partition": "test", "split_from": "corpus_a",
         "split_test_fraction": 0.25, "split_seed": 3, "count": 5,
     }
+
+
+def test_subsample_indices_selects_ascending_unique_positions():
+    positions = subsample_indices(20, 6, seed=0)
+    assert len(positions) == 6
+    assert len(set(positions)) == 6
+    assert positions == sorted(positions)
+    assert all(0 <= index < 20 for index in positions)
+
+
+def test_subsample_indices_is_deterministic():
+    assert subsample_indices(50, 10, seed=7) == subsample_indices(50, 10, seed=7)
+    assert subsample_indices(50, 10, seed=7) != subsample_indices(50, 10, seed=8)
+
+
+def test_subsample_indices_refuses_oversized_request():
+    with pytest.raises(ValueError):
+        subsample_indices(5, 6)
+
+
+def test_subsample_source_description_keeps_the_split_provenance():
+    summary = {"source": {
+        "method": "human", "partition": "test", "split_from": "corpus_a",
+        "split_test_fraction": 0.2, "split_seed": 0, "count": 5862,
+    }}
+    desc = subsample_source_description(summary, "corpus_a_test", 0, 1500, 5862)
+    # the chain back to the original build survives, with the subsample recorded on top
+    assert desc["method"] == "human"
+    assert desc["partition"] == "test"
+    assert desc["split_from"] == "corpus_a"
+    assert desc["subsample_from"] == "corpus_a_test"
+    assert desc["subsample_seed"] == 0
+    assert desc["subsample_source_count"] == 5862
+    assert desc["count"] == 1500
 
 
 def test_clean_records_coerces_nan_to_none():
