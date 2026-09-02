@@ -4,7 +4,13 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-09-01 (D4's Diva mixed-mode corpus built and verified — `diva_h2p_hybrid_train`
+Last updated: 2026-09-02 (D4 — Dexed benchmark test set subsampled to **1,500**
+(`full_preset-gen-vae_test_1500`), verified representative against the full 5,862 on all 13 metrics;
+D4 itself stays OPEN. D-EVAL amended with the measured evaluation cost: a 1.9x per-sample import tax
+in `scripts/evaluate.py` fixed, and `f0_rmse` — not the render — found to be 79% of the panel.
+D-EVAL-DEVICE locked: `--device` is opt-in and defaults to cpu, because MPS is 7.4x faster for IS2
+but 23% slower for flow matching. D-SPLIT extended with copy-only subsampling.
+Earlier, 2026-09-01: D4's Diva mixed-mode corpus built and verified — `diva_h2p_hybrid_train`
 (23,448, `HybridPresetSource.MIXED`) and `diva_h2p_test` (271 real presets) both exist;
 `scripts/evaluate.py`'s plugin preflight fixed to read the corpus's own synth instead of assuming
 Dexed; first matched `MeanParameterBaseline` result recorded on both corpora as a floor baseline.
@@ -712,6 +718,55 @@ avoid corpus-ordering bias (e.g. a corpus sorted by source cartridge). Written u
 builder already uses for target audio — this does not change the per-sample matrix or eval summary,
 it's an orthogonal side artifact of the same re-render already being computed.
 
+**Amendment (2026-09-02): evaluation cost measured, and the render is not the bottleneck.** The
+Evaluator's per-sample loop was profiled on `full_preset-gen-vae_test` before sizing the Phase 6
+sweep. Two findings, both counter-intuitive enough to record.
+
+1. **`scripts/evaluate.py` was paying a 1.9× import tax per sample.** The prediction re-render
+   spawns a fresh process per sample (D-REPRO), and `spawn` re-imports the parent `__main__` in
+   every child. The script imported `models.registry` (torch + all 11 families),
+   `evaluation.evaluator` and `dataset.torch_dataset` at module scope, so every child paid ~0.74 s
+   of import it never used: **0.87 s per render with top-level imports vs 0.13 s with deferred
+   imports**, measured A/B on an identical render. Those three imports now live inside the functions
+   that need them; `dataset.render_backends` stays at module scope (~0.06 s, and it is what the
+   child actually imports). End to end: **1.60 → 0.85 s/sample.**
+
+2. **The panel dominates the render, and `f0_rmse` dominates the panel.** Stage profile of `IS`
+   (median s/sample, n=30): `f0_rmse` 0.647 (**79%**), render 0.127 (15.5%), `mss` 0.017, every
+   other metric <0.004, `predict` 0.003. Summed 0.820 against a measured loop wall of 0.831.
+   Consequence: parallelizing only the *render* is worth ~15% on cheap families and ~1% on
+   expensive ones — it is not the lever it looks like. `f0_rmse` may still only be dropped if the
+   metric-panel rank-correlation pruning finds it redundant, never for speed.
+
+Measured per-family rates on Dexed (post-fix), which set the Phase 6 queue order:
+`IS` 0.85 s/sample and `PresetGenVAEFlowRegressor` 0.93 (measured); `FlowMatchingParam2Tok` **13.9**
+and `IS2` **23.0** (measured). `IS2`'s cost is its per-sample inference-time finetuning: cProfile
+attributes 70% to the paper's L_B regularizer (30 steps × a batch-64 encoder forward) and 26% to the
+backward, with the real-synth render only **0.9%**. See D-EVAL-DEVICE below for what that implies.
+
+---
+
+### D-EVAL-DEVICE — `predict` device is an opt-in per eval run (LOCKED 2026-09-02)
+
+**Decision**: `scripts/evaluate.py` takes `--device {cpu,mps,cuda}`, **defaulting to `cpu`**.
+`BaseModel.to_device` is a no-op by default (so `MeanParameterBaseline` and any future tensor-free
+family ignore it); `BaseDeepModel.to_device` moves the network, which is sufficient because both the
+base predict path and InverSynth II's ITF loop read the device off the network's own parameters.
+
+**Why opt-in rather than automatic**: the right device is **family-specific**, measured on this
+project's Mac. `IS2`'s finetuning is batch-64 convolution — compute-bound, and MPS runs it **7.4×
+faster** (batch-64 forward+backward: 1.190 s on CPU at 4 threads, 1.041 s at 10 threads, 0.160 s on
+MPS; more CPU threads barely help, so it is memory-bandwidth bound). The flow-matching families are
+the opposite: `predict` integrates a 200-step RK4 ODE with 2 field evaluations per step, i.e. 400
+*sequential batch-1* transformer passes, which is kernel-launch-latency bound — **MPS is 23%
+slower** there (16.55 vs 13.45 s/sample). An automatic "use the GPU if present" default would have
+made the single most expensive family in the benchmark worse.
+
+**Reproducibility note**: MPS and CPU predictions are not bit-identical — they agree to ~2.2e-05 on
+normalized parameters, far below Dexed's own parameter quantization, so the re-rendered audio is
+identical in practice. Still, keep one device per family across a benchmark and record which was
+used, rather than mixing devices within a results table.
+
 ---
 
 ### D-FRAMEWORK — Deep-model training framework: PyTorch Lightning (LOCKED 2026-06-30)
@@ -937,6 +992,16 @@ train corpus keeps the source's render process.
 useful post-render split cannot be a pure file copy — it has to re-render the held-out half. Doing that
 for only the test fraction keeps the operation cheap while producing a contract-correct test corpus,
 which is the whole point of holding data out.
+
+**Extension (2026-09-02): subsampling, the copy-only sibling.** `scripts/subsample_corpus.py` +
+`subsample_indices` / `subsample_source_description` (`dataset/corpus_splitter.py`) carve a smaller
+corpus out of an already-rendered one. It reuses this module's `write_copied_partition` unchanged,
+so the output is self-describing on exactly the same terms. It needs **no re-render**, because it
+only ever copies audio that already satisfies whatever contract its source was built under, and it
+preserves `render_process` verbatim — a subsample of a fresh corpus is still fresh, and a subsample
+of an in-process one is still in-process (the script warns in that case rather than silently
+producing an eval-invalid corpus). Determinism follows `split_indices`' shape: permute with the
+seed, take a prefix, keep ascending order. Used to cut the Dexed benchmark test set to 1,500 (D4).
 
 ---
 
@@ -1791,6 +1856,47 @@ this pair of corpora.
 ~30k voices). That source is **parameter vectors, not `.syx`** (see `ROADMAP.md`, Phase 4 corpus
 task), so it needs a name-based adapter rather than the SysEx importer. Under this plan D4 narrows to
 a **voice-disjoint split of that same human corpus** (Phase 6). Still the user's call to finalize.
+
+**Landed (2026-09-02): the Dexed test set is subsampled to 1,500.** `full_preset-gen-vae_test`
+holds 5,862 samples, but that number was never chosen — it is simply 20% of however many voices the
+SQLite collection happened to hold. Evaluation cost is linear in it (the Evaluator re-renders every
+prediction fresh-process, D-EVAL), and the measured Dexed sweep across 11 families came to ~77 h.
+`dataset/full_preset-gen-vae_test_1500` is a seeded subset of that corpus, built by
+`scripts/subsample_corpus.py` (`--size 1500 --subsample-seed 0`): WAVs copied verbatim with no
+re-rendering, `render_process: "fresh"` preserved, and `render_settings` / `default_params` /
+`subset_names` / `sample_rate` / `renderer` byte-identical to the source. Its `source` block keeps
+the whole provenance chain (`split_from` → `subsample_from` + `subsample_seed` +
+`subsample_source_count`), so it is reproducible from its own summary.
+
+**Why a smaller test set is the right trade, not a compromise.** Paired Wilcoxon at n=1,500 still
+detects effects far smaller than anything this benchmark would report, and bootstrap CIs widen only
+~2×. Meanwhile the uncertainties that actually dominate these results are untouched by test-set
+size: one training run per family with no seed repeats, one seeded draw per generative sample
+(D-FLOW-PREDICT), and `SynthRLi` truncated to 36 of the paper's 200 epochs with its reward still
+climbing. Spending ~57 extra hours to halve an already-tight sampling CI while those go unquantified
+is the wrong allocation. It also *narrows* the Dexed-vs-Diva CI asymmetry this record warns about
+above (5,862 vs 271 becomes 1,500 vs 271).
+
+**Verified representative, not merely smaller.** `MeanParameterBaseline` was scored on both corpora.
+All 13 metrics agree to within 0.6% — except `f0_rmse` at 2.0%, the metric with the fewest valid
+samples (1,492/1,500) and the widest spread — and **every one of the 13 n=5,862 point estimates
+falls inside the n=1,500 bootstrap 95% CI**:
+
+| metric | n=5862 | n=1500 | 95% CI (n=1500) |
+|---|---|---|---|
+| param_mae | 0.1803 | 0.1808 | [0.1787, 0.1828] |
+| param_accuracy | 0.5932 | 0.5944 | [0.5863, 0.6024] |
+| lsd | 1.134 | 1.133 | [1.105, 1.161] |
+| mfcc_mae | 42.75 | 42.71 | [42.15, 43.29] |
+| f0_rmse | 128.9 | 126.3 | [117.2, 136.5] |
+
+**Constraint**: one test-set size for every family in a comparison. The Phase 6 paired significance
+tests join per `sample_id`, so families scored on different subsets cannot be compared — the
+expensive families cannot be made cheaper by giving them fewer samples.
+
+**D4 stays OPEN.** This settles the Dexed test set's *size*; the corpus choice above is still the
+user's to finalize, and Diva's test set (`diva_h2p_test`, 271 real presets) is unchanged and needs
+no subsampling.
 
 ### D-FAMILIES — Final model-family set (OPEN, stub)
 

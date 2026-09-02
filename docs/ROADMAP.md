@@ -153,6 +153,10 @@ locally with the live VST — it does not fit the cluster training harness.)*
 ## Phase 6 — Test set, benchmark, results
 
 - **Human test corpus** — per D4; voice-disjoint from the training split; rendered fresh-process.
+  *Landed 2026-09-02 for Dexed*: `full_preset-gen-vae_test_1500`, a seeded 1,500-sample subsample
+  of the 5,862 split (`scripts/subsample_corpus.py`), verified representative on all 13 metrics.
+  Evaluation cost is linear in test-set size and the full sweep measured ~77 h. Diva's
+  `diva_h2p_test` (271) needs no subsampling. D4 stays OPEN on the corpus choice itself.
 - **Benchmark orchestration** — run every family on the test set → `results/<corpus>/<model>/`.
 - **Results aggregation** — comparative table across families, plus the metric-panel rank-correlation
   pruning (D-EVAL names `per_sample.csv` as the source of truth). **Finish line.**
