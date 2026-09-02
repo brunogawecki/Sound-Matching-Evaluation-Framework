@@ -15,6 +15,7 @@ Pair with ``scripts/fit_model.py``, which produces the checkpoint::
     --corpus          the eval corpus directory (must be fresh-process)    [REQUIRED]
     --model           model class to load the checkpoint into              [REQUIRED]
     --out             results root                                  [default: <project>/results]
+    --device          device for model.predict: cpu / mps / cuda            [default: cpu]
     --save-audio      persist prediction WAVs for a seeded random sample subset
     --save-audio-n    cap on how many samples get saved             [default: 20]
 """
@@ -81,6 +82,10 @@ def main() -> None:
     )
     parser.add_argument("--out", default=None, help="results root (default: <project>/results)")
     parser.add_argument(
+        "--device", default="cpu", choices=("cpu", "mps", "cuda"),
+        help="device for model.predict (default: cpu; the right choice is family-specific)",
+    )
+    parser.add_argument(
         "--save-audio", action="store_true",
         help="persist the re-rendered prediction WAV for a seeded random sample subset",
     )
@@ -103,9 +108,13 @@ def main() -> None:
 
     model = _model_registry()[args.model].model_class()
     model.load(checkpoint_path)
+    model.to_device(args.device)
     corpus = RenderedCorpusDataset.load(corpus_dir)
 
-    print(f"--- Evaluating {args.model} on '{corpus.corpus_dir.name}' ({len(corpus)} samples) ---")
+    print(
+        f"--- Evaluating {args.model} on '{corpus.corpus_dir.name}' "
+        f"({len(corpus)} samples, predict on {args.device}) ---"
+    )
     result = Evaluator(corpus).evaluate(
         model,
         checkpoint_path=checkpoint_path,

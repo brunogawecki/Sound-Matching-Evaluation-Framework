@@ -194,6 +194,16 @@ class BaseDeepModel(BaseModel):
         self._parameter_space = ParameterSpace.from_dict(payload["parameter_space"])
         self._restore_extra_checkpoint_state(payload.get("extra_state"))
 
+    def to_device(self, device: str) -> None:
+        """Move the network so :meth:`predict` runs on ``device``.
+
+        Both this class and the ITF path read the device off the network's own
+        parameters, so moving the network is enough to move the whole predict path.
+        """
+        if self._network is None:
+            raise RuntimeError("Model must be fit (or loaded) before to_device.")
+        self._network = self._network.to(device)
+
     def predict(self, audio: torch.Tensor) -> Dict[str, float]:
         """Predict a synth-side dict for one waveform ``[num_samples]``.
 
