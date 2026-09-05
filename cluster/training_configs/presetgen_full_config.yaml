@@ -48,6 +48,7 @@ trainer:
   devices: 1
   strategy: auto
   early_stopping_patience: 20 # stand-in for the paper's LR-threshold stop (see header)
+  gradient_clip_val: 1.0      # not in the paper; the KL term can spike and NaN the run
   log_every_n_steps: 50
   deterministic: false        # the flow head's index assignment has no deterministic
                               # CUDA path; seed still fixes RNG (see smoke_config.yaml)
