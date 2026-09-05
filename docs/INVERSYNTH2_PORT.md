@@ -239,6 +239,22 @@ Intentional, dictated by our framework contract and by what the shipped repo pro
   decay from 1e-4 vs the paper's 1e-4 → 1e-6 schedule; a single seeded 10% validation split vs the
   paper's cross-validation. All are config-level, documented in `inversynth2_config.yaml`.
 
+## ITF step selection differs between Dexed and Diva
+
+`IS2` picks which finetuning step to keep by scoring candidates. By default it scores them with the
+frozen proxy; when the Evaluator supplies a render callback it scores them with the **real** synth
+instead (the paper's `L_t^f`). The Evaluator supplies that callback from a *reused-process* renderer,
+which Diva refuses outright — it does not reproduce in-process at all (D-DIVA-RENDER).
+
+So as of 2026-09-04 the Evaluator attaches **no monitor** on such a synth and `IS2` falls back to
+proxy-based selection. A fresh-process monitor was rejected: ITF runs many renders per sample, and
+the monitor is only a selection heuristic, so it would pay a process spawn per step to improve one.
+
+**For the write-up**: an `IS2` row selects steps against the real synth on Dexed and against the
+proxy on Diva. That is a real methodological difference between the two rows and should be stated
+where the cross-synth comparison is made. It does not touch the scored re-render, which is
+fresh-process on both (D-EVAL), so every reported metric is still computed on clean audio.
+
 ## Caveats
 
 - Reproduced numbers will **not** match the paper's tables, by design: **103** Dexed params (D1); our

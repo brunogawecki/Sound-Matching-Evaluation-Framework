@@ -4,7 +4,13 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-09-02 (D4 — Dexed benchmark test set subsampled to **1,500**
+Last updated: 2026-09-04 (D-OOD locked — out-of-domain evaluation on NSynth: an audio-only corpus
+carries no ground-truth parameters, so the parameter axis reports `NaN` / `valid_count: 0` while the
+ten audio metrics run unchanged, and the render contract, copied verbatim from an in-domain reference
+corpus, now governs the *prediction* re-render only. Targets are NSynth pitch-60 / velocity-100 notes
+from all three splits (~836), since nothing here ever trains on NSynth. D-EVAL amended: no ITF monitor
+is attached on a synth that cannot render in-process, which is what unblocks evaluating `IS2` on Diva.
+Earlier, 2026-09-02: D4 — Dexed benchmark test set subsampled to **1,500**
 (`full_preset-gen-vae_test_1500`), verified representative against the full 5,862 on all 13 metrics;
 D4 itself stays OPEN. D-EVAL amended with the measured evaluation cost: a 1.9x per-sample import tax
 in `scripts/evaluate.py` fixed, and `f0_rmse` — not the render — found to be 79% of the panel.
@@ -743,6 +749,23 @@ Measured per-family rates on Dexed (post-fix), which set the Phase 6 queue order
 and `IS2` **23.0** (measured). `IS2`'s cost is its per-sample inference-time finetuning: cProfile
 attributes 70% to the paper's L_B regularizer (30 steps × a batch-64 encoder forward) and 26% to the
 backward, with the real-synth render only **0.9%**. See D-EVAL-DEVICE below for what that implies.
+
+**Amendment (2026-09-04): no ITF monitor on a synth that cannot render in-process.**
+`_attach_itf_monitor` handed `IS2` a *reused-process* real-synth renderer so its
+inference-time finetuning could select steps against the real plugin. `InProcessRenderBackend`
+refuses any wrapper with `supports_in_process_render = False`, so on a **Diva** corpus
+(D-DIVA-RENDER) that raised and `IS2` could not be evaluated at all. The Evaluator now checks the
+flag first and attaches **no monitor** on such a synth; `IS2` keeps its own proxy-loss step
+selection, which is its documented default.
+
+The alternative — a fresh-process monitor — was rejected: ITF runs many renders per sample and the
+monitor is only a *selection heuristic*, so it would pay a full process spawn per step to improve
+one. The scored re-render is unaffected either way; it was always fresh-process (point 3 above).
+
+**Consequence to state in the write-up**: an `IS2` benchmark row selects steps against the real
+synth on Dexed and against the proxy on Diva. That is a methodological difference between the two
+rows, not a bug, and it is the same trade-off the paper's own proxy exists to make. Recorded in
+`docs/INVERSYNTH2_PORT.md`.
 
 ---
 
@@ -1750,6 +1773,136 @@ are large (2.84-12.8 dB). The one place to re-measure before relying on it again
 `VCF1.KeyFollow = 1.0` versus `VCF1.Frequency` 0.55 → 0.54 match at 2.04 dB, which is the entry's
 narrowest margin.
 
+
+---
+
+### D-OOD — Out-of-domain evaluation: audio-only corpora, parameter axis undefined (LOCKED 2026-09-04)
+
+**Decision**: the benchmark gains a second evaluation axis whose targets are **real instrument
+recordings the synthesizer never produced** (NSynth), alongside the in-domain preset test sets. Such
+a corpus is an ordinary corpus in every respect the Evaluator cares about — same `audio/` +
+`metadata.csv` + `run_summary.json` layout, same results folder — except that it carries **no
+ground-truth parameters**. It marks itself with `"targets": "none"`, and
+`dataset.ood_corpus.load_eval_corpus` dispatches on that key to an `AudioOnlyCorpusDataset`
+(`dataset/ood_corpus.py`), so no script needs a new flag (D-SELFDESC).
+
+Three consequences follow, all deliberate:
+
+1. **The parameter axis is undefined and reported as `NaN`.** `param_mae` / `param_mse` /
+   `param_accuracy` come back `NaN` with `valid_count: 0` — the panel's established "undefined for
+   this sample" convention, already surfaced beside every mean (D-EVAL's aggregation rule). They are
+   **not** filled with a placeholder, and the corpus is **not** given fabricated targets. The ten
+   audio metrics are unaffected: they only ever compared a stored target WAV against a fresh
+   re-render, and never touched `ParameterSpace`.
+
+2. **The render contract describes the prediction render only.** On an in-domain corpus the contract
+   says both how the targets were made and how predictions must be re-rendered. Here the targets were
+   never rendered by this synth at all, so the contract governs only the re-render — and it is
+   therefore **copied verbatim from an in-domain reference corpus** (`render_settings`, `renderer`,
+   `sample_rate`, `default_params`, `synth`, `parameter_space`, `subset_names`), never re-derived from
+   `config.py`. This keeps D-EVAL's rule intact: the contract still comes from a corpus, and a
+   prediction is still re-rendered exactly as the models were trained. One OOD corpus is built per
+   synth; the audio is identical and only the copied block differs.
+
+3. **The error floor is no longer zero.** A perfect prediction floors the in-domain audio metrics at
+   ~0 because the target is reachable by construction (D-EVAL point 3). An NSynth flute is generally
+   *not* reachable by Dexed, so an OOD score mixes model error with the synth's intrinsic inability
+   to make that sound. **Out-of-domain numbers rank models against each other; they are not absolute
+   fidelity figures**, and the write-up must say so rather than table them next to in-domain values
+   as if the scales were comparable.
+
+**Source and filter**: NSynth, **pitch 60 (C4), velocity 100**, drawn from **all three splits**
+(train + valid + test). The pitch/velocity filter is forced by D3 — every model was trained on one
+fixed note at one fixed velocity, so any other note would measure a mismatch the benchmark never
+intended to test.
+
+**Why all three splits, including `train`.** NSynth's split boundary exists to stop instrument
+leakage between *training on NSynth* and *evaluating on NSynth*. Nothing in this benchmark ever
+trains on NSynth — every family learns from Dexed or Diva presets — so there is no leakage channel
+and the boundary carries no methodological weight here. It is a constraint for a different
+experiment. The filter is severe (each instrument contributes roughly one note per pitch/velocity
+pair), so `valid` + `test` alone yield only **46** notes against roughly **836** across all three:
+the difference between a result that supports per-instrument-family analysis and one that does not.
+
+**Sample-rate mismatch, and why it does not bias ranking.** NSynth renders at 16 kHz; this project's
+contract is 22.05 kHz. Targets are resampled up once at build time with a deterministic, anti-aliased
+resampler (`librosa.resample(res_type='soxr_vhq')`), applied identically to every file. Nothing above
+8 kHz is recovered — the upsample only hands the panel the rate it expects. This is the same argument
+D-METRIC-SR already makes for its own 11.025 kHz ceiling: an equal band-limit on every model caps
+*absolute* fidelity without biasing the *ranking*, which is the thesis result. Report it as a stated
+limitation.
+
+**Loudness stays raw (D-METRIC-NORM unchanged).** NSynth's level convention is unrelated to this
+project's renders, so `integrated_loudness_error` and `loudness_envelope_l1` carry a corpus-level
+offset out-of-domain. The offset is identical for every model, so it does not affect ranking, and
+loudness-matching the targets would be a scoped amendment to a LOCKED decision in exchange for a
+metric that is only read comparatively anyway. `scripts/build_ood_corpus.py` prints the corpus's
+median integrated loudness beside the reference corpus's, so the caveat is a **measured number** in
+the write-up rather than a hand-wave.
+
+**Relation to `SynthRL-o`**: this is the *evaluation* half of the setting SynthRL's deferred stage 3
+occupies (D-FAMILIES). It does not port that stage — no model is fine-tuned out-of-domain here — but
+it does let the thesis report how in-domain-trained models generalize to sounds no synthesizer made,
+which is the question stage 3 was going to answer. Whether in-domain ranking predicts out-of-domain
+ranking is the interesting result, and it is only obtainable because the audio axis survives the loss
+of ground truth.
+
+**Consequences**: `dataset/ood_corpus.py` and `scripts/build_ood_corpus.py` are new;
+`evaluation/evaluator.py` gained one `None`-targets branch; `scripts/evaluate.py` swapped
+`RenderedCorpusDataset.load` for `load_eval_corpus`. Nothing model-side, render-side or metric-side
+changed — verified by re-scoring `MeanParameterBaseline` on `full_preset-gen-vae_test_1500` after the
+change and confirming all 13 metrics were **bit-identical** to the recorded run, `f0_rmse`'s
+1,492/1,500 valid count included.
+
+**Built (2026-09-04)**: `dataset/nsynth_c4_dexed` and `dataset/nsynth_c4_diva`, **884 samples**
+each (838 train + 35 valid + 11 test), identical audio, contracts copied from
+`full_preset-gen-vae_test_1500` and `diva_h2p_test` respectively. Both reference corpora were
+verified to carry a `parameter_space` and `default_params` byte-identical to their own training
+corpus, so predictions land in exactly the space the models were trained in.
+
+Instrument coverage across 11 families: bass 177, keyboard 139, organ 105, guitar 91, mallet 88,
+string 82, brass 67, reed 59, vocal 39, flute 25, synth_lead 12; by source, 376 acoustic /
+310 electronic / 198 synthetic. Enough depth for per-family analysis, which the 46 notes in
+`valid` + `test` alone would not have supported.
+
+**Measured loudness offsets** (the D-METRIC-NORM caveat, recorded in each corpus's `source` block as
+`median_loudness_lufs` / `reference_median_loudness_lufs`): NSynth's median is **−15.1 LUFS**, against
+−24.5 in `full_preset-gen-vae_test_1500` (**+9.4 dB**) and −23.4 in `diva_h2p_test` (**+8.3 dB**).
+NSynth targets are the best part of 9 dB louder than either synth's test renders, so
+`integrated_loudness_error` out-of-domain is dominated by that offset. Quote these numbers rather
+than describing the problem qualitatively.
+
+**Note on `NSYNTH_DIR`**: only the pitch-60 / velocity-100 notes are ever read, so the 23.8 GB
+`train` archive was never unpacked — `curl | tar` with a filename pattern kept the 838 matching WAVs
+and `examples.json`, 113 MB on disk. NSynth names notes `<family>_<source>_<instrument>-<pitch>-<velocity>`,
+so `scripts/build_ood_corpus.py` can also rebuild every recorded field from filenames alone when a
+stream-extracted split has no `examples.json`.
+
+**Floor row measured (2026-09-04)**: `MeanParameterBaseline` scored on both OOD corpora, 884/884
+valid on all ten audio metrics and 0/884 on all three parameter metrics, exactly as designed.
+
+| metric | Dexed in-domain (n=1500) | Dexed OOD (n=884) | Diva in-domain (n=271) | Diva OOD (n=884) |
+|---|---|---|---|---|
+| lsd | 1.133 | 0.888 | 1.044 | 0.810 |
+| mfcc_mae | 42.71 | 41.46 | 37.43 | 36.91 |
+| integrated_loudness_error | 15.72 | 25.00 | 9.17 | 16.40 |
+| f0_rmse | 126.3 | 73.6 | 155.0 | 39.7 |
+
+**Two of those movements are traps, and the write-up must name them.** Several OOD numbers are
+*better* than their in-domain counterparts, which does not mean out-of-domain matching is easier.
+
+- **`f0_rmse` roughly halves on Dexed and drops ~4x on Diva.** NSynth notes are all cleanly pitched
+  at C4 by construction, whereas the human preset test sets contain noise, inharmonic FM and
+  percussive voices with no stable f0. The pitch metric is measuring a *property of the target
+  population*, not model skill.
+- **`integrated_loudness_error` rises ~9 dB on Dexed and ~7 dB on Diva**, tracking the measured
+  +9.4 / +8.3 dB median-loudness offsets above almost exactly — i.e. it is reading the corpus offset,
+  as this record predicts.
+
+Both are constant across models, so within the OOD table they cancel and rankings hold. Across
+tables they do not, which is the concrete case for the "OOD scores are comparative, not absolute"
+rule stated above. Anyone reading the two tables side by side will otherwise conclude the models do
+better on real instruments than on presets, which the data does not support.
 
 ---
 

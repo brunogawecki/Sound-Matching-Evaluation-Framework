@@ -46,6 +46,25 @@ def _expected_num_samples(summary: dict) -> Optional[int]:
     return round(float(duration_sec) * int(sample_rate))
 
 
+def read_corpus_audio(audio_path: Path, expected_num_samples: Optional[int] = None) -> torch.Tensor:
+    """Read one corpus WAV as a ``float32`` mono tensor ``[num_samples]``.
+
+    Shared by every corpus flavour (rendered and audio-only, see
+    ``dataset/ood_corpus.py``) so they read audio identically. ``expected_num_samples``
+    is the corpus's own audio length; ``None`` disables the check.
+    """
+    _, audio = wavfile.read(audio_path)
+    if expected_num_samples is not None and audio.shape[0] != expected_num_samples:
+        # Short of the render contract means the file is damaged, not a different
+        # setting -- silently padding it would train the model on corrupt audio.
+        raise ValueError(
+            f"{audio_path} holds {audio.shape[0]} samples, but this corpus's render "
+            f"contract is {expected_num_samples}. The WAV is corrupt (a truncated "
+            "copy is the usual cause). Re-copy the corpus and retry."
+        )
+    return torch.from_numpy(audio.astype(np.float32))
+
+
 class RenderedCorpusDataset(Dataset):
     """A built WAV + metadata corpus as ``(audio, target)`` training pairs.
 
@@ -128,17 +147,7 @@ class RenderedCorpusDataset(Dataset):
     def _read_audio(self, index: int) -> torch.Tensor:
         """Lazily read one sample's WAV as a ``float32`` mono tensor ``[num_samples]``."""
         relative_path = self.metadata.iloc[index]["audio_path"]
-        audio_path = self.corpus_dir / relative_path
-        _, audio = wavfile.read(audio_path)
-        if self.expected_num_samples is not None and audio.shape[0] != self.expected_num_samples:
-            # Short of the render contract means the file is damaged, not a different
-            # setting -- silently padding it would train the model on corrupt audio.
-            raise ValueError(
-                f"{audio_path} holds {audio.shape[0]} samples, but this corpus's render "
-                f"contract is {self.expected_num_samples}. The WAV is corrupt (a truncated "
-                "copy is the usual cause). Re-copy the corpus and retry."
-            )
-        return torch.from_numpy(audio.astype(np.float32))
+        return read_corpus_audio(self.corpus_dir / relative_path, self.expected_num_samples)
 
     # -- target-only access (for the mean-parameter baseline, #7) ------------
     @property

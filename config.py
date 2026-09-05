@@ -27,6 +27,12 @@ DIVA_RAW_PATH = os.getenv(
 # unlike diva_raw's narrow synthetic generation. See dataset/diva_h2p_preset_loader.py.
 DIVA_PRESETS_PATH = os.getenv("DIVA_PRESETS_PATH", "/Library/Audio/Presets/u-he/Diva")
 
+# NSynth, the out-of-domain evaluation source (D-OOD): real instrument recordings no
+# synthesizer produced. Expected to hold nsynth-<split>/ subdirs. Only the pitch-60 /
+# velocity-100 notes are ever read, so a full unpack is unnecessary -- see
+# scripts/build_ood_corpus.py.
+NSYNTH_DIR = os.getenv("NSYNTH_DIR", str(Path(__file__).parent.parent.absolute() / "nsynth"))
+
 # Audio Rendering Defaults
 SAMPLE_RATE = int(os.getenv("DEFAULT_SAMPLE_RATE", 22050))
 BUFFER_SIZE = int(os.getenv("DEFAULT_BUFFER_SIZE", 128))

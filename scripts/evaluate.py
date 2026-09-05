@@ -13,6 +13,7 @@ Pair with ``scripts/fit_model.py``, which produces the checkpoint::
 
     --checkpoint      the saved model file to load and fingerprint        [REQUIRED]
     --corpus          the eval corpus directory (must be fresh-process)    [REQUIRED]
+                      an out-of-domain, audio-only corpus works here too (D-OOD)
     --model           model class to load the checkpoint into              [REQUIRED]
     --out             results root                                  [default: <project>/results]
     --device          device for model.predict: cpu / mps / cuda            [default: cpu]
@@ -103,13 +104,13 @@ def main() -> None:
         print(f"Checkpoint not found: {checkpoint_path}")
         sys.exit(1)
 
-    from dataset.torch_dataset import RenderedCorpusDataset
+    from dataset.ood_corpus import load_eval_corpus
     from evaluation.evaluator import Evaluator
 
     model = _model_registry()[args.model].model_class()
     model.load(checkpoint_path)
     model.to_device(args.device)
-    corpus = RenderedCorpusDataset.load(corpus_dir)
+    corpus = load_eval_corpus(corpus_dir)
 
     print(
         f"--- Evaluating {args.model} on '{corpus.corpus_dir.name}' "

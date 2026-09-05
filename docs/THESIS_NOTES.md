@@ -314,3 +314,83 @@ D-KIND is untouched. Unlike the preset-gen-vae port there are no weight-transpla
 reference is AGPL-3.0 and deliberately not vendored, so fidelity rests on the counterpart table in
 `SYNTHRL_PORT.md` plus behavioral tests — the same "verify with the artifacts you actually have"
 argument made for flow matching above.)*
+
+---
+
+**Topic: out-of-domain evaluation on NSynth.** The benchmark gains a second axis whose targets are
+real instrument recordings no synthesizer produced (**D-OOD**, locked 2026-09-04). It is the most
+interesting evaluation result the framework can produce, and also the easiest to overstate, so the
+five points below are what the write-up has to get right.
+
+## 1. The parameter axis vanishes, and that is the argument, not an inconvenience
+
+Out-of-domain there is no ground-truth parameter vector, so `param_mae` / `param_mse` /
+`param_accuracy` are undefined and reported as `NaN` with `valid_count: 0`. Ten of the thirteen
+metrics survive.
+
+This is worth a paragraph rather than a footnote, because it is the thesis's own claim made
+concrete: perceptual audio similarity is the primary axis and parameter distance is a secondary
+diagnostic. In-domain that ordering is an argument. Out-of-domain it is forced — the parameter
+metrics cannot be computed at all, and the benchmark still works. Point at the `valid_count: 0`
+column rather than quietly omitting three rows from the table.
+
+## 2. The error floor is not zero, so the two tables are not on the same scale
+
+In-domain, a perfect prediction floors the audio metrics at ~0, because the target was rendered by
+the same synth under the same contract (D-EVAL point 3, verified by a plugin test). Out-of-domain
+that guarantee is gone: an NSynth flute is generally unreachable by Dexed, so every score carries an
+unknown, target-dependent offset for "how close can this synth get *at all*".
+
+The baseline run already demonstrates the trap. `MeanParameterBaseline` scores **better**
+out-of-domain than in-domain on several metrics — `f0_rmse` 126 → 74 on Dexed and 155 → 40 on Diva,
+`lsd` 1.13 → 0.89 and 1.04 → 0.81. That is not "real instruments are easier". NSynth notes are all
+cleanly pitched at C4 by construction, while the preset test sets are full of noise, inharmonic FM
+and percussive voices with no stable f0, so the pitch metric is reading a property of the target
+population. In the other direction `integrated_loudness_error` rises ~9 dB, tracking the measured
++9.4 dB loudness offset almost exactly. Both effects are constant across models, so rankings inside
+the OOD table are unaffected — but a reader shown both tables together will draw the wrong
+conclusion unless told.
+
+Consequence: **do not put in-domain and out-of-domain numbers side by side as if comparable.**
+Within the OOD table the offset is shared by every model, so rankings and per-model differences are
+meaningful. Across tables, absolute values are not. The genuinely interesting result is whether the
+in-domain *ranking* survives — if it does, the benchmark is measuring something that generalizes; if
+it inverts, that is a finding about which families overfit the preset distribution.
+
+## 3. We use NSynth's train split, and the reason is not laziness
+
+Each NSynth instrument contributes roughly one note per pitch/velocity pair, and D3 pins us to one
+pitch and one velocity, so the `valid` + `test` splits together yield only **46** notes. All three
+splits yield ~836.
+
+The obvious objection — that the train split is off-limits — does not apply. That boundary exists to
+stop instrument leakage between training *on NSynth* and evaluating *on NSynth*. No family in this
+benchmark ever sees NSynth: they learn from Dexed and Diva presets. There is no leakage channel, so
+the split is a constraint belonging to a different experiment. State this explicitly, because a
+reader will flag it otherwise.
+
+## 4. Two mismatches to disclose, both of which cancel in the ranking
+
+- **Band limit.** NSynth is 16 kHz, so its targets carry nothing above 8 kHz, against the render's
+  11.025 kHz ceiling. Targets are upsampled once at build time with a deterministic anti-aliased
+  resampler; the upsample recovers nothing, it only supplies the rate the panel expects. This is the
+  same shape of argument D-METRIC-SR already makes: an equal band-limit on every model caps absolute
+  fidelity without biasing ranking.
+- **Loudness offset.** NSynth's level convention is unrelated to this project's renders, and audio
+  metrics compare raw audio (D-METRIC-NORM), so the two loudness metrics carry a corpus-level offset
+  out-of-domain. `scripts/build_ood_corpus.py` prints the measured offset against the reference
+  corpus — quote that number rather than describing the problem qualitatively.
+
+Both are equal across models, so neither touches the comparison. Both cap absolute interpretation.
+
+## 5. This is the evaluation half of SynthRL's deferred stage 3 — say which half
+
+SynthRL's headline claim is `SynthRL-o`: RL fine-tuning **on** out-of-domain sounds, which is what
+removes the need for ground-truth parameters. That stage is not ported (D-FAMILIES).
+
+What this axis adds is the *evaluation* setting, not the *training* one: in-domain-trained models,
+scored on out-of-domain targets. It is a weaker claim than the paper's and must not be presented as
+a replication of it. But it is the same question one step back — does a model trained on presets
+transfer to real sounds — and it is answerable with no new training, which is why it is worth having.
+Pair it with the note under the SynthRL topic that stages 1 and 2 test the machinery rather than the
+main claim; together they make the scope of the RL contribution honest and legible.

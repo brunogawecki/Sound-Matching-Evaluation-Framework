@@ -25,6 +25,15 @@ Each eval run is a self-describing folder mirroring the corpus convention:
 ``eval_summary.json`` (render contract echoed from the corpus, checkpoint fingerprint,
 and per-metric mean / std / valid-count). The Evaluator both writes these files and
 returns the in-memory :class:`EvaluationResult`.
+
+**Out-of-domain corpora** (``dataset.ood_corpus.AudioOnlyCorpusDataset``, D-OOD) run
+through the same path with two differences, both handled here rather than by the caller:
+their targets have no parameters, so the three parameter metrics report ``NaN`` with a
+``valid_count`` of 0; and their render contract describes the *prediction* re-render only,
+since the targets were never rendered by this synth. The audio metrics are unchanged --
+they only ever compared a stored target WAV against a fresh re-render -- but they no longer
+floor at ~0 for a perfect prediction, because an out-of-domain target is generally
+unreachable by the synth.
 """
 from __future__ import annotations
 
@@ -190,12 +199,17 @@ class Evaluator:
         render contract, so its inference-time finetuning can select steps against the
         real synth (the paper's ``L_t^f``). That monitor renderer reuses one process for
         speed; the scored re-render above stays fresh-process (D-REPRO). It is torn down
-        and unhooked in ``finally``.
+        and unhooked in ``finally``. On a synth that cannot render in-process at all
+        (Diva, D-DIVA-RENDER) no monitor is attached and the model falls back to its own
+        proxy-based step selection -- see :meth:`_attach_itf_monitor`.
 
         Pass ``show_progress=True`` to draw a tqdm bar over the loop. One tick is one
         sample: predict, re-render in a fresh process, run the whole panel.
         """
-        target_matrix = self._corpus.targets.numpy()
+        # None on an out-of-domain corpus: the targets have no parameters, so the three
+        # parameter metrics are undefined and reported as NaN below (D-OOD).
+        corpus_targets = self._corpus.targets
+        target_matrix = corpus_targets.numpy() if corpus_targets is not None else None
         backend = FreshProcessRenderBackend(
             self._render_settings, renderer=self._renderer, synth_name=self._synth_name
         )
@@ -212,7 +226,7 @@ class Evaluator:
             for index in indices:
                 target_audio, _ = self._corpus[index]
                 target_waveform = target_audio.numpy()
-                target_vector = target_matrix[index]
+                target_vector = target_matrix[index] if target_matrix is not None else None
 
                 predicted_dict = model.predict(target_audio)
                 predicted_vector = self._corpus.parameter_space.synth_dict_to_ml_vector(predicted_dict)
@@ -232,6 +246,8 @@ class Evaluator:
                         row[spec.name] = spec.compute(
                             target_waveform, prediction_waveform, sample_rate=self._sample_rate
                         )
+                    elif target_vector is None:
+                        row[spec.name] = float("nan")
                     else:
                         row[spec.name] = spec.compute(
                             target_vector, predicted_vector, self._corpus.parameter_space
@@ -251,17 +267,26 @@ class Evaluator:
         ``set_itf_render_callback`` hook. The callback renders the estimated dict under
         this corpus's render contract -- default params merged in exactly as the scored
         re-render does -- so the monitor and the metric agree on the note/contract (D-EVAL).
+
+        Also returns ``None`` on a synth that does not reproduce in-process at all (Diva,
+        D-DIVA-RENDER). The model then keeps its own proxy-based step selection, which is
+        the deliberate choice: the monitor is only a selection heuristic, and a
+        fresh-process monitor would pay a full process spawn on every ITF step (many per
+        sample) to improve one. The consequence is that the Dexed and Diva rows of an
+        ``IS2`` benchmark select steps differently -- a caveat for the write-up, recorded
+        in ``docs/INVERSYNTH2_PORT.md``.
         """
         if not hasattr(model, "set_itf_render_callback"):
             return None
         # Reused process (not fresh-per-render): the monitor is a selection heuristic, so
         # Dexed's voice-state leak is acceptable here (unlike the scored render). Built for
         # the corpus's own synth and renderer, never config.py's, to match the contract.
-        # A synth that does not reproduce in-process at all (Diva, D-DIVA-RENDER) is refused
-        # by InProcessRenderBackend rather than silently monitored on garbage.
         spec = _synth_spec(self._synth_name)
+        wrapper_class = spec.import_wrapper_class()
+        if not wrapper_class.supports_in_process_render:
+            return None
         with spec.open_output_suppressor():
-            synth = spec.import_wrapper_class()(
+            synth = wrapper_class(
                 plugin_path=synth_plugin_path(self._synth_name),
                 sample_rate=self._sample_rate,
                 buffer_size=config.BUFFER_SIZE,
