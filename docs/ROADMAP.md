@@ -161,5 +161,24 @@ locally with the live VST — it does not fit the cluster training harness.)*
 - **Results aggregation** — comparative table across families, plus the metric-panel rank-correlation
   pruning (D-EVAL names `per_sample.csv` as the source of truth). **Finish line.**
 
+## Phase 7 — Out-of-domain evaluation (NSynth)
+
+A second evaluation axis, run after the Phase 6 sweep: score every family on real instrument
+recordings no synthesizer produced, to see whether in-domain ranking predicts generalization.
+Gated by **D-OOD** (LOCKED 2026-09-04), which owns the *why*.
+
+- **Audio-only corpus support** — **DONE**: `dataset/ood_corpus.py`
+  (`AudioOnlyCorpusDataset` + `load_eval_corpus`), the Evaluator's `None`-targets branch, and
+  `scripts/evaluate.py` switched onto the dispatcher. The parameter axis reports `NaN` /
+  `valid_count: 0`; the ten audio metrics are untouched. Verified inert in-domain by re-scoring
+  `MeanParameterBaseline` on `full_preset-gen-vae_test_1500` to bit-identical numbers.
+- **`IS2` unblocked on Diva** — **DONE**: no ITF monitor is attached on a synth that cannot render
+  in-process (D-EVAL amendment). Previously `IS2` could not be evaluated on Diva at all.
+- **OOD corpus builder** — **DONE**: `scripts/build_ood_corpus.py`. NSynth pitch 60 / velocity 100
+  across all three splits, resampled 16 kHz → 22.05 kHz, contract copied from an in-domain reference
+  corpus. **Built**: `dataset/nsynth_c4_dexed` and `dataset/nsynth_c4_diva`, 884 samples each
+  across 11 instrument families. `MeanParameterBaseline` scored on both as the floor row.
+- **OOD sweep** — every family on both OOD corpora. Blocked on the Phase 6 checkpoints, not on code.
+
 **Out of scope:** the #12 dashboard, thesis prose/figures. The Diva work above runs in parallel and
 does not enter this table.

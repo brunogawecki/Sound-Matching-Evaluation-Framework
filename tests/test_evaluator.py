@@ -385,3 +385,58 @@ def test_true_parameters_floor_audio_metrics_at_zero(tmp_path):
     result = Evaluator(corpus).evaluate(model, out_dir=tmp_path / "results")
     assert result.summary["per_metric"]["lsd"]["mean"] == pytest.approx(0.0, abs=1e-3)
     assert result.summary["per_metric"]["mel_mae"]["mean"] == pytest.approx(0.0, abs=1e-3)
+
+
+# -- the ITF monitor (InverSynth II's IS2) ------------------------------------
+
+class _FakeITFModel(_FakeModel):
+    """A model exposing the ITF hook, so the Evaluator tries to attach a monitor."""
+
+    def __init__(self, prediction):
+        super().__init__(prediction)
+        self.callbacks = []
+
+    def set_itf_render_callback(self, callback):
+        self.callbacks.append(callback)
+
+
+def _write_corpus_for_synth(corpus_dir, synth_name) -> None:
+    """The fixture corpus, re-stamped with a given synth (D-SELFDESC)."""
+    _write_corpus(corpus_dir, [_sine(440.0)], [{"AMP": 0.2, "CAT": 0.0}])
+    summary_path = corpus_dir / "run_summary.json"
+    with open(summary_path) as summary_file:
+        summary = json.load(summary_file)
+    summary["synth"] = synth_name
+    with open(summary_path, "w") as summary_file:
+        json.dump(summary, summary_file)
+
+
+def test_no_itf_monitor_on_a_synth_that_cannot_render_in_process(tmp_path, monkeypatch):
+    """Diva refuses in-process rendering (D-DIVA-RENDER), so no monitor is attached.
+
+    The model keeps its own proxy-based step selection rather than the Evaluator raising
+    from InProcessRenderBackend. Reaching for the plugin at all would fail here (no VST in
+    the test environment), so completing the run is itself the assertion that the check
+    returns before constructing anything.
+    """
+    from dataset.torch_dataset import RenderedCorpusDataset
+
+    corpus_dir = tmp_path / "run_diva_test"
+    _write_corpus_for_synth(corpus_dir, "diva")
+    monkeypatch.setattr(evaluator_module, "FreshProcessRenderBackend", _FakeBackend)
+
+    model = _FakeITFModel({"AMP": 0.6, "CAT": 1.0})
+    result = Evaluator(RenderedCorpusDataset.load(corpus_dir)).evaluate(
+        model, out_dir=tmp_path / "results"
+    )
+
+    assert model.callbacks == []
+    assert result.summary["num_samples"] == 1
+
+
+def test_models_without_the_itf_hook_are_left_alone(corpus, tmp_path):
+    """The plain fake model has no set_itf_render_callback, so nothing is attached."""
+    model = _FakeModel({"AMP": 0.6, "CAT": 1.0})
+    result = Evaluator(corpus).evaluate(model, out_dir=tmp_path / "results")
+    assert not hasattr(model, "set_itf_render_callback")
+    assert result.summary["num_samples"] == 3

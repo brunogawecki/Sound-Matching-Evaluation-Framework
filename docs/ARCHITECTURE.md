@@ -155,6 +155,11 @@ subcommand. Built corpora land under `dataset/<run-name>/` (gitignored).
 | `metrics/audio_based.py` | Audio metrics over raw waveforms: spectral magnitude, MFCC timbre, loudness, and F0 pitch. Embedding-based perceptual metrics are out of scope (D-METRIC-PERCEPTUAL). |
 | `evaluator.py` | `Evaluator`: per corpus sample, predict → re-render the prediction fresh-process (D-REPRO) → run the panel. Writes `results/<corpus>/<model>/{per_sample.csv, eval_summary.json}`. Reads the render contract **and the synth** from the corpus, never from `config.py` (D-EVAL); a corpus built before the second synth carries no `"synth"` key and defaults to Dexed. |
 
+An **out-of-domain** corpus (`dataset/ood_corpus.py`, D-OOD) runs through the same `Evaluator`
+unchanged: it carries no ground-truth parameters, so the three parameter metrics report `NaN` with a
+valid-count of 0 while the ten audio metrics are untouched. Its render contract is copied from an
+in-domain reference corpus and governs only the prediction re-render.
+
 Outputs under `results/` and `checkpoints/` are gitignored.
 
 ### `scripts/` — entry points
@@ -166,7 +171,8 @@ Outputs under `results/` and `checkpoints/` are gitignored.
 | `build_dataset.py` | CLI around `DatasetBuilder`: build a synthetic, human, or hybrid corpus. `--synth {dexed,diva}` (default `dexed`) picks the synthesizer; `--preset-format {h2p,npz}` (default `h2p`) picks Diva's human source; `--workers N` parallelizes fresh-process partitions across worker processes without changing the rendered audio. |
 | `build_presetgen_corpus.py` | Builds a training corpus from the preset-gen-vae SQLite collection. |
 | `fit_model.py` | Fits any registered model family (`--model`) on a corpus, saves the checkpoint `evaluate.py` loads. |
-| `evaluate.py` | Runs a checkpoint through the `Evaluator` on a corpus; writes the results table. |
+| `evaluate.py` | Runs a checkpoint through the `Evaluator` on a corpus; writes the results table. Takes an in-domain or an out-of-domain corpus with no extra flag -- the corpus describes itself. |
+| `build_ood_corpus.py` | Builds an **out-of-domain** corpus from NSynth (D-OOD): filters to the D3 note (pitch 60, velocity 100), resamples 16 kHz -> 22.05 kHz, and copies the render contract + `ParameterSpace` from an in-domain `--reference-corpus`. Run once per synth. |
 | `benchmark_renderers.py` | D-RENDERER experiment: speed and audio agreement of the three render strategies (reuse, reload, Pedalboard). |
 | `measure_context_leakage.py` | D-RENDERER experiment: tests whether cross-engine divergence is within-engine context leakage. |
 | `render_divergence_examples.py` | D-RENDERER experiment: renders the most divergent patches through all three strategies for side-by-side listening. |
