@@ -149,10 +149,17 @@ def standard_gaussian_log_probability(samples: torch.Tensor) -> torch.Tensor:
     return -0.5 * (samples.shape[1] * _LOG_2_PI + torch.sum(samples.square(), dim=1))
 
 
+# Variance floor/ceiling for the density below. In eval the VAE skips sampling and z0 *is*
+# mu, so the quadratic term is exactly 0/exp(logvar) and an underflowed variance makes it
+# 0/0 = NaN. A healthy logvar sits far inside this range, so the clamp is a no-op there.
+_LOGVAR_CLAMP = 30.0
+
+
 def gaussian_log_probability(
     samples: torch.Tensor, mu: torch.Tensor, logvar: torch.Tensor
 ) -> torch.Tensor:
     """Per-sample log-density under a diagonal Gaussian. Ports ``utils/probability.py``."""
+    logvar = logvar.clamp(-_LOGVAR_CLAMP, _LOGVAR_CLAMP)
     return -0.5 * (
         samples.shape[1] * _LOG_2_PI
         + torch.sum(logvar + (samples - mu).square() / torch.exp(logvar), dim=1)
