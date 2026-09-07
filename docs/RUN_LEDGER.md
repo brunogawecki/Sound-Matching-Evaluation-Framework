@@ -7,7 +7,7 @@ and whether it has been scored. This is the working record behind the thesis res
 *what has actually run*. Keep it to facts that are checkable from `cluster/jobs.json`,
 `checkpoints/` and `results/`.
 
-Last updated: 2026-09-06 (Diva IS / IS2xITF / IS2 / SynthRLp scored).
+Last updated: 2026-09-07 (flow-matching pair scored on both synths; 21 of 22 cells).
 
 ## Benchmark status
 
@@ -15,7 +15,7 @@ Legend: **done** = scored, result on disk · **pending** = checkpoint ready, not
 **running** = training on the cluster · **blocked** = cannot be scored as-is, reason given ·
 **not started** = never submitted.
 
-### Dexed — 9 of 11 scored
+### Dexed — 11 of 11 scored
 
 Train `full_preset-gen-vae_train` (23,448) · test `full_preset-gen-vae_test_1500` (1,500, D4).
 
@@ -30,10 +30,10 @@ Train `full_preset-gen-vae_train` (23,448) · test `full_preset-gen-vae_test_150
 | `IS2` | 993088 | `inversynth2` | **done** |
 | `SynthRLp` | 996865 | `synthrl_p` | **done** |
 | `SynthRLi` | 1007123 | `synthrl_i` | **done** |
-| `FlowMatchingMLP` | 994884 | `flow_matching` | **blocked** — trained on the wrong corpus |
-| `FlowMatchingParam2Tok` | 994886 | `flow_matching` | **blocked** — trained on the wrong corpus |
+| `FlowMatchingMLP` | 994884 | `flow_matching` | **done** — hybrid-corpus arm only, see Blockers |
+| `FlowMatchingParam2Tok` | 994886 | `flow_matching` | **done** — hybrid-corpus arm only, see Blockers |
 
-### Diva — 8 of 11 scored
+### Diva — 10 of 11 scored
 
 Train `diva_h2p_hybrid_train` (23,448) · test `diva_h2p_test` (271, voice-disjoint from train).
 
@@ -47,8 +47,8 @@ Train `diva_h2p_hybrid_train` (23,448) · test `diva_h2p_test` (271, voice-disjo
 | `IS2xITF` | 1073818 | `inversynth2` | **done** |
 | `IS2` | 1073819 | `inversynth2` | **done** |
 | `SynthRLp` | 1073820 | `synthrl_p` | **done** |
-| `FlowMatchingMLP` | 1073243 | `flow_matching` | **blocked** — trained on the wrong corpus |
-| `FlowMatchingParam2Tok` | 1073244 | `flow_matching` | **blocked** — trained on the wrong corpus |
+| `FlowMatchingMLP` | 1073243 | `flow_matching` | **done** — hybrid-corpus arm only, see Blockers |
+| `FlowMatchingParam2Tok` | 1073244 | `flow_matching` | **done** — hybrid-corpus arm only, see Blockers |
 | `SynthRLi` | — | `synthrl_i` | **blocked** — needs the live VST in the training loop (D-RL-RENDER); Diva is not installed on the cluster and `train.sbatch` only knows `DEXED_PATH` |
 
 ### Out-of-domain (D-OOD) — 1 of 11 per synth
@@ -63,12 +63,29 @@ and the 10 audio metrics run unchanged. Reuses the checkpoints above, no extra t
 
 ## Blockers
 
-**Flow-matching, both synths.** D-FLOW-CORPUS (LOCKED) requires these two families to train on a
-synthetic-uniform, G-invariant corpus. All four runs used a human-parented corpus instead, which
-removes the permutation structure Param2Tok exists to exploit, so the MLP-vs-Param2Tok comparison
-would measure nothing. The Dexed rebuild is also blocked on the corpus itself: `synthetic_uniform_train`
-on the cluster holds 15,910 of the 23,448 WAVs its `metadata.csv` claims, which would crash
-`RenderedCorpusDataset.__getitem__`. Diva has no synthetic-uniform corpus at all.
+**Flow-matching: the synthetic-uniform arm is missing, both synths.** All four runs trained on the
+standard corpora (`full_preset-gen-vae_train` / `diva_h2p_hybrid_train`), confirmed from their
+`slurm-*.out` headers. D-FLOW-CORPUS (LOCKED) requires a synthetic-uniform, G-invariant corpus
+instead, because human presets are biased toward particular operator roles and remove the
+permutation structure Param2Tok exists to exploit.
+
+These four are scored anyway, and are best read as the **hybrid arm** of the sweep D-FLOW-CORPUS's
+own Consequences paragraph calls for ("training both flow-matching families across synthetic /
+human / hybrid corpora, all scored on the same test set"), with `FlowMatchingMLP` present as the
+required non-equivariant control. What is missing is the synthetic arm to contrast against. Without
+it, a small MLP-vs-Param2Tok gap cannot distinguish "the G-invariance argument holds" from "the
+model is simply not better" — the prediction is unfalsifiable on one arm. **Do not report these as
+a plain flow-matching result**; the caveat belongs with the number.
+
+Observed on the hybrid arm: on Dexed the two are indistinguishable (`param_mae` 0.1005 vs 0.1009),
+which is what D-FLOW-CORPUS predicts. On Diva they separate (0.2111 vs 0.1481), but both score
+*worse* than `MeanParameterBaseline` on `spectral_convergence` (3.71 / 2.12 against 1.12), so the
+parameter and audio axes disagree there and the Diva pair needs a closer look before use.
+
+Building the synthetic arm: `synthetic_uniform_train` on the cluster holds 15,910 of the 23,448
+WAVs its `metadata.csv` claims and there is no local copy, so it needs a real rebuild, not a
+re-sync. Diva has no synthetic-uniform corpus at any stage, and D-DIVA-RENDER's fresh-process
+plus warm-up render makes building one materially more expensive than the Dexed equivalent.
 
 **Diva `SynthRLi`.** Needs the Diva plugin on the cluster. Not resolvable without a plugin install
 plus an `sbatch` change.
