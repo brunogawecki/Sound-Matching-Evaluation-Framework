@@ -433,6 +433,27 @@ weight counts moved into their own table, and each fragment sets `\footnotesize`
 `\tabcolsep` inside its own brace group. **The caption must expand the abbreviated headers**, since
 the short forms exist only to make the columns fit.
 
+**Header expansions for the caption.** The short forms exist only to fit the width; every one of
+them needs expanding somewhere the reader can find it.
+
+| Header | Metric | Axis | Units / range |
+|---|---|---|---|
+| `P-MAE` | mean absolute error over continuous parameters | parameter | normalized [0,1] |
+| `P-Acc` | fraction of categorical parameters whose class matches | parameter | [0,1], higher better |
+| `MSS` | multi-scale spectral loss (DDSP, Engel et al. 2020) | magnitude | unbounded, 6 FFT scales |
+| `MFCC` | mean absolute error on 13 MFCCs | timbre | MFCC units, gain-invariant |
+| `Loud` | L1 distance between A-weighted loudness contours | loudness | dB |
+| `F0` | RMSE between pyin F0 contours over commonly-voiced frames | pitch | Hz |
+| `LSD` | log-spectral distance, MAE on log10 magnitude STFT | magnitude | log10 units |
+| `SC` | spectral convergence, normalized by the *target* | magnitude | unitless ratio |
+| `Mel-MAE` / `Mel-MSE` | error on 128-band log-mel spectrograms | magnitude | dB / dB^2 |
+| `LUFS` | absolute difference in integrated loudness (BS.1770) | loudness | LUFS |
+| `P-MSE`, `MFCC^2` | the squared twins, appendix only | — | dropped by D-METRIC-PRUNE |
+
+All metrics are lower-is-better except `P-Acc`, and every column header carries its own arrow, read
+from the panel rather than typed. Audio metrics compare the target against the re-rendered
+prediction **as rendered**, with no loudness normalization and no resampling (D-METRIC-NORM).
+
 ## 2. How to describe the numbers — one paragraph, and it has to be right
 
 Each cell is the mean over the test set with a **95% percentile bootstrap confidence interval**
