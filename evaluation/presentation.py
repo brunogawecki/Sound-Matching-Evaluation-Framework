@@ -14,11 +14,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 # (which *family* of approach wins) rather than only which checkpoint won.
 FAMILY_ORDER: List[str] = [
     "Baseline",
-    "Discriminative",
-    "Generative (VAE)",
-    "Neural proxy",
-    "Flow matching",
-    "Reinforcement learning",
+    "Discriminative (Chen et al.)",
+    "Generative (Le Vaillant et al.)",
+    "Neural proxy (Barkan et al.)",
+    "Flow matching (Hayes et al.)",
+    "Reinforcement learning (Shin \& Lee)",
 ]
 
 @dataclass(frozen=True)
@@ -32,16 +32,16 @@ class ModelPresentation:
 # InverSynth II's "xITF" reads *excluding* inference-time finetuning, not a variant of it.
 MODEL_PRESENTATION: Dict[str, ModelPresentation] = {
     "MeanParameterBaseline": ModelPresentation("Baseline", "Mean parameter", 0),
-    "Sound2SynthSpectrogramRegressor": ModelPresentation("Discriminative", "Sound2Synth", 1),
-    "PresetGenVAEMLPRegressor": ModelPresentation("Generative (VAE)", "VAE + MLP", 2),
-    "PresetGenVAEFlowRegressor": ModelPresentation("Generative (VAE)", "VAE + RealNVP", 3),
-    "IS": ModelPresentation("Neural proxy", "IS", 4),
-    "IS2xITF": ModelPresentation("Neural proxy", "IS2xITF", 5),
-    "IS2": ModelPresentation("Neural proxy", "IS2", 6),
-    "FlowMatchingMLP": ModelPresentation("Flow matching", "CNF (MLP)", 7),
-    "FlowMatchingParam2Tok": ModelPresentation("Flow matching", "CNF (Param2Tok)", 8),
-    "SynthRLp": ModelPresentation("Reinforcement learning", "SynthRL-p", 9),
-    "SynthRLi": ModelPresentation("Reinforcement learning", "SynthRL-i", 10),
+    "Sound2SynthSpectrogramRegressor": ModelPresentation("Discriminative (Chen et al.)", "Sound2Synth", 1),
+    "PresetGenVAEMLPRegressor": ModelPresentation("Generative (Le Vaillant et al.)", "VAE + MLP", 2),
+    "PresetGenVAEFlowRegressor": ModelPresentation("Generative (Le Vaillant et al.)", "VAE + RealNVP", 3),
+    "IS": ModelPresentation("Neural proxy (Barkan et al.)", "IS", 4),
+    "IS2xITF": ModelPresentation("Neural proxy (Barkan et al.)", "IS2xITF", 5),
+    "IS2": ModelPresentation("Neural proxy (Barkan et al.)", "IS2", 6),
+    "FlowMatchingMLP": ModelPresentation("Flow matching (Hayes et al.)", "CNF (MLP)", 7),
+    "FlowMatchingParam2Tok": ModelPresentation("Flow matching (Hayes et al.)", "CNF (Param2Tok)", 8),
+    "SynthRLp": ModelPresentation("Reinforcement learning (Shin \& Lee)", "SynthRL-p", 9),
+    "SynthRLi": ModelPresentation("Reinforcement learning (Shin \& Lee)", "SynthRL-i", 10),
 }
 
 METRIC_DISPLAY: Dict[str, str] = {

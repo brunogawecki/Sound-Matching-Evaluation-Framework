@@ -36,11 +36,11 @@ _DEFAULT_PDF = _REPO_ROOT.parent / "thesis_latex" / "figures" / "results-cross-s
 # One colour per family, so crossings read as families changing places, not just models.
 _FAMILY_COLOURS = {
     "Baseline": "#666666",
-    "Discriminative": "#0072B2",
-    "Generative (VAE)": "#009E73",
-    "Neural proxy": "#D55E00",
-    "Flow matching": "#CC79A7",
-    "Reinforcement learning": "#E69F00",
+    "Discriminative (Chen et al.)": "#0072B2",
+    "Generative (Le Vaillant et al.)": "#009E73",
+    "Neural proxy (Barkan et al.)": "#D55E00",
+    "Flow matching (Hayes et al.)": "#CC79A7",
+    "Reinforcement learning (Shin \& Lee)": "#E69F00",
 }
 
 

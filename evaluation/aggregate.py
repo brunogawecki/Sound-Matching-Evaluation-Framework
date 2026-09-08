@@ -49,8 +49,8 @@ HEADLINE_METRICS: Tuple[str, ...] = (
     "param_accuracy",
     "mss",
     "mfcc_mae",
-    "loudness_envelope_l1",
-    "f0_rmse",
+    "lsd",
+    "spectral_convergence",
 )
 
 
