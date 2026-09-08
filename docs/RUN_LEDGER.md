@@ -7,7 +7,7 @@ and whether it has been scored. This is the working record behind the thesis res
 *what has actually run*. Keep it to facts that are checkable from `cluster/jobs.json`,
 `checkpoints/` and `results/`.
 
-Last updated: 2026-09-07 (flow-matching pair scored on both synths; 21 of 22 cells).
+Last updated: 2026-09-07 (thesis tables generated from the 21 in-domain cells; OOD sweep staged).
 
 ## Benchmark status
 
@@ -60,6 +60,41 @@ and the 10 audio metrics run unchanged. Reuses the checkpoints above, no extra t
 |---|---|---|---|
 | `nsynth_c4_dexed` | dexed | 884 | `MeanParameterBaseline` |
 | `nsynth_c4_diva` | diva | 884 | `MeanParameterBaseline` |
+
+## Reporting
+
+The in-domain half is complete enough to report, and the thesis tables are generated from it by
+`scripts/build_results_tables.py` (tables), `figures/plot_metric_correlation.py` and
+`figures/plot_cross_synth_ranks.py` (figures). Output goes to `../thesis_latex/{tables,figures}/`
+plus `results/aggregate/` for the machine-readable long form. Regeneration is deterministic: the
+bootstrap is seeded, and a rebuild is byte-identical.
+
+Reported from: `full_preset-gen-vae_test_1500` (11 models) and `diva_h2p_test` (10). Everything else
+under `results/` is excluded and the reasons are listed in `docs/THESIS_NOTES.md` (§7).
+
+The metric panel is reported at three levels under D-METRIC-PRUNE: 6 in the headline tables, the
+pruned 10 in the cross-synth analysis, all 13 in the appendix. Pruning drops `param_mse`, `mel_mse`
+and `mfcc_mse` only.
+
+## Out-of-domain sweep — staged, not run
+
+20 of 22 OOD cells are missing (10 models x 2 synths at n=884). No training is needed; this is
+evaluation time only, and it was deliberately deferred until the in-domain tables were finished.
+
+Per-sample cost is very uneven (D-EVAL-DEVICE): ~0.85 s for the cheap families, 13.45 s for
+flow-matching, 23 s for `IS2` on CPU but 7.4x faster on MPS. Estimate ~10-15 h for Dexed and more for
+Diva, whose fresh-process render plus warm-up (D-DIVA-RENDER) is materially slower.
+
+When it runs:
+
+- cheap families first, so a partial table is still usable if it is interrupted;
+- `IS2` with `--device mps` (7.4x), flow-matching on **cpu** (MPS is 23% *slower* there);
+- checkpoints are the ones already listed above, reused unchanged.
+
+The table builder already emits an em dash for the three parameter metrics on an OOD corpus
+(`valid_count: 0`), so these land with no code change. Per D-OOD the resulting numbers rank models
+against each other and are **not** absolute fidelity figures, and must not be tabled beside the
+in-domain values as if the scales were comparable.
 
 ## Blockers
 

@@ -4,7 +4,8 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-09-04 (D-OOD locked — out-of-domain evaluation on NSynth: an audio-only corpus
+Last updated: 2026-09-07 (D-METRIC-PRUNE locked — the reported metric subset)
+Previously: 2026-09-04 (D-OOD locked — out-of-domain evaluation on NSynth: an audio-only corpus
 carries no ground-truth parameters, so the parameter axis reports `NaN` / `valid_count: 0` while the
 ten audio metrics run unchanged, and the render contract, copied verbatim from an in-domain reference
 corpus, now governs the *prediction* re-render only. Targets are NSynth pitch-60 / velocity-100 notes
@@ -1903,6 +1904,51 @@ Both are constant across models, so within the OOD table they cancel and ranking
 tables they do not, which is the concrete case for the "OOD scores are comparative, not absolute"
 rule stated above. Anyone reading the two tables side by side will otherwise conclude the models do
 better on real instruments than on presets, which the data does not support.
+
+---
+
+### D-METRIC-PRUNE — The reported metric subset (LOCKED 2026-09-07)
+
+**Decision**: the 13-metric panel is reported at three levels, and the reduction between them is
+measured, not chosen by taste.
+
+1. **The pruned panel (10 metrics)** drops `param_mse`, `mel_mse` and `mfcc_mse`. A metric is
+   dropped when its Spearman rank correlation with a metric already retained on the same axis
+   exceeds **0.90 on every benchmark corpus**. Correlations are pooled over all models scored on a
+   corpus, because redundancy is a property of the panel across the whole range of match quality it
+   has to describe, not of one model's slice of it.
+2. **The headline tables (6 metrics)** take one representative per axis from the pruned panel:
+   `param_mae`, `param_accuracy`, `mss`, `mfcc_mae`, `loudness_envelope_l1`, `f0_rmse`. The
+   parameter axis contributes two because its metrics are not interchangeable — one scores the
+   continuous parameters and one the categorical ones, so dropping either hides half the vector.
+3. **The appendix tables** carry all 13, so nothing measured is withheld.
+
+Implemented in `evaluation/aggregate.py` (`prune_metric_panel`, `HEADLINE_METRICS`) and reported by
+`scripts/build_results_tables.py` and `figures/plot_metric_correlation.py`.
+
+**Why 0.90, and why it is not arbitrary**: the panel's within-axis correlations are **bimodal**. The
+three MAE/MSE duplicate pairs sit at 0.93–0.99 on both synths; the next-highest within-axis pair
+(`mel_mae`/`mss`) sits at 0.85. Any threshold in **0.86–0.93** therefore selects exactly the same
+subset. The cut is placed in the middle of that gap rather than at a round number that happens to
+land on an edge, so the result does not depend on the constant.
+
+**Why "redundant on every corpus" rather than any**: a metric that duplicates another on Dexed but
+not on Diva is carrying real information about at least one synthesizer, and the benchmark reports
+both. Being conservative in that direction can only retain a metric that turns out uninformative;
+the opposite error silently deletes a real signal. `mfcc_mae`/`mfcc_mse` is the case that exercises
+this — 0.96 on Dexed but 0.93 on Diva — and it is dropped only because both exceed the threshold.
+
+**Why the representatives are the ones they are**: where an axis offered several non-redundant
+options, the established literature definition wins, which is the rule `05-implementation.tex`
+already commits the panel to. `mss` is DDSP's multi-scale spectral loss (Engel et al., 2020);
+`mfcc_mae` follows the similarity evaluator of the preset-matching VAE (Le Vaillant et al., 2021).
+
+**Consequences**: this discharges the promise already made in the Implementation chapter, that "the
+reduction to a final non-redundant subset, by rank correlation across the panel, belongs to the
+evaluation and is reported there". The Evaluator is unchanged — it still computes and stores all 13,
+so the pruning is a *reporting* decision and is reversible without re-scoring anything. `f0_rmse` is
+retained on the pruned panel, so D-EVAL's standing rule that it may only be dropped if this analysis
+finds it redundant, never for speed, is satisfied: it is not redundant with anything.
 
 ---
 

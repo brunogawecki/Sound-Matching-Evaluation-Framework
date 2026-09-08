@@ -394,3 +394,148 @@ a replication of it. But it is the same question one step back — does a model 
 transfer to real sounds — and it is answerable with no new training, which is why it is worth having.
 Pair it with the note under the SynthRL topic that stages 1 and 2 test the machinery rather than the
 main claim; together they make the scope of the RL contribution honest and legible.
+
+---
+
+**Topic: the Results chapter — what is generated, and what the prose must not claim.** Every table
+and figure for Chapter 6 is generated from the scored runs on disk by
+`scripts/build_results_tables.py`, `figures/plot_metric_correlation.py` and
+`figures/plot_cross_synth_ranks.py`. Regenerate rather than hand-edit: the fragments carry a
+"do not edit by hand" header and a rebuild will overwrite them. Rationale for the reporting choices
+lives in `DECISIONS.md` (D-METRIC-PRUNE, D-EVAL, D-OOD, D-FLOW-CORPUS); the run-by-run status lives
+in `RUN_LEDGER.md`.
+
+## 1. What is on the page, and what it is called
+
+`../thesis_latex/tables/` holds ten `\input`-able `tabular` fragments — no `table` wrapper, no
+caption, no label, because the writing session owns placement and wording:
+
+| Fragment | Content |
+|---|---|
+| `results-main-dexed`, `results-main-diva` | headline: models × 6 metrics, mean ± 95% CI |
+| `results-appendix-{dexed,diva}-parameter` | full panel, parameter axis |
+| `results-appendix-{dexed,diva}-magnitude` | full panel, magnitude axis |
+| `results-appendix-{dexed,diva}-timbre-loudness-pitch` | full panel, remaining axes |
+| `results-model-size` | trainable weights per model per synth |
+| `results-cross-synth` | rank agreement between the two synths |
+
+`../thesis_latex/figures/` gains `results-metric-correlation.pdf` and
+`results-cross-synth-ranks.pdf`.
+
+**The preamble needs `\usepackage{booktabs}` and `\usepackage{graphicx}`.** `main.tex` currently
+loads neither (only `inputenc`, `fontenc`, `amsmath`, `pdfpages`). Both are installed in the local
+TeX distribution. Every fragment repeats its requirement in a header comment.
+
+All ten fit the 15 cm text width with **zero overfull boxes**, verified by compiling them together
+at that width. That fit is why the tables look the way they do: the family is a spanning header row
+rather than a column, headers are abbreviated (`P-MAE`, `P-Acc`, `MSS`, `MFCC`, `Loud`, `F0`), the
+weight counts moved into their own table, and each fragment sets `\footnotesize` and a 3 pt
+`\tabcolsep` inside its own brace group. **The caption must expand the abbreviated headers**, since
+the short forms exist only to make the columns fit.
+
+## 2. How to describe the numbers — one paragraph, and it has to be right
+
+Each cell is the mean over the test set with a **95% percentile bootstrap confidence interval**
+(10,000 resamples, seed 0), printed as a half-width. Bootstrap rather than a normal approximation
+because the panel's distributions are badly skewed — `f0_rmse` runs a mean of 75 against a standard
+deviation of 171, so a handful of samples dominate and a symmetric interval would misstate it. The
+intervals are near-symmetric in practice: **the largest asymmetry across every reported cell is 7.5%
+of the interval width, median 1.8%**, which is what licenses printing one `±` instead of two bounds.
+Say this once; it is the justification for the notation.
+
+**Bold means significance, not merely the best mean.** A value is bolded only when that model beats
+*every* other model on that metric by a paired Wilcoxon signed-rank test at α = 0.05 with **Holm
+correction** across the comparisons. Pairing is legitimate because every model on a corpus is scored
+on the identical sample set — the builder asserts this and fails loudly otherwise. Holm rather than
+raw thresholds because the leader is tested against ten challengers, and an uncorrected family that
+size manufactures winners.
+
+The consequence is visible and must not be "fixed": **some columns have no bold at all.** On Dexed,
+`loudness_envelope_l1` and `f0_rmse` have no separable winner — SynthRL-p and SynthRL-i are
+indistinguishable there. That is the correct outcome and it is worth one sentence, because a reader
+who expects a bold in every column will otherwise read the gap as an omission.
+
+## 3. The pruning result (D-METRIC-PRUNE)
+
+Chapter 5 already promises this is reported here, so it must appear. Outcome: **13 → 10**, dropping
+`param_mse`, `mel_mse`, `mfcc_mse` — in every case the MSE twin of a retained MAE metric.
+
+The number worth putting in the prose is not the threshold but the **gap**: the three dropped pairs
+correlate at 0.93–0.99 on both synths, and the next-highest within-axis pair sits at 0.85, so **any
+threshold between 0.86 and 0.93 gives exactly this subset**. The result does not depend on the
+constant, and saying so pre-empts the obvious objection. `figures/results-metric-correlation.pdf`
+marks the dropped metrics in red on both panels.
+
+Note what the analysis did *not* find: beyond the MAE/MSE twins the panel is **not** redundant. Four
+magnitude metrics survive. That is a mildly interesting negative result — the axes are measuring
+different things — and is more honest than implying the panel collapsed neatly.
+
+## 4. The cross-synth finding — state it carefully
+
+Model ranking **does not transfer** between Dexed and Diva. Spearman ρ between the two rankings runs
+from −0.38 to +0.53 across the ten metrics, and **no metric reaches p < 0.05**. The slopegraph shows
+it directly: SynthRL-p is best on Dexed and mid-table on Diva, Sound2Synth is near-worst on Dexed and
+best on Diva, IS2 goes from strong to worst.
+
+**The wording must be "no evidence of rank transfer", never "proof that ranking does not transfer".**
+Only ten models are scored on both synths, and with ten points a Spearman ρ has to exceed about 0.65
+to reach significance. The bootstrap CIs in `results-cross-synth.tex` span nearly [−1, 1] and make
+this visible rather than hidden. The test is underpowered to *detect* a moderate correlation, so a
+near-zero ρ is absence of evidence.
+
+The sample-size objection is pre-empted: repeating the analysis with Dexed row-subsampled to Diva's
+271 samples changes ρ by at most 0.182 and leaves every sign and every conclusion intact
+(`results/aggregate/cross_synth_matched_n.csv`). This is free — the render is deterministic, so the
+rows a 271-sample corpus would have produced are the rows already on disk. One sentence, but it
+closes the hole.
+
+This finding is the thesis's own, not any single paper's, and it is the strongest available support
+for the fragmentation argument Chapter 3 establishes: a result obtained on one synthesizer does not
+predict the same models' standing on another.
+
+## 5. Caveats that must travel with specific numbers
+
+- **The two flow-matching rows are the hybrid-corpus arm only.** D-FLOW-CORPUS (LOCKED) requires a
+  synthetic-uniform, G-invariant training corpus, and all four runs trained on the standard human
+  corpora instead. The synthetic arm does not exist and could not be rebuilt in time. **Do not report
+  these as a plain flow-matching result.** Without the missing arm a small MLP-vs-Param2Tok gap
+  cannot distinguish "the equivariance argument holds" from "the model is simply not better". On
+  Dexed the two are indistinguishable on `param_mae` (0.101 vs 0.101), which is what D-FLOW-CORPUS
+  predicts; on Diva they separate (0.211 vs 0.148) but `CNF (MLP)` scores *worse than the mean
+  baseline* on MSS (29.0 against 23.9). The caveat belongs with the number, not in a footnote.
+- **Diva has no `SynthRLi`.** It is the only family that renders with the live VST inside the
+  training loop (D-RL-RENDER), Diva is not installed on the cluster, and `train.sbatch` only knows
+  `DEXED_PATH`. The Diva table has ten rows against Dexed's eleven for that reason.
+- **`SynthRLi` is truncated.** 36 of 200 epochs, with its reward still climbing. Its Dexed numbers
+  understate the method rather than measuring it at convergence.
+- **Diva's intervals are wider by construction**: n = 271 against Dexed's 1500, so roughly 2.4×.
+  State it in the caption and in the limitations. It is a property of the voice-disjoint human split,
+  not a defect in the models.
+- **One training run per family, no seed repeats**, and generative families return a single seeded
+  draw (D-FLOW-PREDICT), so their sampling variance is unmeasured. The confidence intervals describe
+  uncertainty over *test samples* only — they say nothing about how much a rerun with a different
+  seed would move.
+
+## 6. The Diva parameter count — use 231, not 237
+
+D-DIVA-SUBSET defines a 237-parameter subset, but **both Diva benchmark corpora realize 231**
+(134 continuous + 97 categorical = **892 ML dimensions**, not 1100). This is the documented
+corpus-variance rule (`restrict_to_realized`): six parameters are constant across the entire h2p
+preset library, so they are dropped and frozen at the source's own value, and surviving categoricals
+keep only the options the presets actually use. 892 is corroborated independently — it is the latent
+width in the `PresetGenVAEMLPRegressor` NaN analysis in `RUN_LEDGER.md`.
+
+So: the *subset definition* is 237; the *corpus* estimates 231 in 892 dimensions. Chapter 6 describes
+the corpus, so it says 231/892. Dexed is 103 parameters in 333 dimensions with no such narrowing.
+
+## 7. Corpora that are deliberately excluded
+
+Say once, in the experimental setup, which results exist and which are not reported:
+
+- `dexed_builtin_test` (210 samples, 9 models) — retired pilot corpus, and its `Sound2Synth` cell
+  points at a checkpoint that no longer exists, so it is not reproducible.
+- `full_preset-gen-vae_test` (5862) — superseded by its seeded 1500-sample subsample (D4), which is
+  verified representative: the baseline agrees within 0.6% on all 13 metrics.
+- `diva_smoke_test`, `synthrl_smoke_test` — pipeline shakedowns.
+- The two NSynth out-of-domain corpora currently carry **only** the mean-parameter baseline. The
+  remaining 20 cells are not run yet; see `RUN_LEDGER.md` for the staging and cost.
