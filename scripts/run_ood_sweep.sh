@@ -9,6 +9,12 @@
 # flow-matching pair on cpu, where mps is 23% *slower* because the 400 sequential batch-1
 # transformer passes are kernel-launch-latency bound.
 #
+# --save-audio persists the prediction WAV for a seeded 20-sample subset. It costs nothing --
+# the audio has already been rendered to score the sample, so this only writes it out -- and it
+# keeps the OOD runs consistent with the in-domain ones, which all carry the same 20 files. On
+# an out-of-domain corpus it is worth more than in-domain: the target is generally unreachable
+# by the synth, so the numbers alone do not show how a prediction actually differs.
+#
 # Resumable: a cell whose eval_summary.json already exists is skipped, so re-running after an
 # interruption picks up where it stopped. Delete a results folder to force a re-score.
 #
@@ -28,7 +34,7 @@ run_cell() {  # synth_corpus model checkpoint device
     fi
     echo "== ${corpus}/${model} on ${device}  [$(date +%H:%M:%S)]"
     python scripts/evaluate.py --model "$model" --checkpoint "$checkpoint" \
-        --corpus "dataset/${corpus}" --device "$device" \
+        --corpus "dataset/${corpus}" --device "$device" --save-audio \
         || echo "!! FAILED ${corpus}/${model} -- continuing"
 }
 
