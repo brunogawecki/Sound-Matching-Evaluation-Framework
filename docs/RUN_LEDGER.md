@@ -83,8 +83,9 @@ each, every one carrying the seeded 20-sample prediction-audio subset. No traini
 the in-domain checkpoints were reused unchanged and only the Evaluator ran. Reproduce with
 `scripts/run_ood_sweep.sh`, which is resumable and skips any cell already on disk.
 
-That closes the benchmark: **42 of 43 possible cells** (2 synths x 2 domains x their model rosters).
-The one gap remains Diva `SynthRLi`, blocked below.
+That closes the benchmark: **42 cells scored** -- 11 Dexed and 10 Diva, in-domain and out-of-domain
+alike. Against a full 2 x 2 x 11 grid of 44, the two missing are Diva `SynthRLi` in both domains,
+from the single blocker below. Every cell that can be scored has been.
 
 Reported through `results-ood-{dexed,diva}.tex` (audio metrics only -- the parameter axis is
 undefined out of domain) and `results-domain-transfer.tex`. Per D-OOD these numbers rank models
