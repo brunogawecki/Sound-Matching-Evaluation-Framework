@@ -407,7 +407,7 @@ in `RUN_LEDGER.md`.
 
 ## 1. What is on the page, and what it is called
 
-`../thesis_latex/tables/` holds ten `\input`-able `tabular` fragments — no `table` wrapper, no
+`../thesis_latex/tables/` holds 17 `\input`-able `tabular` fragments — no `table` wrapper, no
 caption, no label, because the writing session owns placement and wording:
 
 | Fragment | Content |
@@ -418,7 +418,9 @@ caption, no label, because the writing session owns placement and wording:
 | `results-appendix-{dexed,diva}-timbre-loudness-pitch` | full panel, remaining axes |
 | `results-model-size` | trainable weights per model per synth |
 | `results-cross-synth` | rank agreement between the two synths |
-| `results-ood-{dexed,diva}` | out-of-domain (NSynth), audio metrics only |
+| `results-ood-{dexed,diva}` | out-of-domain (NSynth), headline audio metrics |
+| `results-appendix-ood-{dexed,diva}-magnitude` | out-of-domain, full panel, magnitude axis |
+| `results-appendix-ood-{dexed,diva}-timbre-loudness-pitch` | out-of-domain, full panel, remaining axes |
 | `results-domain-transfer` | in-domain vs out-of-domain rank agreement, per synth |
 
 `../thesis_latex/figures/` gains `results-metric-correlation.pdf` and
@@ -428,7 +430,7 @@ caption, no label, because the writing session owns placement and wording:
 loads neither (only `inputenc`, `fontenc`, `amsmath`, `pdfpages`). Both are installed in the local
 TeX distribution. Every fragment repeats its requirement in a header comment.
 
-All ten fit the 15 cm text width with **zero overfull boxes**, verified by compiling them together
+All 17 fit the 15 cm text width with **zero overfull boxes**, verified by compiling them together
 at that width. That fit is why the tables look the way they do: the family is a spanning header row
 rather than a column, headers are abbreviated (`P-MAE`, `P-Acc`, `MSS`, `MFCC`, `Loud`, `F0`), the
 weight counts moved into their own table, and each fragment sets `\footnotesize` and a 3 pt
@@ -560,8 +562,9 @@ Say once, in the experimental setup, which results exist and which are not repor
 - `full_preset-gen-vae_test` (5862) — superseded by its seeded 1500-sample subsample (D4), which is
   verified representative: the baseline agrees within 0.6% on all 13 metrics.
 - `diva_smoke_test`, `synthrl_smoke_test` — pipeline shakedowns.
-- The two NSynth out-of-domain corpora currently carry **only** the mean-parameter baseline. The
-  remaining 20 cells are not run yet; see `RUN_LEDGER.md` for the staging and cost.
+
+The two NSynth out-of-domain corpora are **not** on this list. Both are fully scored and reported,
+in their own tables. See §8.
 
 
 ---
@@ -571,21 +574,40 @@ Say once, in the experimental setup, which results exist and which are not repor
 All 21 OOD cells are scored: 11 models on `nsynth_c4_dexed` and 10 on `nsynth_c4_diva`, 884 samples
 each, each with the same seeded 20-sample subset of prediction audio the in-domain runs carry.
 
-**Two tables, and they must not be merged with the in-domain ones.** `results-ood-dexed.tex` and
-`results-ood-diva.tex` carry audio metrics only — the targets are NSynth recordings the synth never
-made, so the parameter axis is undefined (`valid_count: 0`) and is omitted rather than printed as a
-column of em dashes. Per D-OOD these numbers **rank models against each other and are not absolute
-fidelity figures**: the error floor is no longer zero, because an NSynth flute is generally
+**Six tables, and they must not be merged with the in-domain ones.** The OOD half is reported at
+the same two levels as the in-domain half, minus the parameter axis: `results-ood-dexed.tex` and
+`results-ood-diva.tex` are the headline pair (4 metrics, the audio half of the in-domain headline
+six), and `results-appendix-ood-{dexed,diva}-{magnitude,timbre-loudness-pitch}.tex` are the appendix
+pair per synth, carrying all 10 surviving metrics. They carry audio metrics only — the targets are
+NSynth recordings the synth never made, so the parameter axis is undefined (`valid_count: 0`) and is
+omitted rather than printed as a column of em dashes. Per D-OOD these numbers **rank models against
+each other and are not absolute fidelity figures**: the error floor is no longer zero, because an
+NSynth flute is generally
 unreachable by Dexed at all, so an OOD score mixes model error with the synthesizer's intrinsic
 inability to make that sound. Putting them beside the in-domain values as if the scales matched
 would invite the reader to conclude the models do better on real instruments than on presets, which
 the data does not support.
 
 D-OOD also records two disclosed offsets that are constant across models and therefore cancel
-*within* the OOD table but not across tables: `f0_rmse` behaves differently because NSynth targets
-are pitched at C4 by construction while the preset test sets contain noise and inharmonic FM, and
-`integrated_loudness_error` reads a corpus loudness offset of roughly +9 dB. Both are reasons the
-two tables are not on one scale.
+*within* the OOD table but not across tables. Both metrics live in the appendix pair, so the prose
+can point at a table rather than assert them.
+
+- `f0_rmse` behaves differently because NSynth targets are pitched at C4 by construction while the
+  preset test sets contain noise and inharmonic FM. The baseline reads 126 in domain against 74 OOD
+  on Dexed, and 155 against 40 on Diva.
+- `integrated_loudness_error` reads a corpus loudness offset. Quote it per synth, from each corpus's
+  `run_summary.json` `source` block: NSynth sits at a median **-15.13 LUFS**, against
+  `full_preset-gen-vae_test_1500` at -24.53 (**+9.40 dB**) and `diva_h2p_test` at -23.43
+  (**+8.30 dB**). The metric moves with it, rising 15.7 to 25.0 on Dexed and 9.2 to 16.4 on Diva.
+
+Both are reasons the two tables are not on one scale.
+
+One more thing the appendix pair exposes: `f0_rmse` is the only metric whose `valid_count` varies by
+model, since frames the prediction leaves unvoiced cannot be compared. Out of domain it runs 841-884
+on Dexed and 752-884 on Diva, against 884 samples. `MeanParameterBaseline` is the only model at a
+full 884 on both. The in-domain tables already print the metric under the same condition (1473-1492
+of 1500 on Dexed, 248-267 of 271 on Diva), so this is not new out of domain, but a reader who checks
+n against the table header should find it stated somewhere.
 
 ## 9. The domain-transfer finding — and how it contrasts with the cross-synth one
 

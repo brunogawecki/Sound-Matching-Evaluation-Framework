@@ -480,6 +480,25 @@ def main() -> None:
             (out_dir / f"results-ood-{synth}.tex").write_text(
                 build_metric_table(runs, audio_headline, note)
             )
+
+            for suffix, axes in APPENDIX_GROUPS.items():
+                if suffix == "parameter":
+                    continue
+                metrics = [spec.name for spec in METRIC_PANEL if spec.axis in axes]
+                appendix_note = (
+                    f"{display}, out-of-domain (NSynth), n={runs[0].num_samples}. "
+                    f"Full audio panel, {'/'.join(axes)} axes.\n"
+                    "The parameter axis is undefined out of domain (D-OOD), so it has no\n"
+                    "appendix table here; the in-domain one covers it.\n"
+                    "These numbers rank models against each other. They are NOT absolute fidelity\n"
+                    "figures and are not comparable with the in-domain tables: the error floor is not\n"
+                    "zero, because the synthesizer generally cannot reach an NSynth target at all.\n"
+                    "Metrics dropped by the redundancy analysis are retained here for completeness."
+                )
+                (out_dir / f"results-appendix-ood-{synth}-{suffix}.tex").write_text(
+                    build_metric_table(runs, metrics, appendix_note)
+                )
+
             table = metric_table(runs, panel_names)
             table.insert(0, "synth", synth)
             table["retained_after_pruning"] = table["metric"].isin(retained)

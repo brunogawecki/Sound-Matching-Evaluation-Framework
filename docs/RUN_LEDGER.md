@@ -74,7 +74,8 @@ under `results/` is excluded and the reasons are listed in `docs/THESIS_NOTES.md
 
 The metric panel is reported at three levels under D-METRIC-PRUNE: 6 in the headline tables, the
 pruned 10 in the cross-synth analysis, all 13 in the appendix. Pruning drops `param_mse`, `mel_mse`
-and `mfcc_mse` only.
+and `mfcc_mse` only. Out of domain the same two table levels exist with the parameter axis removed,
+so 4 in the headline and the 10 audio metrics in the appendix.
 
 ## Out-of-domain sweep — complete
 
@@ -87,8 +88,9 @@ That closes the benchmark: **42 cells scored** -- 11 Dexed and 10 Diva, in-domai
 alike. Against a full 2 x 2 x 11 grid of 44, the two missing are Diva `SynthRLi` in both domains,
 from the single blocker below. Every cell that can be scored has been.
 
-Reported through `results-ood-{dexed,diva}.tex` (audio metrics only -- the parameter axis is
-undefined out of domain) and `results-domain-transfer.tex`. Per D-OOD these numbers rank models
+Reported through `results-ood-{dexed,diva}.tex` (headline) and
+`results-appendix-ood-{dexed,diva}-{magnitude,timbre-loudness-pitch}.tex` (full panel), audio
+metrics only -- the parameter axis is undefined out of domain -- plus `results-domain-transfer.tex`. Per D-OOD these numbers rank models
 against each other and are **not** absolute fidelity figures, and must not be tabled beside the
 in-domain values as if the scales were comparable.
 
