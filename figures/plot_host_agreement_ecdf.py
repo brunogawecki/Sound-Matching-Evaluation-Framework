@@ -1,14 +1,8 @@
 """Cross-engine agreement ECDF figure for the thesis Discussion chapter.
 
-Plots the empirical cumulative distribution (ECDF) of the three DawDreamer-vs-Pedalboard
-agreement metrics over the non-silent canonical (seed-0) patches from the D-RENDERER
-benchmark: log-spectral distance (dB) in its own panel, and the two unitless metrics
-(spectral convergence, normalized RMS difference) grouped in a second panel. Median, p90
-and p95 are marked as points on each curve.
-
-The figure deliberately carries NO interpretive annotation: the shape of the curves is
-left for the thesis prose to read. Data comes from a committed CSV
-(scripts/benchmark_renderers.py --dump-agreement-csv), so this regenerates without the VST.
+Plots the empirical cumulative distribution (ECDF) of DawDreamer-vs-Pedalboard
+agreement over the non-silent canonical (seed-0) patches from the D-RENDERER
+benchmark. Only log-spectral distance (dB) is plotted.
 
 Run:
     python figures/plot_host_agreement_ecdf.py
@@ -75,33 +69,23 @@ def main() -> None:
 
     data = pd.read_csv(csv_path)
     lsd = data["log_spectral_distance_db"].to_numpy()
-    spectral_convergence = data["spectral_convergence"].to_numpy()
-    normalized_rms = data["normalized_rms_difference"].to_numpy()
 
     import matplotlib.pyplot as plt
 
     using_tex = apply_paper_style()
-    fig, (axis_lsd, axis_unitless) = plt.subplots(
-        1, 2, figsize=figure_size(FULL_WIDTH_IN, aspect=0.46), sharey=True
+    # Changed to 1 subplot instead of 2, slightly smaller width aspect ratio so it doesn't look awkwardly wide
+    fig, axis_lsd = plt.subplots(
+        1, 1, figsize=figure_size(FULL_WIDTH_IN * 0.7, aspect=0.6)
     )
 
-    # Panel 1: log-spectral distance, in dB (own axis).
     _draw_curve(axis_lsd, lsd, color="#0072B2", label="Log-spectral distance")
     axis_lsd.set_xlabel("Log-spectral distance (dB)")
     axis_lsd.set_ylabel("Cumulative fraction of patches")
     axis_lsd.set_xlim(left=0.0)
+    axis_lsd.set_ylim(0.0, 1.02)
     _percentile_legend(axis_lsd)
 
-    # Panel 2: the two unitless metrics, grouped.
-    _draw_curve(axis_unitless, spectral_convergence, color="#D55E00", label="Spectral convergence")
-    _draw_curve(axis_unitless, normalized_rms, color="#009E73", label="Normalized RMS difference")
-    axis_unitless.set_xlabel("Agreement metric (unitless)")
-    axis_unitless.set_xlim(left=0.0)
-    axis_unitless.legend(loc="lower right")
-
-    for axis in (axis_lsd, axis_unitless):
-        axis.set_ylim(0.0, 1.02)
-
+    fig.tight_layout()
     fig.savefig(args.out)
     print(f"wrote {args.out}  (n={len(data)} patches, usetex={using_tex})")
 
