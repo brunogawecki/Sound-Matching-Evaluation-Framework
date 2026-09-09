@@ -31,6 +31,10 @@ docs/walkthroughs/
 # future neural checkpoints (.ckpt/.pt) out of history.
 /checkpoints/
 /results/
+# Side results roots for experiment arms scored on the same corpus as the
+# benchmark (e.g. --out results_synthetic_arm), which cannot share results/
+# without looking like a corpus to discovery.py's results/<corpus>/<model> scan.
+/results_*/
 
 # PyTorch Lightning's default autolog output (metrics.csv + checkpoints per
 # run). Regenerable, same rationale as /checkpoints/ and /results/ above.

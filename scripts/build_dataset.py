@@ -18,6 +18,9 @@ corpus.
     --count     how many presets to render                  [default: 16]
     --seed      master seed for the random sampler           [default: 0]
     --run-name  output subdirectory name                     [default: synthetic_smoke]
+    --like-corpus  draw over an existing corpus's realized parameter space rather
+                   than the wrapper's full subset, so a model trained on one is
+                   scorable on the other                     [default: none]
 
 ``human`` -- real presets projected onto the subset. By default every preset is
 train (``--test-fraction 0.0``); raise it to also render a held-out test
@@ -105,10 +108,11 @@ collection. ``--keep-constant-params`` opts out.
 """
 import argparse
 import glob
+import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 # This script lives in scripts/; put the project root on the path so the
 # top-level packages (config, synth, dataset) import when run from anywhere.
@@ -324,17 +328,48 @@ def _build(
     _report(summary, Path(config.DATASET_DIR) / run_name)
 
 
+def _reference_corpus_space(corpus_dir: Path) -> Tuple[ParameterSpace, Optional[dict]]:
+    """The ParameterSpace and frozen non-subset defaults an existing corpus was built on.
+
+    Read from that corpus's own run_summary.json (D-SELFDESC), the same route
+    ``RenderedCorpusDataset.load`` takes, so no VST is needed to answer the question.
+
+    Needed because a preset-derived corpus is narrowed by ``restrict_to_realized`` to
+    what its preset library actually varies, while a synthetic draw would otherwise
+    span the wrapper's full subset. On Diva that is 231 parameters / 892 ML dimensions
+    against 237 / 1100, and a model trained on one cannot be scored on the other. The
+    frozen defaults come along because the dropped parameters are held at the reference
+    corpus's base patch, not at the synth's init patch.
+    """
+    with open(corpus_dir / "run_summary.json") as summary_file:
+        summary = json.load(summary_file)
+    if "parameter_space" not in summary:
+        raise SystemExit(
+            f"{corpus_dir / 'run_summary.json'} has no serialized 'parameter_space'; "
+            "it predates D-SELFDESC and cannot be matched against."
+        )
+    return ParameterSpace.from_dict(summary["parameter_space"]), summary.get("default_params")
+
+
 def build_synthetic(args: argparse.Namespace) -> None:
     synth = _make_synth(args.synth)
+    space, frozen = synth.parameter_space, None
+    if args.like_corpus:
+        space, frozen = _reference_corpus_space(Path(args.like_corpus))
+        print(
+            f"--- Matching '{args.like_corpus}': {len(space.names)} parameters, "
+            f"{space.ml_dimension} ML dimensions ---"
+        )
     print(f"--- Building '{args.run_name}': {args.count} synthetic presets (seed {args.seed}) ---")
     source = SyntheticPresetSource(
-        synth.parameter_space,
+        space,
         count=args.count,
         seed=args.seed,
         sampling_ranges=synth.audible_sampling_ranges,
     )
     _build(synth, source, args.run_name, args.synth,
-           fresh_process=args.fresh_process, workers=args.workers)
+           fresh_process=args.fresh_process, workers=args.workers,
+           parameter_space=space, default_params=frozen)
 
 
 def _human_run_name(custom: Optional[str], partition: str, render_both: bool) -> str:
@@ -459,6 +494,12 @@ def build_parser() -> argparse.ArgumentParser:
     synthetic.add_argument("--count", type=int, default=16, help="number of presets to render")
     synthetic.add_argument("--seed", type=int, default=0, help="master seed for the sampler")
     synthetic.add_argument("--run-name", default="synthetic_smoke", help="output subdirectory name")
+    synthetic.add_argument(
+        "--like-corpus", default=None, metavar="DIR",
+        help="draw over an existing corpus's realized parameter space instead of the "
+             "wrapper's full subset, so the two are trainable/scorable against each "
+             "other (e.g. dataset/diva_h2p_test)",
+    )
     _add_synth_flag(synthetic)
     _add_fresh_process_flag(synthetic)
     synthetic.set_defaults(func=build_synthetic)

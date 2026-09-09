@@ -7,7 +7,7 @@ and whether it has been scored. This is the working record behind the thesis res
 *what has actually run*. Keep it to facts that are checkable from `cluster/jobs.json`,
 `checkpoints/` and `results/`.
 
-Last updated: 2026-09-09 (out-of-domain sweep complete; all 42 cells scored).
+Last updated: 2026-09-09 (out-of-domain sweep complete, all 42 cells scored; flow-matching synthetic-uniform arm under way).
 
 ## Benchmark status
 
@@ -92,6 +92,57 @@ undefined out of domain) and `results-domain-transfer.tex`. Per D-OOD these numb
 against each other and are **not** absolute fidelity figures, and must not be tabled beside the
 in-domain values as if the scales were comparable.
 
+## Flow-matching synthetic-uniform arm (D-FLOW-CORPUS)
+
+Started 2026-09-09 to close the blocker below. This is a **separate arm**, not new benchmark
+cells: the 42 cells above are untouched and keep the hybrid/human-trained flow-matching rows.
+Scored into `results_synthetic_arm/` rather than `results/`, because the model class name is the
+results directory name and the two arms would otherwise overwrite each other.
+
+### Dexed corpus repaired
+
+`synthetic_uniform_train` was never rebuilt. Its `metadata.csv` and `run_summary.json` were
+complete all along and only the audio was short, contiguously from `sample_015910` -- an
+interrupted rsync, not an interrupted build. `scripts/render_missing_audio.py` re-rendered the
+missing rows from the corpus's own metadata, so no parameters were re-drawn.
+
+The repair is exact, not approximate. Re-rendering `sample_015908` / `sample_015909` from a fresh
+wrapper reproduced the stored WAVs bit for bit (max |diff| 0.000e+00), against originals that
+carried 15,908 renders of leaked in-process voice state. Dexed renders are fully determined by
+their parameters. Cluster and local copies now both hold 23,448 WAVs, one distinct file size,
+matching `metadata.csv` row for row.
+
+| Model | Job | Elapsed | Train | Eval |
+|---|---|---|---|---|
+| `FlowMatchingMLP` | 1079944 | 03:23:02 | **done** | **done** |
+| `FlowMatchingParam2Tok` | 1079945 | 08:57:55 | **done** | **running** |
+
+### Diva corpus built
+
+`diva_synthetic_uniform_train`, 23,448 samples, fresh-process per D-DIVA-RENDER, 1.49 s/preset
+serial (~9.7 h). 0 near-silent and 0 render-timeout drops, so uniform Diva draws need no D-AUDIBLE
+constraint and the prior is **exactly** G-invariant where Dexed's is only approximately -- Diva
+inherits the empty `audible_sampling_ranges` default and so carries no OP1-style pin.
+
+Built with `build_dataset.py synthetic --like-corpus dataset/diva_h2p_test`, a flag added for this
+run. Without it the draw spans the wrapper's full 237-parameter / 1100-dimension subset, while both
+Diva benchmark corpora are narrowed by `restrict_to_realized` to 231 / 892, and a model trained on
+one cannot be scored on the other. The built corpus's parameter space matches `diva_h2p_test`
+exactly, same names in the same order. Push to the cluster in progress; no training submitted yet.
+
+### Reading these numbers
+
+The synthetic arm scores far worse than the hybrid arm on every metric (`FlowMatchingMLP`
+`param_mae` 0.3619 against 0.1005, `param_accuracy` 0.2294 against 0.8051). That is expected and is
+**not** a model-quality result: `full_preset-gen-vae_test_1500` is human presets, so the hybrid arm
+trained on the test distribution and the synthetic arm did not. The shift dominates the comparison.
+
+D-FLOW-CORPUS's question is answered **within** an arm, not across them: Param2Tok against its own
+`FlowMatchingMLP` control on the same training corpus. On the hybrid arm they are indistinguishable
+(0.1005 vs 0.1009), which is what the decision predicts for a non-invariant prior. The synthetic-arm
+pair is the test. **Do not substitute this arm into the main benchmark table** -- it would read as
+flow-matching collapsing, when most of the gap is distribution shift.
+
 ## Blockers
 
 **Flow-matching: the synthetic-uniform arm is missing, both synths.** All four runs trained on the
@@ -126,10 +177,10 @@ which is what D-FLOW-CORPUS predicts. On Diva they separate (0.2111 vs 0.1481), 
 *worse* than `MeanParameterBaseline` on `spectral_convergence` (3.71 / 2.12 against 1.12), so the
 parameter and audio axes disagree there and the Diva pair needs a closer look before use.
 
-Building the synthetic arm: `synthetic_uniform_train` on the cluster holds 15,910 of the 23,448
-WAVs its `metadata.csv` claims and there is no local copy, so it needs a real rebuild, not a
-re-sync. Diva has no synthetic-uniform corpus at any stage, and D-DIVA-RENDER's fresh-process
-plus warm-up render makes building one materially more expensive than the Dexed equivalent.
+**Being resolved 2026-09-09.** Both synthetic-uniform corpora now exist and the Dexed pair has
+trained; see "Flow-matching synthetic-uniform arm" above for status. This blocker stays open until
+both synths' arms are scored, and the caveat above stays attached to the benchmark rows either way,
+since those rows are still the hybrid/human-trained ones.
 
 **Diva `SynthRLi`.** Needs the Diva plugin on the cluster. Not resolvable without a plugin install
 plus an `sbatch` change.
