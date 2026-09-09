@@ -1917,10 +1917,23 @@ measured, not chosen by taste.
    exceeds **0.90 on every benchmark corpus**. Correlations are pooled over all models scored on a
    corpus, because redundancy is a property of the panel across the whole range of match quality it
    has to describe, not of one model's slice of it.
-2. **The headline tables (6 metrics)** take one representative per axis from the pruned panel:
-   `param_mae`, `param_accuracy`, `mss`, `mfcc_mae`, `loudness_envelope_l1`, `f0_rmse`. The
-   parameter axis contributes two because its metrics are not interchangeable — one scores the
-   continuous parameters and one the categorical ones, so dropping either hides half the vector.
+2. **The headline tables (6 metrics)**: `param_mae`, `param_accuracy`, `mss`, `mfcc_mae`, `lsd`,
+   `spectral_convergence` (set by the user, 2026-09-08). The parameter axis contributes two because
+   its metrics are not interchangeable — one scores the continuous parameters and one the
+   categorical ones, so dropping either hides half the vector.
+
+   **Six is a hard limit, not a preference**: seven metrics overflow the thesis text width by
+   12.7 pt and eight by 70 pt, measured by compiling the generated table at 15 cm.
+
+   This set weights the **magnitude** axis (three of six columns) and carries **no loudness or
+   pitch column**. That is a deliberate choice and its two costs should be stated rather than
+   discovered by a reader: `mss` and `lsd` correlate at 0.83 on Dexed and 0.76 on Diva, so one
+   column is close to a duplicate of another (`spectral_convergence` is independent of both at
+   0.22–0.38 and does earn its place); and `05-implementation.tex` currently argues the panel
+   reports "several complementary views of a match rather than one fused score", naming magnitude,
+   timbre, loudness and pitch — **that sentence needs softening, or it contradicts the headline
+   table**. Nothing is lost from the results themselves: all four axes appear in full in the
+   appendix tables, so this governs emphasis, not coverage.
 3. **The appendix tables** carry all 13, so nothing measured is withheld.
 
 Implemented in `evaluation/aggregate.py` (`prune_metric_panel`, `HEADLINE_METRICS`) and reported by

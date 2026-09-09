@@ -418,6 +418,8 @@ caption, no label, because the writing session owns placement and wording:
 | `results-appendix-{dexed,diva}-timbre-loudness-pitch` | full panel, remaining axes |
 | `results-model-size` | trainable weights per model per synth |
 | `results-cross-synth` | rank agreement between the two synths |
+| `results-ood-{dexed,diva}` | out-of-domain (NSynth), audio metrics only |
+| `results-domain-transfer` | in-domain vs out-of-domain rank agreement, per synth |
 
 `../thesis_latex/figures/` gains `results-metric-correlation.pdf` and
 `results-cross-synth-ranks.pdf`.
@@ -560,3 +562,69 @@ Say once, in the experimental setup, which results exist and which are not repor
 - `diva_smoke_test`, `synthrl_smoke_test` — pipeline shakedowns.
 - The two NSynth out-of-domain corpora currently carry **only** the mean-parameter baseline. The
   remaining 20 cells are not run yet; see `RUN_LEDGER.md` for the staging and cost.
+
+
+---
+
+## 8. The out-of-domain results (added 2026-09-09, after the sweep landed)
+
+All 21 OOD cells are scored: 11 models on `nsynth_c4_dexed` and 10 on `nsynth_c4_diva`, 884 samples
+each, each with the same seeded 20-sample subset of prediction audio the in-domain runs carry.
+
+**Two tables, and they must not be merged with the in-domain ones.** `results-ood-dexed.tex` and
+`results-ood-diva.tex` carry audio metrics only — the targets are NSynth recordings the synth never
+made, so the parameter axis is undefined (`valid_count: 0`) and is omitted rather than printed as a
+column of em dashes. Per D-OOD these numbers **rank models against each other and are not absolute
+fidelity figures**: the error floor is no longer zero, because an NSynth flute is generally
+unreachable by Dexed at all, so an OOD score mixes model error with the synthesizer's intrinsic
+inability to make that sound. Putting them beside the in-domain values as if the scales matched
+would invite the reader to conclude the models do better on real instruments than on presets, which
+the data does not support.
+
+D-OOD also records two disclosed offsets that are constant across models and therefore cancel
+*within* the OOD table but not across tables: `f0_rmse` behaves differently because NSynth targets
+are pitched at C4 by construction while the preset test sets contain noise and inharmonic FM, and
+`integrated_loudness_error` reads a corpus loudness offset of roughly +9 dB. Both are reasons the
+two tables are not on one scale.
+
+## 9. The domain-transfer finding — and how it contrasts with the cross-synth one
+
+`results-domain-transfer.tex` asks whether a model's in-domain rank predicts its out-of-domain rank
+on the *same* synthesizer. Unlike the cross-synth comparison there is no confounding change of
+parameter space: only the targets change, from presets the synth made to recordings it never could.
+
+The two synths answer differently, and that contrast is the interesting part:
+
+- **Diva: rank largely transfers.** Spearman rho 0.82 (LSD), 0.79 (MSS), 0.76 (MFCC MAE), 0.72
+  (spectral convergence), 0.64 (mel MAE) — five of eight metrics at p < 0.05.
+- **Dexed: mostly it does not.** rho runs -0.15 to 0.75 and only `loudness_envelope_l1` (0.75) and
+  `spectral_convergence` (0.65) reach significance; MSS sits at 0.09 and LSD at -0.15.
+
+So a model's in-domain standing is a fair guide to its out-of-domain standing on Diva and a poor one
+on Dexed. Read alongside §4 — ranking does not transfer *between* synthesizers either — the picture
+is that benchmark standing is contingent on the evaluation setting in ways a single-synth,
+single-domain result cannot reveal. That is the thesis's own argument, and this is the evidence for
+it.
+
+**The same power caveat applies, and must be stated.** Ten or eleven models is a small sample for a
+rank correlation; the bootstrap CIs printed in the table are wide for exactly that reason. A
+near-zero rho is absence of evidence for transfer, not evidence of its absence. Do not describe the
+Dexed column as showing that rank *fails* to transfer — describe it as failing to establish that it
+does.
+
+## 10. Action item in Chapter 5, created by the headline metric set
+
+The headline tables carry `param_mae`, `param_accuracy`, `mss`, `mfcc_mae`, `lsd`,
+`spectral_convergence` — three magnitude metrics, and **no loudness or pitch column**. Six is a hard
+width limit (seven overflows the text width by 12.7 pt).
+
+`05-implementation.tex` currently says the panel reports "several complementary views of a match
+rather than one fused score" and names magnitude, timbre, loudness and pitch as the audio axes. As
+written that sets up an expectation the headline table does not meet. **Soften that sentence**, or
+add one line to the Results text saying the headline tables show a magnitude-weighted selection and
+the full four-axis panel appears in the appendix. Either fixes it; leaving both as they are is the
+only wrong option.
+
+Note also that `mss` and `lsd` correlate at 0.83 on Dexed and 0.76 on Diva, so if a reader asks why
+both are present, the honest answer is emphasis on the magnitude axis rather than independent
+information. `spectral_convergence` is independent of both (0.22-0.38) and needs no such defence.

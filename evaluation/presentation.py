@@ -18,7 +18,7 @@ FAMILY_ORDER: List[str] = [
     "Generative (Le Vaillant et al.)",
     "Neural proxy (Barkan et al.)",
     "Flow matching (Hayes et al.)",
-    "Reinforcement learning (Shin \& Lee)",
+    r"Reinforcement learning (Shin \& Lee)",
 ]
 
 @dataclass(frozen=True)
@@ -40,8 +40,8 @@ MODEL_PRESENTATION: Dict[str, ModelPresentation] = {
     "IS2": ModelPresentation("Neural proxy (Barkan et al.)", "IS2", 6),
     "FlowMatchingMLP": ModelPresentation("Flow matching (Hayes et al.)", "CNF (MLP)", 7),
     "FlowMatchingParam2Tok": ModelPresentation("Flow matching (Hayes et al.)", "CNF (Param2Tok)", 8),
-    "SynthRLp": ModelPresentation("Reinforcement learning (Shin \& Lee)", "SynthRL-p", 9),
-    "SynthRLi": ModelPresentation("Reinforcement learning (Shin \& Lee)", "SynthRL-i", 10),
+    "SynthRLp": ModelPresentation(r"Reinforcement learning (Shin \& Lee)", "SynthRL-p", 9),
+    "SynthRLi": ModelPresentation(r"Reinforcement learning (Shin \& Lee)", "SynthRL-i", 10),
 }
 
 METRIC_DISPLAY: Dict[str, str] = {

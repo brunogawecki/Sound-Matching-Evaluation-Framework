@@ -57,6 +57,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # them are benchmark results, so none are read here.
 BENCHMARK_CORPORA = {"dexed": "full_preset-gen-vae_test_1500", "diva": "diva_h2p_test"}
 
+# The out-of-domain corpora (D-OOD). Their targets are NSynth recordings the synth never made,
+# so they carry no ground-truth parameters: the three parameter metrics report NaN with a
+# valid_count of 0 and are omitted from these tables entirely rather than printed as a column
+# of em dashes. Per D-OOD the resulting numbers rank models against each other and are NOT
+# absolute fidelity figures, because a perfect prediction no longer floors the audio metrics at
+# zero -- an NSynth flute is generally unreachable by Dexed. They are therefore emitted as their
+# own tables and must never be tabled beside the in-domain values as if the scales matched.
+OOD_CORPORA = {"dexed": "nsynth_c4_dexed", "diva": "nsynth_c4_diva"}
+
 # Appendix tables are split by axis so neither exceeds the thesis text width.
 APPENDIX_GROUPS = {
     "parameter": ("parameter",),
@@ -321,6 +330,55 @@ def matched_sample_check(
     return pd.DataFrame(rows)
 
 
+def build_domain_transfer_table(
+    in_domain: Dict[str, List[ResultRun]],
+    out_of_domain: Dict[str, List[ResultRun]],
+    metrics: Sequence[str],
+) -> str:
+    """Does a model's in-domain rank predict its out-of-domain rank, on the same synth?
+
+    This is the question the out-of-domain axis exists to answer. Both rankings come from the
+    same models on the same synthesizer, so unlike the cross-synth comparison there is no
+    confound from a different parameter space -- only the targets change, from presets the
+    synth made to recordings it never could.
+    """
+    rows: List[Optional[List[str]]] = []
+    for synth, runs in in_domain.items():
+        if synth not in out_of_domain:
+            continue
+        shared = sorted(
+            set(r.model for r in runs) & set(r.model for r in out_of_domain[synth])
+        )
+        rows.append([
+            f"\\multicolumn{{4}}{{l}}{{\\textit{{{SYNTH_DISPLAY[synth]}}} "
+            f"({len(shared)} models)}}"
+        ])
+        for metric in metrics:
+            rho, p_value, low, high = _rank_agreement(
+                _oriented_means(runs, shared, metric),
+                _oriented_means(out_of_domain[synth], shared, metric),
+            )
+            rows.append([
+                "\\quad " + metric_header(metric, PANEL_BY_NAME[metric].higher_is_better, short=False),
+                f"{rho:.2f}",
+                f"[{low:.2f}, {high:.2f}]",
+                f"{p_value:.3f}",
+            ])
+    note = (
+        "Agreement between each model's in-domain rank and its out-of-domain rank on the same\n"
+        "synthesizer. Ranks are oriented so that rank 1 is the best model. Audio metrics only,\n"
+        "since the parameter axis is undefined out of domain. The interval is a 95% bootstrap CI\n"
+        "resampled over models; with ten models it is wide, so read a near-zero value as absence\n"
+        "of evidence for transfer rather than evidence of its absence."
+    )
+    return tabular(
+        "lrrr",
+        [["Metric", "Spearman $\\rho$", "95\\% CI", "$p$"]],
+        rows,
+        note=note,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build the thesis benchmark tables.")
     parser.add_argument("--results-root", default=str(PROJECT_ROOT / "results"))
@@ -394,6 +452,41 @@ def main() -> None:
     if not args.skip_parameter_counts:
         (out_dir / "results-model-size.tex").write_text(
             build_model_size_table({s: c for s, c in counts_by_synth.items() if c is not None})
+        )
+
+    ood_by_synth: Dict[str, List[ResultRun]] = {}
+    for synth, corpus in OOD_CORPORA.items():
+        try:
+            runs = load_result_runs(results_root, corpus)
+        except FileNotFoundError:
+            print(f"\nout-of-domain: '{corpus}' not scored yet, skipping")
+            continue
+        assert_paired(runs)
+        ood_by_synth[synth] = runs
+
+    if ood_by_synth:
+        audio_headline = [m for m in HEADLINE_METRICS if PANEL_BY_NAME[m].input_type == "audio"]
+        audio_retained = [m for m in retained if PANEL_BY_NAME[m].input_type == "audio"]
+        for synth, runs in ood_by_synth.items():
+            display = SYNTH_DISPLAY[synth]
+            note = (
+                f"{display}, out-of-domain (NSynth), n={runs[0].num_samples}. Audio metrics only:\n"
+                "the targets carry no ground-truth parameters, so the parameter axis is undefined\n"
+                "(D-OOD) and is omitted rather than printed as empty cells.\n"
+                "These numbers rank models against each other. They are NOT absolute fidelity\n"
+                "figures and are not comparable with the in-domain tables: the error floor is not\n"
+                "zero, because the synthesizer generally cannot reach an NSynth target at all."
+            )
+            (out_dir / f"results-ood-{synth}.tex").write_text(
+                build_metric_table(runs, audio_headline, note)
+            )
+            table = metric_table(runs, panel_names)
+            table.insert(0, "synth", synth)
+            table["retained_after_pruning"] = table["metric"].isin(retained)
+            long_form.append(table)
+
+        (out_dir / "results-domain-transfer.tex").write_text(
+            build_domain_transfer_table(runs_by_synth, ood_by_synth, audio_retained)
         )
 
     (out_dir / "results-cross-synth.tex").write_text(

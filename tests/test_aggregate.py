@@ -173,9 +173,19 @@ class TestPruneMetricPanel:
         matrix = self._matrix({("mel_mae", "mel_mse"): 0.99, ("mfcc_mae", "mfcc_mse"): 0.97})
         assert prune_metric_panel([matrix]) == prune_metric_panel([matrix])
 
-    def test_headline_metrics_cover_every_axis(self):
-        axes = {spec.axis for spec in METRIC_PANEL if spec.name in HEADLINE_METRICS}
-        assert axes == {spec.axis for spec in METRIC_PANEL}
+    def test_headline_metrics_are_six(self):
+        # Six is a hard limit, not a preference: seven metrics overflow the thesis text
+        # width by 12.7pt and eight by 70pt, measured by compiling the generated table.
+        assert len(HEADLINE_METRICS) == 6
+
+    def test_headline_metrics_are_all_real_panel_metrics(self):
+        assert set(HEADLINE_METRICS) <= {spec.name for spec in METRIC_PANEL}
+
+    def test_headline_metrics_keep_both_parameter_kinds(self):
+        # The parameter metrics are not interchangeable -- one scores the continuous
+        # parameters and one the categorical ones -- so a headline table carrying only one
+        # of them would report half the predicted vector while appearing to report all of it.
+        assert {"param_mae", "param_accuracy"} <= set(HEADLINE_METRICS)
 
 
 class TestAssertPaired:

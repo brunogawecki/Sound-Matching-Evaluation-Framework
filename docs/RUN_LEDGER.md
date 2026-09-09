@@ -7,7 +7,7 @@ and whether it has been scored. This is the working record behind the thesis res
 *what has actually run*. Keep it to facts that are checkable from `cluster/jobs.json`,
 `checkpoints/` and `results/`.
 
-Last updated: 2026-09-07 (thesis tables generated from the 21 in-domain cells; OOD sweep staged).
+Last updated: 2026-09-09 (out-of-domain sweep complete; all 42 cells scored).
 
 ## Benchmark status
 
@@ -51,15 +51,15 @@ Train `diva_h2p_hybrid_train` (23,448) · test `diva_h2p_test` (271, voice-disjo
 | `FlowMatchingParam2Tok` | 1073244 | `flow_matching` | **done** — hybrid-corpus arm only, see Blockers |
 | `SynthRLi` | — | `synthrl_i` | **blocked** — needs the live VST in the training loop (D-RL-RENDER); Diva is not installed on the cluster and `train.sbatch` only knows `DEXED_PATH` |
 
-### Out-of-domain (D-OOD) — 1 of 11 per synth
+### Out-of-domain (D-OOD) — complete
 
 NSynth audio-only corpora, no ground-truth parameters, so the 3 parameter metrics report `NaN`
 and the 10 audio metrics run unchanged. Reuses the checkpoints above, no extra training.
 
 | Corpus | Synth | n | Scored |
 |---|---|---|---|
-| `nsynth_c4_dexed` | dexed | 884 | `MeanParameterBaseline` |
-| `nsynth_c4_diva` | diva | 884 | `MeanParameterBaseline` |
+| `nsynth_c4_dexed` | dexed | 884 | all 11 |
+| `nsynth_c4_diva` | diva | 884 | all 10 (no `SynthRLi`) |
 
 ## Reporting
 
@@ -76,23 +76,18 @@ The metric panel is reported at three levels under D-METRIC-PRUNE: 6 in the head
 pruned 10 in the cross-synth analysis, all 13 in the appendix. Pruning drops `param_mse`, `mel_mse`
 and `mfcc_mse` only.
 
-## Out-of-domain sweep — staged, not run
+## Out-of-domain sweep — complete
 
-20 of 22 OOD cells are missing (10 models x 2 synths at n=884). No training is needed; this is
-evaluation time only, and it was deliberately deferred until the in-domain tables were finished.
+All 21 OOD cells are scored: 11 models on `nsynth_c4_dexed` and 10 on `nsynth_c4_diva`, 884 samples
+each, every one carrying the seeded 20-sample prediction-audio subset. No training was involved --
+the in-domain checkpoints were reused unchanged and only the Evaluator ran. Reproduce with
+`scripts/run_ood_sweep.sh`, which is resumable and skips any cell already on disk.
 
-Per-sample cost is very uneven (D-EVAL-DEVICE): ~0.85 s for the cheap families, 13.45 s for
-flow-matching, 23 s for `IS2` on CPU but 7.4x faster on MPS. Estimate ~10-15 h for Dexed and more for
-Diva, whose fresh-process render plus warm-up (D-DIVA-RENDER) is materially slower.
+That closes the benchmark: **42 of 43 possible cells** (2 synths x 2 domains x their model rosters).
+The one gap remains Diva `SynthRLi`, blocked below.
 
-When it runs:
-
-- cheap families first, so a partial table is still usable if it is interrupted;
-- `IS2` with `--device mps` (7.4x), flow-matching on **cpu** (MPS is 23% *slower* there);
-- checkpoints are the ones already listed above, reused unchanged.
-
-The table builder already emits an em dash for the three parameter metrics on an OOD corpus
-(`valid_count: 0`), so these land with no code change. Per D-OOD the resulting numbers rank models
+Reported through `results-ood-{dexed,diva}.tex` (audio metrics only -- the parameter axis is
+undefined out of domain) and `results-domain-transfer.tex`. Per D-OOD these numbers rank models
 against each other and are **not** absolute fidelity figures, and must not be tabled beside the
 in-domain values as if the scales were comparable.
 
