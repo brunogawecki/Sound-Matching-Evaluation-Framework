@@ -100,6 +100,19 @@ standard corpora (`full_preset-gen-vae_train` / `diva_h2p_hybrid_train`), confir
 instead, because human presets are biased toward particular operator roles and remove the
 permutation structure Param2Tok exists to exploit.
 
+The two synths miss it by different margins, from the `method_counts` in each corpus's
+`run_summary.json`:
+
+| Train corpus | human | synthetic | augment |
+|---|---|---|---|
+| `full_preset-gen-vae_train` (Dexed) | 23,448 | 0 | 0 |
+| `diva_h2p_hybrid_train` (Diva) | 1,084 | 15,704 | 6,660 |
+
+Dexed is the total miss: an all-human prior, no invariance at all. Diva is a partial hit at 67%
+uniform draws, and those draws are *exactly* uniform, since Diva inherits the empty
+`audible_sampling_ranges` default (`synth/base_synth.py`) and so carries none of the OP1 pin that
+D-FLOW-CORPUS names as its own confound on Dexed. Do not write the two arms off equally.
+
 These four are scored anyway, and are best read as the **hybrid arm** of the sweep D-FLOW-CORPUS's
 own Consequences paragraph calls for ("training both flow-matching families across synthetic /
 human / hybrid corpora, all scored on the same test set"), with `FlowMatchingMLP` present as the
