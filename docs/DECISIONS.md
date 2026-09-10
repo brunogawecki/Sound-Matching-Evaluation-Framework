@@ -1122,6 +1122,42 @@ empirical test of the premise above. `FlowMatchingMLP` must be run alongside as 
 such sweep: without it, a drop under human-trained data cannot be attributed to symmetry-breaking
 rather than to reduced training diversity.
 
+**Amendment (2026-09-10) — the sweep was run, and the premise did not hold. The thesis reports the
+standard-corpus rows.**
+
+The sweep the Consequences paragraph calls for is now complete: both flow-matching families, both
+synths, trained on a synthetic-uniform corpus and scored on the unchanged benchmark test sets, with
+`FlowMatchingMLP` present as the required non-equivariant control. Cells and provenance are in
+`docs/RUN_LEDGER.md`. Diva's synthetic prior is **exactly** G-invariant, not approximately: Diva
+inherits the empty `audible_sampling_ranges` default, so the OP1 pin this decision accepts as a
+confound on Dexed does not exist there.
+
+The prediction was that Param2Tok separates from its control when the prior is G-invariant. Paired
+Wilcoxon within each arm, over identical sample sets, found the separation on **one** arm only,
+Diva **standard** — the arm the symmetry argument does not predict. On Dexed's synthetic arm
+Param2Tok is significantly *worse* (`param_mae` +0.0196, p=1e-124). On Diva's exactly-invariant
+synthetic arm the two are mixed and small. The required condition was met and the effect did not
+appear, so the confound this decision reserved as the first thing to rule out is ruled out. What
+the pattern tracks instead is train/test distribution match.
+
+The corpus swap is also expensive: 15 of 16 headline cells worse, `param_accuracy` roughly 0.79 to
+0.23 on Dexed and 0.68 to 0.35 on Diva, because both test sets are human presets and a uniform
+prior is off-distribution for them.
+
+**Decision (Bruno)**: the benchmark tables report the **standard-corpus** flow-matching rows. The
+synthetic arm is not substituted in. Substituting it would show flow-matching collapsing for a
+reason that is mostly distribution shift, against a test set this decision deliberately left
+unchanged. The arm's value is as evidence about the symmetry claim, reported separately, not as a
+benchmark row.
+
+This does not unlock the original rationale above — the reasoning for wanting a G-invariant prior
+stands as written, it simply was not borne out empirically. It does retire the "unfalsifiable on
+one arm" objection, which was the reason the missing arm was a blocker at all.
+
+Still open on these numbers before they are quoted: no Holm correction across metrics within an
+arm, Diva synthetic `spectral_convergence` has a bootstrap CI spanning zero against p=0.0086 so
+outliers drive it, and Diva is n=271.
+
 Map and port fidelity: `docs/FLOW_MATCHING_PORT.md`.
 
 ---

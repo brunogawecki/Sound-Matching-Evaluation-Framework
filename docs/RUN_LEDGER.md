@@ -7,7 +7,8 @@ and whether it has been scored. This is the working record behind the thesis res
 *what has actually run*. Keep it to facts that are checkable from `cluster/jobs.json`,
 `checkpoints/` and `results/`.
 
-Last updated: 2026-09-09 (out-of-domain sweep complete, all 42 cells scored; flow-matching synthetic-uniform arm under way).
+Last updated: 2026-09-10 (out-of-domain sweep complete, all 42 cells scored; flow-matching
+synthetic-uniform arm complete, all 4 cells scored, reported rows unchanged).
 
 ## Benchmark status
 
@@ -96,10 +97,26 @@ in-domain values as if the scales were comparable.
 
 ## Flow-matching synthetic-uniform arm (D-FLOW-CORPUS)
 
-Started 2026-09-09 to close the blocker below. This is a **separate arm**, not new benchmark
+**Complete 2026-09-10.** Built to close the blocker below. A **separate arm**, not new benchmark
 cells: the 42 cells above are untouched and keep the hybrid/human-trained flow-matching rows.
 Scored into `results_synthetic_arm/` rather than `results/`, because the model class name is the
 results directory name and the two arms would otherwise overwrite each other.
+
+**Decision (Bruno, 2026-09-10): the thesis reports the standard-corpus rows.** The synthetic arm
+stays out of the benchmark tables. Rationale and the result that motivates it are in
+`docs/DECISIONS.md` under D-FLOW-CORPUS.
+
+All four cells, both synths, with the training corpus as the only variable:
+
+| Synth | Model | Job | Elapsed | Train | Eval |
+|---|---|---|---|---|---|
+| Dexed | `FlowMatchingMLP` | 1079944 | 03:23:02 | **done** | **done** |
+| Dexed | `FlowMatchingParam2Tok` | 1079945 | 08:57:55 | **done** | **done** |
+| Diva | `FlowMatchingMLP` | 1079974 | 03:27:48 | **done** | **done** |
+| Diva | `FlowMatchingParam2Tok` | 1079975 | 09:34:31 | **done** | **done** |
+
+Each cell carries the seeded 20-sample prediction-audio subset and all 13 metrics; Dexed at
+n=1500, Diva at n=271, the same test corpora the benchmark uses.
 
 ### Dexed corpus repaired
 
@@ -114,11 +131,6 @@ carried 15,908 renders of leaked in-process voice state. Dexed renders are fully
 their parameters. Cluster and local copies now both hold 23,448 WAVs, one distinct file size,
 matching `metadata.csv` row for row.
 
-| Model | Job | Elapsed | Train | Eval |
-|---|---|---|---|---|
-| `FlowMatchingMLP` | 1079944 | 03:23:02 | **done** | **done** |
-| `FlowMatchingParam2Tok` | 1079945 | 08:57:55 | **done** | **running** |
-
 ### Diva corpus built
 
 `diva_synthetic_uniform_train`, 23,448 samples, fresh-process per D-DIVA-RENDER, 1.49 s/preset
@@ -130,25 +142,48 @@ Built with `build_dataset.py synthetic --like-corpus dataset/diva_h2p_test`, a f
 run. Without it the draw spans the wrapper's full 237-parameter / 1100-dimension subset, while both
 Diva benchmark corpora are narrowed by `restrict_to_realized` to 231 / 892, and a model trained on
 one cannot be scored on the other. The built corpus's parameter space matches `diva_h2p_test`
-exactly, same names in the same order. Push to the cluster in progress; no training submitted yet.
+exactly, same names in the same order. Pushed and verified on the cluster: 23,448 WAVs, 23,448
+metadata rows, one distinct file size.
 
-### Reading these numbers
+### Outcome
 
-The synthetic arm scores far worse than the hybrid arm on every metric (`FlowMatchingMLP`
-`param_mae` 0.3619 against 0.1005, `param_accuracy` 0.2294 against 0.8051). That is expected and is
-**not** a model-quality result: `full_preset-gen-vae_test_1500` is human presets, so the hybrid arm
-trained on the test distribution and the synthetic arm did not. The shift dominates the comparison.
+**What the corpus swap cost.** Same model, same test set, training corpus the only change: 15 of 16
+headline cells got worse, most by 50-280%. `param_accuracy` falls from ~0.79 to ~0.23 on Dexed and
+from ~0.68 to ~0.35 on Diva. Both test sets are human presets, so a uniform training prior is
+off-distribution and the parameter axis takes the worst of it. The lone exception is Diva
+`FlowMatchingMLP`, better on `mss` (-12%) and `lsd` (-24%) while worse on the parameter axis --
+broader audio coverage bought with parameter precision. Param2Tok shows no such trade.
 
-D-FLOW-CORPUS's question is answered **within** an arm, not across them: Param2Tok against its own
-`FlowMatchingMLP` control on the same training corpus. On the hybrid arm they are indistinguishable
-(0.1005 vs 0.1009), which is what the decision predicts for a non-invariant prior. The synthetic-arm
-pair is the test. **Do not substitute this arm into the main benchmark table** -- it would read as
-flow-matching collapsing, when most of the gap is distribution shift.
+**What it says about the symmetry claim.** D-FLOW-CORPUS predicts Param2Tok separates from its
+`FlowMatchingMLP` control *when the prior is G-invariant*. Paired Wilcoxon over identical sample
+sets, within each arm, says otherwise:
+
+| Arm | Prior | Param2Tok vs MLP |
+|---|---|---|
+| Dexed standard | not invariant | mixed, small (`param_mae` p=0.97) |
+| Dexed synthetic | approximately invariant | **worse**, `param_mae` +0.0196, p=1e-124 |
+| Diva standard | 67% invariant | **better on all 6**, `lsd` -41.6%, `mss` -32.3% |
+| Diva synthetic | exactly invariant | mixed, small |
+
+The advantage appears on one arm only, Diva standard, which is the arm the symmetry argument does
+not predict. On Dexed synthetic, where the prior is invariant, Param2Tok is significantly worse.
+Diva's synthetic prior is *exactly* invariant, so the OP1 confound D-FLOW-CORPUS flags for Dexed
+cannot explain it away: the required condition was met and the effect did not appear. The pattern
+that does fit is train/test distribution match, not symmetry.
+
+**Not yet done on these numbers**, and required before any of it is quoted:
+- No Holm correction across the 6 metrics within an arm. `aggregate.py` corrects within a metric
+  column across models, a different comparison.
+- Diva synthetic `spectral_convergence` disagrees with itself: bootstrap CI [-9.80, +0.82] spans
+  zero while Wilcoxon reads p=0.0086, so outliers drive the mean. Do not quote that cell.
+- Diva is n=271, so its intervals are far wider than Dexed's.
 
 ## Blockers
 
-**Flow-matching: the synthetic-uniform arm is missing, both synths.** All four runs trained on the
-standard corpora (`full_preset-gen-vae_train` / `diva_h2p_hybrid_train`), confirmed from their
+**Flow-matching: the synthetic-uniform arm is missing, both synths.** RESOLVED 2026-09-10 -- the
+arm is built and scored (see above), and the reported rows stay the standard-corpus ones by
+decision. Kept here because the caveat below still attaches to those reported rows. All four
+benchmark runs trained on the standard corpora (`full_preset-gen-vae_train` / `diva_h2p_hybrid_train`), confirmed from their
 `slurm-*.out` headers. D-FLOW-CORPUS (LOCKED) requires a synthetic-uniform, G-invariant corpus
 instead, because human presets are biased toward particular operator roles and remove the
 permutation structure Param2Tok exists to exploit.
@@ -179,10 +214,11 @@ which is what D-FLOW-CORPUS predicts. On Diva they separate (0.2111 vs 0.1481), 
 *worse* than `MeanParameterBaseline` on `spectral_convergence` (3.71 / 2.12 against 1.12), so the
 parameter and audio axes disagree there and the Diva pair needs a closer look before use.
 
-**Being resolved 2026-09-09.** Both synthetic-uniform corpora now exist and the Dexed pair has
-trained; see "Flow-matching synthetic-uniform arm" above for status. This blocker stays open until
-both synths' arms are scored, and the caveat above stays attached to the benchmark rows either way,
-since those rows are still the hybrid/human-trained ones.
+**Resolved 2026-09-10.** Both synthetic-uniform corpora were built and all four cells scored; see
+"Flow-matching synthetic-uniform arm" above. The unfalsifiability worry in the paragraph above is
+now answered rather than open: the synthetic arm exists, and Param2Tok does not out-earn its
+control on it. The reported benchmark rows remain the standard-corpus ones by decision, so the
+caveat above still belongs with those numbers.
 
 **Diva `SynthRLi`.** Needs the Diva plugin on the cluster. Not resolvable without a plugin install
 plus an `sbatch` change.
