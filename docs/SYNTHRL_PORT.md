@@ -36,9 +36,11 @@ reported (paper §4.2, Table 1):
 | 2 | `SynthRL-i` | Adds the RL loss, ramping the parameter loss out. 200 epochs. | ✅ `SynthRLi` |
 | 3 | `SynthRL-o` | RL-only fine-tune on **out-of-domain** sounds (a second synth). | ❌ deferred |
 
-Stage 3 needs a second synthesizer (the paper uses Surge XT). The second-synth decision is open
-(**D-FAMILIES**), so `SynthRL-o` is deferred rather than guessed at. Nothing in the port blocks
-it: it is stage 2's recipe with the parameter loss switched off and a different corpus.
+Stage 3 needs a second synthesizer (the paper uses Surge XT). The second synth is now Diva
+(D-DIVA-START), but stage 3 still renders with the live plugin inside the RL loop (D-RL-RENDER), and
+Diva is not on the cluster. **D-FAMILIES** (LOCKED 2026-09-11) leaves `SynthRL-o` to future work
+rather than guessing at it. Nothing in the port blocks it: it is stage 2's recipe with the parameter
+loss switched off and a different corpus.
 
 `SynthRLi` warm-starts from a `SynthRLp` checkpoint through `--init-from`, the generic
 `BaseDeepModel._warm_start_network` hook.
@@ -210,7 +212,7 @@ Deliberate, and each with a reason:
 | 7 | **Positional encoding added once** before the encoder, no separate decoder query positional encoding, no 0.3 projection dropout | DETR-style detail. The queries are learnable per position, so a separate query positional encoding adds little. |
 | 8 | **Single seeded 10% validation split**, not the repo's 5-fold CV with a 20% test holdout | Framework convention across all families. |
 | 9 | **Eq. 6's policy-ratio importance weight is dropped** | The released code drops it too (`importance_sampling=False`); we match the code, not the equation. |
-| 10 | **`SynthRL-o` not ported** | Needs a second synth; blocked on D-FAMILIES. |
+| 10 | **`SynthRL-o` not ported** | Needs the live second-synth plugin in the RL loop; future work per D-FAMILIES (LOCKED). |
 | 11 | **Stage 2 runs 36 epochs, not 200**, with `ramp_epochs` scaled 100 → 18 to keep the paper's 50/50 ramp/RL-only shape | Measured cost is ~35.3 min/epoch (job 1006799), so 200 epochs needs ~118 h. 36 epochs fits one 24 h job. The first attempt at the full 200 timed out at epoch 41 and exported nothing. Reward was still climbing at truncation, so this run **understates** what the method reaches at full length — state that with any `SynthRL-i` result. |
 
 ## Caveats

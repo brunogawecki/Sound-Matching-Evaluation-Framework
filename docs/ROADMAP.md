@@ -85,8 +85,8 @@ than discovering them family-by-family. It mirrors D-ORDER one level down.
 | Decision | Status | Blocks | Note |
 |---|---|---|---|
 | **D-FRAMEWORK** — PyTorch Lightning vs. raw PyTorch loop | LOCKED (Lightning) | — (unblocked) | Locked 2026-06-30; conventions for the harness recorded in `DECISIONS.md`. |
-| **D-FAMILIES** — final model-family set | OPEN (stub) | Phase 5 | Discriminative + generative (primary) + neural-proxy (baseline); evolutionary dropped. |
-| **D4** — human test-set composition | OPEN | Phase 6 | Importer built; Phase 4 has landed, so the final split is unblocked and awaits the user's call. |
+| **D-FAMILIES** — final model-family set | LOCKED 2026-09-11 | — (unblocked) | The eleven registered models: baseline, discriminative, generative VAE, neural proxy (a peer family), flow matching, RL. Diva runs ten (no `SynthRLi`). `SynthRL-o` is future work; evolutionary dropped. |
+| **D4** — human test-set composition | LOCKED 2026-09-11 | — (unblocked) | `full_preset-gen-vae_test_1500` (Dexed, 1,500) and `diva_h2p_test` (Diva, 271), the corpora every result was scored on. |
 
 ## Phase 4 — Training foundation, proven by one real model
 
@@ -141,13 +141,13 @@ the Phase 4 harness + packaging.
 - **Reinforcement-learning family** (SynthRL — Shin & Lee IJCAI-25) — **DONE**: two of the paper's
   three staged models as registered families, `SynthRLp` (stage 1, parameter loss only) and
   `SynthRLi` (stage 2, in-domain RL, warm-started from a stage-1 checkpoint via `--init-from`).
-  Stage 3 `SynthRL-o` is deferred — it needs a second synth, so it is blocked on D-FAMILIES, not on
-  the port. The only family that treats every parameter as a **classification** head, and the only
+  Stage 3 `SynthRL-o` is not ported and is future work (D-FAMILIES, LOCKED): it needs the live
+  second-synth plugin inside the RL loop, not a change to the port. The only family that treats every parameter as a **classification** head, and the only
   one that renders with the live VST **inside the training loop** (D-RL-RENDER); `predict` and the
   eval path stay VST-free. Stage 2 is truncated to 36 epochs against the paper's 200 on measured
   cost. Map and port fidelity: `docs/SYNTHRL_PORT.md`.
 
-*(Evolutionary search is dropped pending D-FAMILIES. If ever reinstated it runs its per-target search
+*(Evolutionary search is dropped (D-FAMILIES). If ever reinstated it runs its per-target search
 locally with the live VST — it does not fit the cluster training harness.)*
 
 ## Phase 6 — Test set, benchmark, results
@@ -156,7 +156,7 @@ locally with the live VST — it does not fit the cluster training harness.)*
   *Landed 2026-09-02 for Dexed*: `full_preset-gen-vae_test_1500`, a seeded 1,500-sample subsample
   of the 5,862 split (`scripts/subsample_corpus.py`), verified representative on all 13 metrics.
   Evaluation cost is linear in test-set size and the full sweep measured ~77 h. Diva's
-  `diva_h2p_test` (271) needs no subsampling. D4 stays OPEN on the corpus choice itself.
+  `diva_h2p_test` (271) needs no subsampling. D4 LOCKED 2026-09-11 on these two corpora.
 - **Benchmark orchestration** — run every family on the test set → `results/<corpus>/<model>/`.
 - **Results aggregation** — comparative table across families, plus the metric-panel rank-correlation
   pruning (D-EVAL names `per_sample.csv` as the source of truth). **Finish line.**

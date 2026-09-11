@@ -242,8 +242,8 @@ when arguing that `SynthRLi` genuinely improved rather than gamed three numbers.
 
 The paper is titled *Cross-domain* Synthesizer Sound Matching, and its headline claim is stage 3
 (`SynthRL-o`): RL-only fine-tuning on sounds from a **different synthesizer**, which is what removes
-the need for ground-truth parameters. That stage is **deferred**, because it needs the second synth
-and D-FAMILIES is open.
+the need for ground-truth parameters. That stage is **not ported**: it needs the live second-synth
+plugin inside the RL training loop, and D-FAMILIES (LOCKED 2026-09-11) leaves it to future work.
 
 So the thesis tests the paper's machinery, not the paper's main claim. Be explicit about it. The
 framing that holds up: stages 1 and 2 establish that the method works in-domain on Dexed, and the

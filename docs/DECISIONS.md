@@ -4,8 +4,12 @@ Locked and open design decisions for the sound matching evaluation framework.
 Decisions marked **LOCKED** are settled — do not re-litigate unless the user explicitly asks.
 Decisions marked **OPEN** block the work listed under "Blocks".
 
-Last updated: 2026-09-07 (D-METRIC-PRUNE locked — the reported metric subset)
-Previously: 2026-09-04 (D-OOD locked — out-of-domain evaluation on NSynth: an audio-only corpus
+Last updated: 2026-09-11 (D4 and D-FAMILIES locked, so no decision is open. D4 fixes the in-domain
+benchmark test sets as the two corpora every result was scored on. D-FAMILIES fixes the eleven
+registered models as the final set: the neural-proxy family is a peer, not a baseline, Diva runs ten
+of the eleven, and `SynthRL-o` is future work.)
+Previously: 2026-09-07 (D-METRIC-PRUNE locked — the reported metric subset).
+Earlier: 2026-09-04 (D-OOD locked — out-of-domain evaluation on NSynth: an audio-only corpus
 carries no ground-truth parameters, so the parameter axis reports `NaN` / `valid_count: 0` while the
 ten audio metrics run unchanged, and the render contract, copied verbatim from an in-domain reference
 corpus, now governs the *prediction* re-render only. Targets are NSynth pitch-60 / velocity-100 notes
@@ -2001,9 +2005,33 @@ finds it redundant, never for speed, is satisfied: it is not redundant with anyt
 
 ---
 
-## OPEN
+### D4 — Human preset test sets (LOCKED 2026-09-11; importer built 2026-06-24)
 
-### D4 — Human preset source for the test set (deferred by user; importer built 2026-06-24)
+**Decision (LOCKED 2026-09-11)**: the in-domain benchmark test sets are the two corpora every
+reported result was scored on.
+
+| Synth | Test corpus | n | Built from |
+|---|---|---|---|
+| Dexed | `full_preset-gen-vae_test_1500` | 1,500 | seeded subsample (`subsample_seed` 0) of `full_preset-gen-vae_test` (5,862), the voice-disjoint test partition (`split_test_fraction` 0.2, `split_seed` 0) of the preset-gen-vae human DX7 collection |
+| Diva | `diva_h2p_test` | 271 | the voice-disjoint test partition (`--test-fraction 0.2 --split-seed 0`) of u-he's installed `.h2p` library |
+
+Both are real presets only, rendered fresh-process (D-REPRO, D-DIVA-RENDER), and disjoint from their
+synth's training corpus (`full_preset-gen-vae_train`, `diva_h2p_hybrid_train`, whose augmented
+presets perturb train-partition parents only). The decision covers both synths, so the Diva scope
+note in the history below is folded in here. The out-of-domain targets are D-OOD's, not this
+decision's.
+
+**Why lock now**: the choice was deferred until the pipeline could run end to end. It now has: every
+model is scored on these two corpora (21 in-domain cells, `docs/RUN_LEDGER.md`), and the thesis
+tables are generated from them. The Dexed subsample is verified representative of the full split
+(see "Landed (2026-09-02)" below). Changing either corpus now means re-scoring every cell.
+
+**Not benchmark test sets**: `full_preset-gen-vae_test` (5,862, superseded by its subsample),
+`dexed_builtin_test` (retired pilot corpus), and `diva_smoke_test` / `synthrl_smoke_test` (pipeline
+shakedowns). The DX7 SysEx importer stays in the codebase, but no benchmark corpus uses it.
+
+**History** (kept as written. Anything below that calls D4 open, or limits it to Dexed, is
+superseded by the Decision above):
 
 **What** specific presets form the held-out human test set is **deferred until the full ML pipeline
 is finished** — an evaluation-design choice the user will make once the pipeline can be run
@@ -2142,11 +2170,49 @@ falls inside the n=1,500 bootstrap 95% CI**:
 tests join per `sample_id`, so families scored on different subsets cannot be compared — the
 expensive families cannot be made cheaper by giving them fewer samples.
 
-**D4 stays OPEN.** This settles the Dexed test set's *size*; the corpus choice above is still the
+**D4 stayed OPEN at this point; closed 2026-09-11, see the Decision at the top of this entry.** This settles the Dexed test set's *size*; the corpus choice above is still the
 user's to finalize, and Diva's test set (`diva_h2p_test`, 271 real presets) is unchanged and needs
 no subsampling.
 
-### D-FAMILIES — Final model-family set (OPEN, stub)
+---
+
+### D-FAMILIES — Final model-family set (LOCKED 2026-09-11)
+
+**Decision (LOCKED 2026-09-11)**: the model set is final at the **eleven models registered in
+`models/registry.py`**: the floor baseline plus five method families.
+
+| Family | Registered models | Source |
+|---|---|---|
+| Baseline (floor, D-ORDER) | `MeanParameterBaseline` | — |
+| Discriminative | `Sound2SynthSpectrogramRegressor` | Sound2Synth lineage, basic single-branch cut |
+| Generative (VAE) | `PresetGenVAEMLPRegressor`, `PresetGenVAEFlowRegressor` | preset-gen-vae, Le Vaillant et al. DAFx 2021 |
+| Neural proxy | `IS`, `IS2xITF`, `IS2` | InverSynth II, Barkan et al. ISMIR 2023 |
+| Conditional-generative flow matching | `FlowMatchingMLP`, `FlowMatchingParam2Tok` | Hayes et al. ISMIR 2025 |
+| Reinforcement learning | `SynthRLp`, `SynthRLi` | SynthRL, Shin & Lee IJCAI-25 |
+
+- **The neural-proxy family is a peer, not a baseline** (user, 2026-09-11). It is compared on equal
+  terms with the other method families. The only baseline is `MeanParameterBaseline`. This settles
+  a disagreement between docs: the writing-session docs called neural proxies "a baseline, not a
+  primary family", while this entry, `ROADMAP.md` Phase 5 and the thesis chapters treated
+  InverSynth II as a peer approach.
+- **Dexed runs all eleven. Diva runs ten.** `SynthRLi` is not trained on Diva, because its RL stage
+  renders with the live plugin inside the training loop (D-RL-RENDER) and Diva is not installed on
+  the cluster. This is a **recorded gap, not pending work** (user, 2026-09-11). Running it is future
+  work. `SynthRLp` does run on Diva.
+- **The second synth adds no families.** Diva reuses the same registrations with no per-synth
+  models, which answers the question the stub below left open.
+- **Out of the set, and future work**: `SynthRL-o` (SynthRL stage 3, RL-only fine-tuning on
+  out-of-domain sounds. It inherits the in-loop render cost above, and D-OOD reports only the
+  evaluation half of that setting) and the full multi-modal Sound2Synth architecture. Evolutionary
+  search stays dropped.
+
+**Why lock now**: every cell is trained and scored (11 Dexed and 10 Diva in-domain, 21
+out-of-domain, `docs/RUN_LEDGER.md`), and the thesis tables are generated from them. The two reasons
+the stub gave for staying open no longer hold: the architectures are frozen at the scored
+checkpoints, and the second synth added no families.
+
+**History** (kept as written. Anything below that calls this decision open is superseded by the
+Decision above):
 
 **What** model families enter the comparative benchmark. Working set: **discriminative** (primary) +
 **generative** (primary, VAE — preset-gen-vae lineage) + **neural-proxy** (InverSynth II lineage — a
@@ -2177,5 +2243,12 @@ against a plugin whose throughput has never been measured, and `SynthRLi` is exp
 for Diva for that reason; stage 3 inherits the same blocker. Whether a second synth adds *families*
 is still open here.
 
-**Blocks**: Phase 5. Resolve here before the Phase 5 family tasks start.
+**Blocked** Phase 5 while open. Phase 5 is complete.
+
+---
+
+## OPEN
+
+None. D4 and D-FAMILIES, the last two, were locked 2026-09-11. A new open decision goes here with a
+**Blocks** line.
 
